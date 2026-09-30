@@ -4,67 +4,62 @@ Wyspecjalizowany system do zarządzania produkcją Metalbox sp. z o.o.
 
 ## Aktualny stan
 
-**0.0.2 — UI Prototype / rozbudowana wydmuszka**
+**0.0.3 — pełna wydmuszka UI**
 
-Ta wersja służy do testowania układu programu i ergonomii hali. Nie zawiera jeszcze właściwej logiki produkcyjnej ani połączenia z centralną bazą.
+Ta wersja służy do testowania kompletnego układu programu, ergonomii hali i panelu kierowniczego. Nadal nie zawiera właściwej logiki produkcyjnej ani centralnego serwera.
 
-Działa już:
+### Ekrany przygotowane w wydmuszce
 
-- ekran konfiguracji IP / hasła technicznego,
-- przycisk **Tryb testowy** bez potrzeby podawania prawdziwego serwera,
-- lokalne zapamiętanie ustawień stanowiska,
-- pełnoekranowy pulpit,
-- automatyczny powrót do pulpitu głównego po bezczynności,
-- kafle działów,
-- pełnoszerokie paski postępu pod zleceniami,
-- demonstracyjne kolejki zleceń i statusy,
-- widok Planisty w układzie zbliżonym do obecnego Excela,
-- ekran Produktów / kart produktu,
-- ekran Pracowników / rang / uprawnień / e-maili,
-- ekran Raportów / akordu / eksportu,
-- ekran TV z atrapą karuzeli widoków,
-- ekran Ustawień z docelowymi sekcjami,
-- miejsce na profile kierownictwa i dane kontaktowe,
-- przygotowany build portable dla Windows.
+- pulpit główny z działami,
+- Gilotyna,
+- Laser,
+- Giętarki,
+- Spawalnia,
+- Zgrzewarki,
+- Przygotowanie produkcji,
+- Malarnia,
+- Pakownia,
+- Warsztat mechaniczny / przygotowanie produkcji,
+- Magazyn,
+- Zlecenia,
+- szczegóły zlecenia z postępem po działach,
+- Planista,
+- Produkty / karta produktu,
+- Pracownicy / profile / role / e-maile,
+- Jakość / braki / poprawki,
+- Wysyłki,
+- Raporty / akord / statystyki,
+- Widok TV,
+- Ustawienia.
 
-## Działy w prototypie
+### Kierunek UI
 
-- Gilotyna
-- Laser
-- Giętarki
-- Spawalnia
-- Zgrzewarki
-- Przygotowanie produkcji
-- Malarnia
-- Pakownia
-- Warsztat mechaniczny (przyg. produkcji)
-- Magazyn
+- czarne / grafitowe tło,
+- biały tekst,
+- zielone akcenty,
+- żółty tylko dla ostrzeżeń,
+- czerwony tylko dla problemów,
+- ograniczone szerokości kart i tabel,
+- brak sztucznego rozciągania kolumn do szerokości całego ekranu,
+- przewijanie tam, gdzie zawartość faktycznie tego wymaga,
+- pełnoszerokie paski postępu w kaflach zleceń.
 
-## Uruchomienie developerskie
+### Tryb testowy
 
-```bat
-py -m pip install -r requirements.txt
-py app.py
-```
+Przy pierwszym uruchomieniu można wybrać **Tryb testowy** bez prawdziwego serwera.
 
-## Portable / EXE
+### Portable / EXE
 
-Na Windows uruchom:
+Na Windows:
 
 ```bat
 build_portable.bat
 ```
 
-Wynik:
+GitHub Actions buduje także pojedynczy plik:
 
 ```text
-dist\Metalbox\Metalbox.exe
+Metalbox-0.0.3.exe
 ```
-
-Cały folder `dist\Metalbox` jest wydaniem portable.
-
-## Ważne
-
-Hasło w wersji 0.0.2 nie jest jeszcze używane do prawdziwego uwierzytelnienia serwera. Docelowe połączenie zostanie podłączone do centralnego Metalbox Server / API.
 
 Szczegółowy plan rozwoju znajduje się w [ROADMAP.md](ROADMAP.md).
