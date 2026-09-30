@@ -81,6 +81,10 @@ Nowe stanowisko można uruchomić bez instalowania pełnego środowiska programi
 - [ ] Aktywny / nieaktywny pracownik.
 - [ ] Dział podstawowy.
 - [ ] Możliwość przypisania do wielu grup.
+- [ ] Opcjonalny profil kierownictwa z danymi kontaktowymi.
+- [ ] Opcjonalny służbowy e-mail przypisany do profilu.
+- [ ] Dane kontaktowe widoczne wyłącznie zgodnie z uprawnieniami.
+- [ ] Profil może przechowywać stanowisko, rangę i zakres odpowiedzialności.
 - [ ] Kompetencje, np.:
   - zgrzewacz,
   - malarz,
