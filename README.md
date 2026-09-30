@@ -4,21 +4,27 @@ Wyspecjalizowany system do zarządzania produkcją Metalbox sp. z o.o.
 
 ## Aktualny stan
 
-**0.0.1 — UI Prototype / wydmuszka**
+**0.0.2 — UI Prototype / rozbudowana wydmuszka**
 
 Ta wersja służy do testowania układu programu i ergonomii hali. Nie zawiera jeszcze właściwej logiki produkcyjnej ani połączenia z centralną bazą.
 
 Działa już:
 
 - ekran konfiguracji IP / hasła technicznego,
+- przycisk **Tryb testowy** bez potrzeby podawania prawdziwego serwera,
 - lokalne zapamiętanie ustawień stanowiska,
 - pełnoekranowy pulpit,
-- kafle działów,
-- nawigacja do widoków działowych,
-- demonstracyjne kolejki zleceń,
-- demonstracyjne postępy produkcji,
 - automatyczny powrót do pulpitu głównego po bezczynności,
-- miejsce na profile kierownictwa i e-maile,
+- kafle działów,
+- pełnoszerokie paski postępu pod zleceniami,
+- demonstracyjne kolejki zleceń i statusy,
+- widok Planisty w układzie zbliżonym do obecnego Excela,
+- ekran Produktów / kart produktu,
+- ekran Pracowników / rang / uprawnień / e-maili,
+- ekran Raportów / akordu / eksportu,
+- ekran TV z atrapą karuzeli widoków,
+- ekran Ustawień z docelowymi sekcjami,
+- miejsce na profile kierownictwa i dane kontaktowe,
 - przygotowany build portable dla Windows.
 
 ## Działy w prototypie
@@ -31,7 +37,7 @@ Działa już:
 - Przygotowanie produkcji
 - Malarnia
 - Pakownia
-- Warsztat mechaniczny
+- Warsztat mechaniczny (przyg. produkcji)
 - Magazyn
 
 ## Uruchomienie developerskie
@@ -59,6 +65,6 @@ Cały folder `dist\Metalbox` jest wydaniem portable.
 
 ## Ważne
 
-Hasło w wersji 0.0.1 nie jest jeszcze używane do prawdziwego uwierzytelnienia serwera i nie jest zapisywane. Docelowe połączenie zostanie podłączone do centralnego Metalbox Server / API.
+Hasło w wersji 0.0.2 nie jest jeszcze używane do prawdziwego uwierzytelnienia serwera. Docelowe połączenie zostanie podłączone do centralnego Metalbox Server / API.
 
 Szczegółowy plan rozwoju znajduje się w [ROADMAP.md](ROADMAP.md).
