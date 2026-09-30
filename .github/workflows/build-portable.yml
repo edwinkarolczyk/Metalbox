@@ -32,10 +32,10 @@ jobs:
       - name: Package
         shell: pwsh
         run: |
-          Compress-Archive -Path dist\Metalbox\* -DestinationPath Metalbox-0.0.1-portable.zip -Force
+          Compress-Archive -Path dist\Metalbox\* -DestinationPath Metalbox-0.0.2-portable.zip -Force
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Metalbox-0.0.1-portable
-          path: Metalbox-0.0.1-portable.zip
+          name: Metalbox-0.0.2-portable
+          path: Metalbox-0.0.2-portable.zip
