@@ -1,4 +1,4 @@
-name: Build Metalbox Portable
+name: Build Metalbox Windows
 
 on:
   push:
@@ -24,18 +24,25 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
 
-      - name: Build portable
+      - name: Build portable folder
         shell: pwsh
         run: |
           python -m PyInstaller --noconfirm --clean --windowed --name Metalbox --collect-all PySide6 app.py
-
-      - name: Package
-        shell: pwsh
-        run: |
           Compress-Archive -Path dist\Metalbox\* -DestinationPath Metalbox-0.0.2-portable.zip -Force
 
-      - name: Upload artifact
+      - name: Build single EXE
+        shell: pwsh
+        run: |
+          python -m PyInstaller --noconfirm --clean --windowed --onefile --name Metalbox-0.0.2 --collect-all PySide6 app.py
+
+      - name: Upload portable artifact
         uses: actions/upload-artifact@v4
         with:
           name: Metalbox-0.0.2-portable
           path: Metalbox-0.0.2-portable.zip
+
+      - name: Upload single EXE artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Metalbox-0.0.2-exe
+          path: dist\Metalbox-0.0.2.exe
