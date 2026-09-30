@@ -599,6 +599,9 @@ Zakres po wydaniu stabilnym będzie dodawany tylko wtedy, gdy daje realną warto
 
 Kierunki:
 
+- półprodukty produkowane niezależnie od konkretnego zlecenia, np. laser może wykonać partię półproduktów na zapas pod dany produkt,
+- możliwość przypisania półproduktu do produktu zamiast bezpośrednio do ZL,
+- stan magazynowy / bufor półproduktów oraz późniejsze zużycie ich przez konkretne zlecenia,
 - aplikacja mobilna dla brygadzisty,
 - QR zleceń i wygodne skanowanie na hali,
 - bardziej zaawansowany Planista,
