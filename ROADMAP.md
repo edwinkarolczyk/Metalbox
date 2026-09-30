@@ -354,6 +354,11 @@ Planista proponuje plan, ale nie podejmuje samodzielnie decyzji kadrowych ani o 
 - [ ] Aktualny RAL / plan malarni.
 - [ ] Konfigurowalny interwał odświeżania.
 - [ ] Filtry po dziale, produkcie, zleceniu i statusie.
+- [ ] Opcjonalny tryb automatycznej prezentacji / karuzeli widoków TV.
+- [ ] Automatyczne przełączanie kolejnych działów co konfigurowalny czas, np. 10 / 20 / 30 / 60 s.
+- [ ] Możliwość wyboru, które działy i widoki biorą udział w karuzeli.
+- [ ] Możliwość zatrzymania karuzeli na wybranym widoku.
+- [ ] Widok ogólny firmy może być wyświetlany pomiędzy widokami działów.
 
 ## 0.9 — Licencjonowanie, aktywacja i aktualizacje
 
