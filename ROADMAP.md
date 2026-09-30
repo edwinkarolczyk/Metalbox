@@ -179,17 +179,24 @@ Podstawowy model:
 ### Zasady
 
 - [ ] Jeden dział może prowadzić kilka zleceń jednocześnie.
-- [ ] Jedno zlecenie może być aktywne na określonym etapie i równolegle występować w innych kontrolowanych procesach.
+- [ ] Jedno zlecenie może być aktywne równolegle na wielu etapach produkcji.
+- [ ] Każdy etap prowadzi własny licznik ilości, np. laser 7000/7000, gięcie 7000/7000, zgrzewanie 3600/7000, malarnia 2800/7000, pakowanie 1900/7000.
+- [ ] System wylicza WIP oraz ilość rzeczywiście gotową do następnej operacji.
+- [ ] Raportowanie odbywa się przyrostowo: operator dopisuje np. +612 szt., a nie nadpisuje całego stanu.
+- [ ] Rejestrować osobno: dobre sztuki, poprawki, braki/złom/utylizację.
+- [ ] Brakujące dobre sztuki po kolejnych operacjach mają tworzyć zapotrzebowanie do dorobienia.
 - [ ] Zlecenie można:
   - rozpocząć,
   - wstrzymać,
   - wznowić,
-  - zakończyć.
+  - zakończyć częściowo,
+  - zakończyć całkowicie.
 - [ ] Historia zmian statusów jest trwała.
-- [ ] Nie kasujemy historii rozpoczęć i wznowień.
+- [ ] Nie kasujemy historii rozpoczęć, wznowień, korekt i cofnięć.
 - [ ] Zmiana pracowników nie kończy zlecenia.
 - [ ] Do aktywnego zlecenia można dodawać i usuwać pracowników.
 - [ ] Jeden pracownik może zmienić zlecenie bez zamykania całej pracy działu.
+- [ ] Operację można cofnąć do poprawki na wcześniejszy dział bez utraty historii.
 
 ### Przykład
 
@@ -204,15 +211,38 @@ oba zlecenia działają jednocześnie i każde zbiera własny czas oraz wyniki.
 
 ## 0.6 — Zlecenia i karta produktu
 
-### Produkt
+### Produkt / karta produktu
 
-- [ ] Numer / kod produktu.
+Każdy produkt ma własną cyfrową teczkę. Symbol produktu jest głównym identyfikatorem, a historyczne nazwy mogą być zachowane jako aliasy.
+
+- [ ] Numer / symbol produktu.
 - [ ] Nazwa.
+- [ ] Klient / wariant, jeśli wynika z danych źródłowych.
 - [ ] Wersja / rewizja.
+- [ ] BOM.
+- [ ] Dokumentacja PDF / zdjęcia / rysunki.
 - [ ] Trasa produkcyjna.
 - [ ] Lista wymaganych działów / operacji.
+- [ ] Zalecane maszyny / technologie.
+- [ ] Powiązanie z wymaganymi narzędziami z Warsztat Menager bez dublowania modułu Narzędzia.
+- [ ] RAL / sposób malowania.
+- [ ] Sposób pakowania.
+- [ ] Kontrola jakości.
 - [ ] Normy i dane technologiczne przewidziane dla danego procesu.
+- [ ] Historyczne czasy i wydajności procesu.
+- [ ] Historia zmian karty.
 - [ ] Status aktywności produktu.
+
+### Baza startowa produktów
+
+- [ ] Importować bieżące produkty z planu produkcji Excel.
+- [ ] Importować stare katalogi produktów 2014/2015/2016 jako źródło startowe.
+- [ ] Wyciągać tylko istotne dane: przede wszystkim symbol, nazwę i wiarygodne identyfikatory.
+- [ ] Nie przenosić zbędnej historycznej zawartości katalogów.
+- [ ] Ten sam symbol w kilku katalogach scalać do jednego produktu.
+- [ ] Rozbieżne nazwy zachowywać jako aliasy/historię.
+- [ ] Niejednoznaczne konflikty kierować do widoku „Do weryfikacji”.
+- [ ] Produkt nieznany z katalogów, ale pojawiający się w planie, automatycznie otrzymuje kartę-szkielet do dalszego uzupełniania.
 
 ### Zlecenie
 
@@ -268,33 +298,62 @@ Operator potrafi obsłużyć zmianę zlecenia bez otwierania panelu administracy
 
 ---
 
-## 0.8 — Planowanie i widok kierowniczy
+## 0.8 — Plan produkcji Excel, Planista i widok kierowniczy
 
-### Zakres
+### Integracja z aktualnym planem Excel
 
-- [ ] Lista wszystkich zleceń.
+Na etapie pilotażu obecny Excel pozostaje nadrzędnym planem firmy.
+
+- [ ] W Ustawieniach wskazać plik planu produkcji i arkusz źródłowy.
+- [ ] Automatycznie sprawdzać zmiany w ustalonym interwale.
+- [ ] Nigdy nie analizować i nie trzymać otwartego oryginalnego Excela.
+- [ ] Najpierw wykonywać bezpieczną kopię roboczą / snapshot.
+- [ ] Dopiero na kopii wykonywać analizę i porównanie z poprzednim snapshotem.
+- [ ] Oryginalny plik pozostaje nietknięty.
+- [ ] Wykrywać: nowe zlecenia, nowe pozycje, zmianę ilości, terminu, procesu i planu dziennego.
+- [ ] Zachowywać historię wykrytych zmian.
+- [ ] Interpretować puste pole numeru zlecenia jako kontynuację ostatniego numeru powyżej, zgodnie z obecnym planem.
+- [ ] Zachować import kolorów/grup legacy z Excela bez nadawania im znaczenia, dopóki ich rola nie zostanie potwierdzona.
+- [ ] Obsługiwać kalendarz dzienny zgrzewania z Excela.
+
+### Planista
+
+Planista proponuje plan, ale nie podejmuje samodzielnie decyzji kadrowych ani o nadgodzinach.
+
+- [ ] Lista wszystkich zleceń i pozycji produktów.
 - [ ] Grupowanie po działach.
-- [ ] Priorytety.
-- [ ] Terminy.
-- [ ] Aktualny postęp.
+- [ ] Priorytety ustalane z góry.
+- [ ] Terminy wysyłki.
+- [ ] Aktualny postęp ilościowy każdego etapu.
+- [ ] Osobno: postęp produkcyjny i procent gotowy do wysyłki.
 - [ ] Aktualna obsada pracowników.
 - [ ] Wstrzymane zlecenia.
 - [ ] Opóźnienia.
 - [ ] Historia wykonania.
 - [ ] Widok „co dzieje się teraz na hali”.
+- [ ] Automatyczne wykrywanie wąskiego gardła.
+- [ ] Prognozowany termin zakończenia produktu/zlecenia.
+- [ ] Prognozowany termin gotowości do wysyłki.
+- [ ] Porównanie prognozy z terminem klienta i pokazanie rezerwy/opóźnienia.
+- [ ] Planowanie konserwatywne na bezpiecznej wydajności, a nie na rekordowym wyniku.
+- [ ] Uczenie wydajności z realnej historii: produkt + operacja + czas + obsada + dobra ilość + opcjonalnie maszyna.
+- [ ] Mierzenie błędu prognozy Planisty względem rzeczywistego zakończenia.
+- [ ] Grupowanie malarni po RAL wyłącznie z ilości rzeczywiście gotowych do malowania.
+- [ ] Grupowanie zgrzewania / podobnych technologii tam, gdzie ogranicza przezbrojenia.
+- [ ] Kalendarz bazowy Pon–Pt.
+- [ ] Sobota jako opcjonalny dzień pracy.
+- [ ] III zmiana 22:00–06:00 jako opcjonalnie włączana.
+- [ ] Planista może proponować sobotę, nadgodziny lub III zmianę, ale wymaga to akceptacji kierownika.
+- [ ] Plan można poprawiać na bieżąco w trakcie dnia.
+- [ ] Kierownik akceptuje proponowaną kolejkę.
+
+### Widok kierowniczy / TV
+
 - [ ] Widok TV / ekran informacyjny bez możliwości edycji.
+- [ ] Aktywne zlecenia, procenty realizacji, ilość gotowa do wysyłki, opóźnienia i wąskie gardło.
+- [ ] Aktualny RAL / plan malarni.
+- [ ] Konfigurowalny interwał odświeżania.
 - [ ] Filtry po dziale, produkcie, zleceniu i statusie.
-
-### Kierunek późniejszy
-
-- Planista produkcji,
-- obciążenie działów,
-- wykorzystanie pracowników,
-- porównanie plan / wykonanie,
-- analiza czasów,
-- statystyki.
-
----
 
 ## 0.9 — Licencjonowanie, aktywacja i aktualizacje
 
@@ -371,61 +430,117 @@ Operator potrafi obsłużyć zmianę zlecenia bez otwierania panelu administracy
 
 ---
 
-# 0.11 — Pilotaż na jednym dziale
+# 0.11 — Miesięczny pilotaż równoległy
 
-Pierwsze realne wdrożenie nie obejmuje od razu całej firmy.
+Pierwsze realne wdrożenie ma działać przez około miesiąc równolegle do obecnego sposobu pracy.
 
-### Plan pilotażu
+### Zasady pilotażu
 
-- [ ] Wybrać jeden dział.
+- [ ] Obecny Excel i karty A4 pozostają oficjalnym źródłem planu.
+- [ ] Metalbox nie zapisuje niczego do oryginalnego Excela.
+- [ ] Metalbox automatycznie pobiera snapshot planu i wykrywa zmiany.
 - [ ] Wprowadzić rzeczywistych pracowników.
-- [ ] Wprowadzić rzeczywiste produkty.
-- [ ] Wprowadzić rzeczywiste zlecenia.
-- [ ] Uruchomić równoległe zlecenia.
+- [ ] Zasilić bazę produktami z planu oraz starych katalogów.
+- [ ] Importować rzeczywiste zlecenia.
+- [ ] Działy raportują rzeczywiste przyrosty wykonania.
+- [ ] Przetestować równoległe zlecenia.
 - [ ] Przetestować wstrzymanie / wznowienie.
 - [ ] Przetestować zmianę obsady w trakcie pracy.
 - [ ] Przetestować zmianę zmiany roboczej.
+- [ ] Zbierać czasy, dobre ilości, poprawki i braki.
+- [ ] Planista wylicza własne prognozy, ale nie steruje jeszcze produkcją.
+- [ ] Codziennie porównywać plan Excel, prognozę Planisty i rzeczywiste wykonanie.
+- [ ] Po miesiącu policzyć dokładność prognoz oraz wskazać miejsca wymagające korekty.
 - [ ] Zebrać błędy i miejsca wymagające uproszczenia.
 - [ ] Zweryfikować czasy reakcji interfejsu na hali.
 
 ### Kryterium odbioru
 
-Dział może przepracować pełną zmianę na Metalbox bez prowadzenia równoległego ręcznego rejestru tych samych informacji.
-
----
+Po miesiącu system posiada wystarczającą historię, aby dla powtarzalnych produktów orientacyjnie przewidywać czas etapów i termin zakończenia, a różnica między prognozą i rzeczywistością jest mierzalna.
 
 # 0.12 — Rozszerzenie na kolejne działy
 
-- [ ] Zgrzewanie.
+- [ ] Laser.
+- [ ] Piły.
+- [ ] Giętarki.
+- [ ] Przygotowanie produkcji.
+- [ ] Warsztat.
+- [ ] Zgrzewarki.
+- [ ] Linia / stanowiska produkcyjne.
+- [ ] Spawalnia.
 - [ ] Malarnia.
-- [ ] Linie / stanowiska produkcyjne.
-- [ ] Pozostałe działy zgodnie z rzeczywistą strukturą firmy.
+- [ ] Pakownia.
+- [ ] Wysyłka.
+- [ ] Pozostałe działy tylko wtedy, gdy wynikają z rzeczywistego procesu firmy.
 - [ ] Indywidualne pulpity tam, gdzie proces tego wymaga.
 - [ ] Wspólne mechanizmy danych zamiast kopiowania logiki dla każdego działu.
 
 ---
 
-# 0.13 — Raportowanie i statystyki
+# 0.13 — Raportowanie, akord i statystyki
+
+### Produkcja
 
 - [ ] Czas na zleceniu.
 - [ ] Czas na dziale.
 - [ ] Obsada zlecenia.
 - [ ] Ilość wykonana.
+- [ ] Dobre sztuki / poprawki / braki / złom.
 - [ ] Plan vs wykonanie.
 - [ ] Historia wstrzymań.
 - [ ] Obciążenie działu.
 - [ ] Wydajność procesu.
 - [ ] Eksport danych dla uprawnionych użytkowników.
 
+### Akord / raport dzienny
+
+- [ ] Centralna lista pracowników uprawnionych do raportowania.
+- [ ] Akord liczony wyłącznie z dobrych sztuk.
+- [ ] Możliwość przypisania wielu pracowników do jednej sesji oraz rozdzielenia ich między kilka równoległych zleceń.
+- [ ] Każdy pracownik posiada edytowalny współczynnik.
+- [ ] Stawka bazowa produktu może istnieć w systemie, ale jest niewidoczna bez odpowiedniego uprawnienia kierowniczego.
+- [ ] Domyślny raport dla płac pokazuje wykonane ilości, pracowników, współczynniki, zlecenie, produkt, dział i zmianę bez ujawniania wartości pieniężnych.
+- [ ] Eksport dziennego raportu do Excel.
+- [ ] Raport tygodniowy i miesięczny.
+- [ ] Brygadzista / osoba odpowiedzialna zatwierdza wpisy akordowe swojego działu.
+- [ ] Zachować historię korekt.
+- [ ] Roboczy model rozdziału: ilość dobrych sztuk dzielona na osoby z uwzględnieniem współczynnika; przy zmianie obsady uwzględnić rzeczywisty udział/czas w sesji.
+
 Statystyki mają wynikać z danych zbieranych podczas normalnej pracy, a nie wymagać dodatkowego ręcznego raportowania tych samych informacji.
 
 ---
 
-# 0.14 — Stabilizacja przed 1.0
+# 0.14 — Pełna integracja z Warsztat Menager
+
+Warsztat Menager ma posiadać osobny moduł **Metalbox** z pełnym dostępem do systemu zgodnie z rangą i uprawnieniami użytkownika.
+
+- [ ] WM korzysta z tych samych centralnych danych / API Metalbox, bez tworzenia drugiej niezależnej bazy.
+- [ ] Pełny podgląd wszystkich działów i aktywnych zleceń.
+- [ ] Wejście w szczegóły konkretnego ZL i pozycji produktu.
+- [ ] Postęp ilościowy wszystkich etapów.
+- [ ] Postęp produkcyjny i procent gotowy do wysyłki.
+- [ ] Planista i możliwość zatwierdzania planu przez uprawnioną osobę.
+- [ ] Podgląd importu Excel i historii zmian planu.
+- [ ] Karty produktów.
+- [ ] Pracownicy, role i uprawnienia.
+- [ ] Raporty i statystyki.
+- [ ] Podgląd akordu bez danych finansowych dla ról bez stosownego uprawnienia.
+- [ ] Alarmy, opóźnienia, braki i wąskie gardła.
+- [ ] Podgląd malarni, zgrzewarek, pakowni i wysyłek.
+- [ ] Konfiguracja Metalbox dostępna z WM tylko dla uprawnionych ról.
+- [ ] Uprawnienia obowiązują identycznie w kliencie Metalbox i w WM — brak bocznego obejścia zabezpieczeń.
+
+---
+
+# 0.15 — Stabilizacja przed 1.0# 0.14 — Stabilizacja przed 1.0
 
 - [ ] Testy jednostkowe kluczowej logiki.
 - [ ] Testy integracyjne wielu klientów.
 - [ ] Testy równoległego zapisu.
+- [ ] Test snapshotów i porównywania planu Excel bez modyfikacji oryginału.
+- [ ] Test importu wielopozycyjnych zleceń z pustym numerem w kolejnych wierszach.
+- [ ] Test prognoz Planisty i pomiaru błędu prognozy.
+- [ ] Test pełnego dostępu z modułu Metalbox w WM.
 - [ ] Testy uprawnień.
 - [ ] Testy Owner Admin.
 - [ ] Testy RFID/NFC.
@@ -455,6 +570,11 @@ Wersja 1.0 jest gotowa dopiero wtedy, gdy system:
 - egzekwuje role i uprawnienia,
 - posiada działający audyt,
 - działa na centralnych danych,
+- importuje plan produkcji z Excela przez bezpieczny snapshot bez modyfikowania oryginału,
+- śledzi ilości równolegle na poszczególnych działach,
+- posiada Planistę prognozującego zakończenie i termin wysyłki na podstawie realnych danych,
+- posiada raportowanie akordu i eksport dzienny,
+- posiada pełny moduł Metalbox w Warsztat Menager zgodny z uprawnieniami,
 - ma niezawodny backup,
 - posiada bezpieczne aktualizacje,
 - posiada Owner Admin z 2FA,
@@ -470,8 +590,8 @@ Zakres po wydaniu stabilnym będzie dodawany tylko wtedy, gdy daje realną warto
 
 Kierunki:
 
-- integracja Metalbox ↔ Warsztat Menager,
-- API pomiędzy modułami,
+- aplikacja mobilna dla brygadzisty,
+- QR zleceń i wygodne skanowanie na hali,
 - bardziej zaawansowany Planista,
 - automatyczne wykrywanie przeciążeń działów,
 - rozbudowane statystyki,
@@ -510,9 +630,11 @@ Kierunki:
  ↓
 0.12 Kolejne działy
  ↓
-0.13 Raportowanie
+0.13 Raportowanie / akord
  ↓
-0.14 Stabilizacja
+0.14 Integracja z WM
+ ↓
+0.15 Stabilizacja
  ↓
 1.0  Stable
 ```
