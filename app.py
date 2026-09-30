@@ -4,9 +4,11 @@ import json
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 from PySide6.QtCore import QEvent, Qt, QTimer
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QApplication,
     QComboBox,
     QDialog,
@@ -31,7 +33,7 @@ from PySide6.QtWidgets import (
 )
 
 APP_NAME = "Metalbox"
-APP_VERSION = "0.0.2"
+APP_VERSION = "0.0.3"
 CONFIG_FILE = Path(__file__).resolve().with_name("metalbox_client.json")
 
 DEPARTMENTS = [
@@ -47,25 +49,88 @@ DEPARTMENTS = [
     "Magazyn",
 ]
 
-MOCK_ORDERS = [
-    ("ZL-740", "1.435.135 SC600 RP Sorta", 65, 42, "AKTYWNE"),
+ORDERS = [
+    {
+        "code": "ZL-740",
+        "client": "Sorta",
+        "deadline": "18.10.2026",
+        "priority": "WYSOKI",
+        "status": "W TRAKCIE",
+        "ready": 31,
+        "progress": 58,
+        "positions": [
+            ("1.435.135", "SC600 RP Sorta", 65),
+            ("1.325.68", "SC400 RP Sorta", 120),
+            ("1.380.100", "SC900 RP Sorta", 40),
+            ("1.435.68", "SC500 RP Sorta", 375),
+            ("1.380.68", "SC200 RP Sorta", 1800),
+        ],
+    },
+    {
+        "code": "ZL-763",
+        "client": "Elimger",
+        "deadline": "08.10.2026",
+        "priority": "NORMALNY",
+        "status": "W TRAKCIE",
+        "ready": 71,
+        "progress": 79,
+        "positions": [("1.330.50", "Elimger", 864)],
+    },
+    {
+        "code": "ZL-781",
+        "client": "DELKER",
+        "deadline": "15.10.2026",
+        "priority": "NORMALNY",
+        "status": "WSTRZYMANE",
+        "ready": 17,
+        "progress": 39,
+        "positions": [("2.510.240", "DELKER", 48)],
+    },
+    {
+        "code": "ZL-785",
+        "client": "WIST",
+        "deadline": "16.10.2026",
+        "priority": "NORMALNY",
+        "status": "W TRAKCIE",
+        "ready": 64,
+        "progress": 82,
+        "positions": [("1.380.68", "WIST", 50)],
+    },
+]
+
+DEPARTMENT_ORDER_PROGRESS = [
+    ("ZL-740", "1.435.135 SC600 RP Sorta", 120, 40, "AKTYWNE"),
     ("ZL-763", "1.330.50 Elimger", 864, 612, "AKTYWNE"),
     ("ZL-781", "2.510.240 DELKER", 48, 31, "WSTRZYMANE"),
     ("ZL-785", "1.380.68 WIST", 50, 50, "GOTOWE"),
 ]
 
-MOCK_PRODUCTS = [
-    ("1.435.135", "SC600 RP Sorta", "RAL 7042", "Laser → Gięcie → Zgrzewanie → Malarnia → Pakownia"),
-    ("1.330.50", "Elimger", "RAL 3020DS", "Laser → Gięcie → Zgrzewanie → Malarnia → Pakownia"),
-    ("1.436.70", "VC", "RAL 5010", "Laser → Gięcie → Zgrzewanie → Malarnia → Pakownia"),
-    ("1.622.59", "VW", "RAL 7012", "Laser → Gięcie → Spawalnia → Malarnia → Pakownia"),
+PRODUCTS = [
+    ("1.435.135", "SC600 RP Sorta", "RAL 7042", "5 operacji", "Aktywny"),
+    ("1.330.50", "Elimger", "RAL 3020DS", "5 operacji", "Aktywny"),
+    ("1.436.70", "VC", "RAL 5010", "5 operacji", "Aktywny"),
+    ("1.622.59", "VW", "RAL 7012", "5 operacji", "Aktywny"),
+    ("1.380.68", "SC200 RP Sorta", "RAL 9005/7042", "5 operacji", "Aktywny"),
 ]
 
-MOCK_EMPLOYEES = [
-    ("Jan Kowalski", "Zgrzewarki", "Zgrzewacz", "Brygadzista", "jan.kowalski@metalbox.pl"),
-    ("Piotr Nowak", "Zgrzewarki", "Zgrzewacz", "Pracownik", ""),
-    ("Anna Wiśniewska", "Malarnia", "Malarz", "Pracownik", ""),
-    ("Marek Zieliński", "Kierownictwo", "Planowanie", "Kierownik", "marek.zielinski@metalbox.pl"),
+EMPLOYEES = [
+    ("Jan Kowalski", "Zgrzewarki", "Zgrzewacz", "Brygadzista", "jan.kowalski@metalbox.pl", "Aktywny"),
+    ("Piotr Nowak", "Zgrzewarki", "Zgrzewacz", "Pracownik", "", "Aktywny"),
+    ("Anna Wiśniewska", "Malarnia", "Malarz", "Pracownik", "", "Aktywny"),
+    ("Marek Zieliński", "Kierownictwo", "Planowanie", "Kierownik", "marek.zielinski@metalbox.pl", "Aktywny"),
+]
+
+QUALITY_ROWS = [
+    ("30.09", "ZL-740", "Zgrzewarki", "SC600", "12", "Do poprawki", "Jan Kowalski"),
+    ("30.09", "ZL-763", "Malarnia", "Elimger", "5", "Wstrzymane", "Anna Wiśniewska"),
+    ("29.09", "ZL-781", "Pakownia", "DELKER", "2", "Złom", "Piotr Nowak"),
+]
+
+SHIPPING_ROWS = [
+    ("08.10.2026", "ZL-763", "Elimger", "864", "6", "Planowany"),
+    ("15.10.2026", "ZL-781", "DELKER", "48", "1", "Planowany"),
+    ("16.10.2026", "ZL-785", "WIST", "50", "1", "Planowany"),
+    ("18.10.2026", "ZL-740", "Sorta", "2400", "18", "Częściowo gotowe"),
 ]
 
 
@@ -94,23 +159,72 @@ class ClientConfig:
             return cls()
 
     def save(self) -> None:
-        payload = {
-            "server_ip": self.server_ip,
-            "station_name": self.station_name,
-            "inactivity_seconds": self.inactivity_seconds,
-            "configured": True,
-            "test_mode": self.test_mode,
-        }
-        CONFIG_FILE.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        CONFIG_FILE.write_text(
+            json.dumps(
+                {
+                    "server_ip": self.server_ip,
+                    "station_name": self.station_name,
+                    "inactivity_seconds": self.inactivity_seconds,
+                    "configured": True,
+                    "test_mode": self.test_mode,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
 
 
-def mock_message(parent, title="Wydmuszka 0.0.2"):
+def mock_message(parent, title: str = "Wydmuszka") -> None:
     QMessageBox.information(
         parent,
         title,
-        "Ten element pokazuje docelowy kierunek interfejsu.\n"
-        "W wersji 0.0.2 nie zapisuje jeszcze danych produkcyjnych.",
+        "To jest element docelowego interfejsu.\n"
+        "W wersji 0.0.3 nie zapisuje jeszcze danych produkcyjnych.",
     )
+
+
+def card(title: str, value: str = "", note: str = "", width: int = 220) -> QFrame:
+    frame = QFrame()
+    frame.setObjectName("card")
+    frame.setFixedWidth(width)
+    layout = QVBoxLayout(frame)
+    layout.setContentsMargins(16, 12, 16, 12)
+    label = QLabel(title)
+    label.setObjectName("cardTitle")
+    layout.addWidget(label)
+    if value:
+        val = QLabel(value)
+        val.setObjectName("cardValue")
+        layout.addWidget(val)
+    if note:
+        hint = QLabel(note)
+        hint.setWordWrap(True)
+        hint.setObjectName("hint")
+        layout.addWidget(hint)
+    layout.addStretch(1)
+    return frame
+
+
+def compact_table(headers: list[str], rows: list[list[str]], widths: list[int], height: int | None = None) -> QTableWidget:
+    table = QTableWidget(len(rows), len(headers))
+    table.setHorizontalHeaderLabels(headers)
+    table.verticalHeader().setVisible(False)
+    table.setAlternatingRowColors(True)
+    table.setSelectionBehavior(QAbstractItemView.SelectRows)
+    table.setSelectionMode(QAbstractItemView.SingleSelection)
+    table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+    table.horizontalHeader().setSectionResizeMode(QHeaderView.Fixed)
+    for column, width in enumerate(widths):
+        table.setColumnWidth(column, width)
+    for row_index, row in enumerate(rows):
+        for column_index, value in enumerate(row):
+            table.setItem(row_index, column_index, QTableWidgetItem(str(value)))
+    table.setMinimumWidth(min(sum(widths) + 40, 1450))
+    table.setMaximumWidth(sum(widths) + 40)
+    if height:
+        table.setFixedHeight(height)
+    return table
 
 
 class ConnectionDialog(QDialog):
@@ -118,43 +232,40 @@ class ConnectionDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Metalbox — konfiguracja połączenia")
         self.setModal(True)
-        self.setMinimumWidth(560)
+        self.setFixedWidth(590)
         self.use_test_mode = False
 
         self.ip_edit = QLineEdit(config.server_ip)
         self.ip_edit.setPlaceholderText("np. 192.168.1.20")
-
         self.password_edit = QLineEdit()
         self.password_edit.setEchoMode(QLineEdit.Password)
         self.password_edit.setPlaceholderText("Hasło techniczne do serwera")
-
         self.station_edit = QLineEdit(config.station_name)
-
         self.timeout_spin = QSpinBox()
         self.timeout_spin.setRange(30, 1800)
         self.timeout_spin.setSuffix(" s")
         self.timeout_spin.setValue(config.inactivity_seconds)
 
-        note = QLabel(
-            "Połączenie techniczne identyfikuje stanowisko. Docelowo zapis danych będzie "
-            "wymagał indywidualnej identyfikacji użytkownika: login/PIN, QR lub RFID."
-        )
-        note.setWordWrap(True)
-        note.setObjectName("hint")
-
         form = QFormLayout()
+        form.setHorizontalSpacing(18)
+        form.setVerticalSpacing(12)
         form.addRow("IP / nazwa serwera:", self.ip_edit)
         form.addRow("Hasło techniczne:", self.password_edit)
         form.addRow("Nazwa stanowiska:", self.station_edit)
         form.addRow("Powrót po bezczynności:", self.timeout_spin)
 
+        note = QLabel(
+            "Połączenie techniczne identyfikuje stanowisko. Zapis danych docelowo będzie "
+            "wymagał indywidualnej identyfikacji użytkownika przez PIN, QR lub RFID."
+        )
+        note.setWordWrap(True)
+        note.setObjectName("hint")
+
         test_connection = QPushButton("Test połączenia")
         test_connection.clicked.connect(self._test_connection)
-
-        test_mode = QPushButton("Uruchom tryb testowy")
-        test_mode.setObjectName("warning")
+        test_mode = QPushButton("Tryb testowy")
+        test_mode.setObjectName("ghostGreen")
         test_mode.clicked.connect(self._accept_test_mode)
-
         save = QPushButton("Zapisz i uruchom")
         save.setObjectName("primary")
         save.clicked.connect(self._accept)
@@ -166,9 +277,12 @@ class ConnectionDialog(QDialog):
         buttons.addWidget(save)
 
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 22, 24, 22)
         layout.addWidget(QLabel("<h2>Połączenie z serwerem Metalbox</h2>"))
         layout.addLayout(form)
+        layout.addSpacing(8)
         layout.addWidget(note)
+        layout.addSpacing(8)
         layout.addLayout(buttons)
 
     def _validate(self) -> bool:
@@ -181,14 +295,13 @@ class ConnectionDialog(QDialog):
         return True
 
     def _test_connection(self) -> None:
-        if not self._validate():
-            return
-        QMessageBox.information(
-            self,
-            "Test połączenia",
-            "Konfiguracja wygląda poprawnie.\n\n"
-            "W prototypie 0.0.2 prawdziwy Metalbox Server nie jest jeszcze uruchomiony.",
-        )
+        if self._validate():
+            QMessageBox.information(
+                self,
+                "Test połączenia",
+                "Konfiguracja wygląda poprawnie.\n\n"
+                "W wersji 0.0.3 prawdziwy Metalbox Server nie jest jeszcze podłączony.",
+            )
 
     def _accept_test_mode(self) -> None:
         self.use_test_mode = True
@@ -204,8 +317,9 @@ class ConnectionDialog(QDialog):
 
 
 class Header(QWidget):
-    def __init__(self, title: str, go_home, subtitle: str = ""):
+    def __init__(self, title: str, go_home: Callable, subtitle: str = ""):
         super().__init__()
+        self.setMaximumWidth(1500)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
@@ -217,6 +331,7 @@ class Header(QWidget):
             sub = QLabel(subtitle)
             sub.setObjectName("hint")
             sub.setWordWrap(True)
+            sub.setMaximumWidth(900)
             titles.addWidget(sub)
 
         back = QPushButton("← Pulpit główny")
@@ -228,63 +343,82 @@ class Header(QWidget):
         layout.addWidget(back)
 
 
-class DepartmentPage(QWidget):
-    def __init__(self, department: str, go_home):
+class PageBase(QWidget):
+    def __init__(self, title: str, go_home: Callable, subtitle: str = ""):
         super().__init__()
+        outer = QHBoxLayout(self)
+        outer.setContentsMargins(22, 18, 22, 18)
+        outer.addStretch(1)
+
+        self.content = QWidget()
+        self.content.setMaximumWidth(1500)
+        self.root = QVBoxLayout(self.content)
+        self.root.setContentsMargins(0, 0, 0, 0)
+        self.root.setSpacing(14)
+        self.root.addWidget(Header(title, go_home, subtitle))
+
+        outer.addWidget(self.content, 1)
+        outer.addStretch(1)
+
+
+class DepartmentPage(PageBase):
+    def __init__(self, department: str, go_home: Callable):
+        super().__init__(
+            department,
+            go_home,
+            "Kolejka działu i bieżąca produkcja. Wszystkie dane poniżej są demonstracyjne.",
+        )
         self.department = department
 
-        root = QVBoxLayout(self)
-        root.setContentsMargins(28, 20, 28, 20)
-        root.setSpacing(14)
-
-        root.addWidget(
-            Header(
-                department,
-                go_home,
-                "Kolejka działu — układ docelowy. Dane i przyciski są demonstracyjne.",
-            )
-        )
-
-        summary = QHBoxLayout()
-        for label, value in [
-            ("AKTYWNE", "2"),
-            ("OCZEKUJE", "4"),
-            ("WSTRZYMANE", "1"),
-            ("DO WYKONANIA", "1 826 szt."),
+        stats = QHBoxLayout()
+        stats.setSpacing(12)
+        for title, value, note in [
+            ("Aktywne", "2", "zlecenia"),
+            ("Oczekuje", "4", "w kolejce"),
+            ("Wstrzymane", "1", "wymaga uwagi"),
+            ("Do wykonania", "1 826", "szt."),
         ]:
-            card = QFrame()
-            card.setObjectName("miniStat")
-            box = QVBoxLayout(card)
-            v = QLabel(value)
-            v.setObjectName("statValue")
-            t = QLabel(label)
-            t.setObjectName("hint")
-            box.addWidget(v)
-            box.addWidget(t)
-            summary.addWidget(card)
-        root.addLayout(summary)
+            stats.addWidget(card(title, value, note, 205))
+        stats.addStretch(1)
+        self.root.addLayout(stats)
+
+        controls = QHBoxLayout()
+        for text in ("Aktywne", "Kolejka", "Wstrzymane", "Zakończone"):
+            btn = QPushButton(text)
+            if text == "Aktywne":
+                btn.setObjectName("primary")
+            btn.clicked.connect(lambda checked=False, t=text: mock_message(self, t))
+            controls.addWidget(btn)
+        if department == "Laser":
+            future = QPushButton("Półprodukty na zapas — przyszłość")
+            future.setObjectName("ghostGreen")
+            future.clicked.connect(lambda: mock_message(self, "Półprodukty na zapas"))
+            controls.addWidget(future)
+        controls.addStretch(1)
+        self.root.addLayout(controls)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
-        content = QWidget()
-        cards = QVBoxLayout(content)
+        body = QWidget()
+        body.setMaximumWidth(1420)
+        cards = QVBoxLayout(body)
         cards.setContentsMargins(0, 0, 0, 0)
         cards.setSpacing(12)
-
-        for idx, (code, product, total, done, status_text) in enumerate(MOCK_ORDERS[:3]):
-            cards.addWidget(self._order_card(code, product, total, done, status_text, idx))
-
+        for idx, order in enumerate(DEPARTMENT_ORDER_PROGRESS):
+            cards.addWidget(self._order_card(*order, idx))
         cards.addStretch(1)
-        scroll.setWidget(content)
-        root.addWidget(scroll, 1)
+        scroll.setWidget(body)
+        self.root.addWidget(scroll, 1)
 
-    def _order_card(self, code, product, total, done, status_text, idx) -> QFrame:
+    def _order_card(self, code: str, product: str, total: int, done: int, status_text: str, idx: int) -> QFrame:
         frame = QFrame()
         frame.setObjectName("orderCard")
+        frame.setMaximumWidth(1380)
+
         box = QVBoxLayout(frame)
-        box.setContentsMargins(12, 10, 12, 10)
-        box.setSpacing(8)
+        box.setContentsMargins(14, 12, 14, 12)
+        box.setSpacing(9)
 
         top = QHBoxLayout()
         code_label = QLabel(code)
@@ -295,170 +429,388 @@ class DepartmentPage(QWidget):
         status.setObjectName("statusPillPaused" if status_text == "WSTRZYMANE" else "statusPill")
 
         top.addWidget(code_label)
-        top.addWidget(product_label, 1)
+        top.addWidget(product_label)
+        top.addSpacing(24)
         top.addWidget(QLabel(f"Plan: {total} szt."))
         top.addWidget(QLabel(f"Wykonano: {done} szt."))
+        top.addStretch(1)
         top.addWidget(status)
         box.addLayout(top)
 
-        # Pasek postępu pełnej szerokości kafla — od lewej do prawej.
         bar = QProgressBar()
         bar.setObjectName("orderProgress")
         bar.setRange(0, max(total, 1))
         bar.setValue(done)
         bar.setFormat(f"{done} / {total} szt.     %p%")
-        bar.setMinimumHeight(28)
+        bar.setMinimumHeight(30)
         box.addWidget(bar)
 
         bottom = QHBoxLayout()
-        info = QLabel("Zmiana I  •  obsada: 4 osoby" if idx == 0 else "Zaplanowane / dane demonstracyjne")
+        info = QLabel("Zmiana I • obsada: 4 osoby" if idx == 0 else "Dane demonstracyjne")
         info.setObjectName("hint")
         bottom.addWidget(info)
         bottom.addStretch(1)
-
         for text in ("Rozpocznij", "Wstrzymaj", "Wznów", "Dodaj ilość", "Problem", "Szczegóły"):
-            button = QPushButton(text)
-            button.clicked.connect(lambda checked=False, t=text: mock_message(self, t))
-            bottom.addWidget(button)
-
+            btn = QPushButton(text)
+            btn.clicked.connect(lambda checked=False, t=text: mock_message(self, t))
+            bottom.addWidget(btn)
         box.addLayout(bottom)
         return frame
 
 
-class PlannerPage(QWidget):
-    def __init__(self, go_home):
-        super().__init__()
-        root = QVBoxLayout(self)
-        root.setContentsMargins(28, 20, 28, 20)
-        root.addWidget(
-            Header(
-                "Planista",
-                go_home,
-                "Cyfrowy odpowiednik obecnego planu Excel — w prototypie tylko widok.",
-            )
+class OrdersPage(PageBase):
+    def __init__(self, go_home: Callable, open_order: Callable[[str], None]):
+        super().__init__(
+            "Zlecenia",
+            go_home,
+            "Wszystkie ZL i ich pozycje. Jedno zlecenie może być równolegle na kilku etapach.",
         )
-
         controls = QHBoxLayout()
-        for text in ("Dzisiaj", "Tydzień", "Wszystkie zlecenia", "Do akceptacji", "Import Excel"):
-            b = QPushButton(text)
-            if text == "Import Excel":
-                b.setObjectName("primary")
-            b.clicked.connect(lambda checked=False, t=text: mock_message(self, t))
-            controls.addWidget(b)
+        search = QLineEdit()
+        search.setPlaceholderText("Szukaj ZL, klienta lub produktu…")
+        search.setFixedWidth(340)
+        controls.addWidget(search)
+        for text in ("Aktywne", "Opóźnione", "Wstrzymane", "Zakończone"):
+            btn = QPushButton(text)
+            btn.clicked.connect(lambda checked=False, t=text: mock_message(self, t))
+            controls.addWidget(btn)
         controls.addStretch(1)
-        root.addLayout(controls)
+        new_order = QPushButton("Nowe zlecenie")
+        new_order.setObjectName("primary")
+        new_order.clicked.connect(lambda: mock_message(self, "Nowe zlecenie"))
+        controls.addWidget(new_order)
+        self.root.addLayout(controls)
 
-        table = QTableWidget(6, 10)
-        table.setHorizontalHeaderLabels(
-            ["Nr ZL", "Produkt", "Ilość", "Wysyłka", "Proces", "Pon", "Wt", "Śr", "Czw", "Pt"]
+        rows = []
+        for order in ORDERS:
+            rows.append(
+                [
+                    order["code"],
+                    order["client"],
+                    order["deadline"],
+                    order["priority"],
+                    order["status"],
+                    f'{order["progress"]}%',
+                    f'{order["ready"]}%',
+                    "Otwórz",
+                ]
+            )
+        table = compact_table(
+            ["Nr ZL", "Klient", "Termin", "Priorytet", "Status", "Produkcja", "Gotowe", "Szczegóły"],
+            rows,
+            [100, 190, 125, 110, 130, 105, 105, 100],
+            300,
         )
+        table.cellDoubleClicked.connect(lambda row, col: open_order(ORDERS[row]["code"]))
+        self.root.addWidget(table, alignment=Qt.AlignLeft)
+
+        note = QLabel("Dwuklik na wierszu otwiera szczegóły ZL.")
+        note.setObjectName("hint")
+        self.root.addWidget(note)
+        self.root.addStretch(1)
+
+
+class OrderDetailPage(PageBase):
+    def __init__(self, go_home: Callable):
+        super().__init__("Szczegóły zlecenia", go_home)
+        self._current_code = "ZL-740"
+
+        top = QHBoxLayout()
+        self.order_title = QLabel("ZL-740")
+        self.order_title.setObjectName("detailTitle")
+        top.addWidget(self.order_title)
+        top.addSpacing(24)
+        top.addWidget(QLabel("Termin: 18.10.2026"))
+        top.addWidget(QLabel("Klient: Sorta"))
+        top.addWidget(QLabel("Priorytet: WYSOKI"))
+        top.addStretch(1)
+        status = QLabel("W TRAKCIE")
+        status.setObjectName("statusPill")
+        top.addWidget(status)
+        self.root.addLayout(top)
+
+        summary = QHBoxLayout()
+        summary.addWidget(card("Postęp produkcji", "58%", "wszystkie etapy", 230))
+        summary.addWidget(card("Gotowe do wysyłki", "31%", "ostatni ukończony etap", 230))
+        summary.addWidget(card("Prognoza", "18.10", "Planista — atrapa", 230))
+        summary.addWidget(card("Wąskie gardło", "Zgrzewarki", "dane demonstracyjne", 230))
+        summary.addStretch(1)
+        self.root.addLayout(summary)
+
+        stages = QFrame()
+        stages.setObjectName("panel")
+        stages.setMaximumWidth(1160)
+        stage_layout = QVBoxLayout(stages)
+        stage_layout.addWidget(QLabel("<b>Postęp po działach</b>"))
+        for name, done, total in [
+            ("Laser", 2400, 2400),
+            ("Giętarki", 2400, 2400),
+            ("Zgrzewarki", 1420, 2400),
+            ("Malarnia", 1160, 2400),
+            ("Pakownia", 744, 2400),
+        ]:
+            row = QHBoxLayout()
+            label = QLabel(name)
+            label.setFixedWidth(130)
+            row.addWidget(label)
+            bar = QProgressBar()
+            bar.setRange(0, total)
+            bar.setValue(done)
+            bar.setFormat(f"{done} / {total} szt.  •  %p%")
+            bar.setFixedWidth(760)
+            row.addWidget(bar)
+            row.addStretch(1)
+            stage_layout.addLayout(row)
+        self.root.addWidget(stages, alignment=Qt.AlignLeft)
+
+        positions = []
+        for symbol, name, qty in ORDERS[0]["positions"]:
+            positions.append([symbol, name, str(qty), "Otwórz kartę"])
+        table = compact_table(
+            ["Symbol", "Produkt", "Ilość", "Karta produktu"],
+            positions,
+            [150, 430, 110, 150],
+            230,
+        )
+        self.root.addWidget(QLabel("<b>Pozycje zlecenia</b>"))
+        self.root.addWidget(table, alignment=Qt.AlignLeft)
+
+        actions = QHBoxLayout()
+        for text in ("Historia", "Jakość / braki", "Dokumentacja", "Wysyłka", "Korekta"):
+            btn = QPushButton(text)
+            btn.clicked.connect(lambda checked=False, t=text: mock_message(self, t))
+            actions.addWidget(btn)
+        actions.addStretch(1)
+        self.root.addLayout(actions)
+
+    def set_order(self, code: str) -> None:
+        self._current_code = code
+        self.order_title.setText(code)
+
+
+class PlannerPage(PageBase):
+    def __init__(self, go_home: Callable):
+        super().__init__(
+            "Planista",
+            go_home,
+            "Układ wzorowany na obecnym planie Excel. W pilotażu Excel pozostaje nadrzędny.",
+        )
+        controls = QHBoxLayout()
+        for text in ("Dzisiaj", "Tydzień", "Do akceptacji", "Zmiany Excel", "Import snapshot"):
+            btn = QPushButton(text)
+            if text == "Import snapshot":
+                btn.setObjectName("primary")
+            btn.clicked.connect(lambda checked=False, t=text: mock_message(self, t))
+            controls.addWidget(btn)
+        controls.addStretch(1)
+        self.root.addLayout(controls)
+
         rows = [
-            ["740", "1.435.135 SC600 RP Sorta", "65", "18.09", "x", "", "ZGRZ.", "", "", ""],
+            ["740", "1.435.135 SC600 RP Sorta", "65", "18.10", "x", "", "ZGRZ.", "", "", ""],
             ["", "1.325.68 SC400 RP Sorta", "120", "", "x", "", "ZGRZ.", "", "", ""],
+            ["", "1.380.100 SC900 RP Sorta", "40", "", "x", "", "", "ZGRZ.", "", ""],
             ["763", "1.330.50 Elimger", "864", "08.10", "zgrzane", "", "", "MAL.", "", ""],
             ["781", "2.510.240 DELKER", "48", "15.10", "x", "", "", "", "ZGRZ.", ""],
             ["785", "1.380.68 WIST", "50", "16.10", "x", "", "", "", "", "ZGRZ."],
-            ["604", "02.090 ORB", "306", "16.10", "x", "", "", "", "", ""],
         ]
-        for r, row in enumerate(rows):
-            for c, value in enumerate(row):
-                table.setItem(r, c, QTableWidgetItem(value))
-        table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        table.verticalHeader().setVisible(False)
-        table.setAlternatingRowColors(True)
-        root.addWidget(table, 1)
+        table = compact_table(
+            ["Nr ZL", "Produkt", "Ilość", "Wysyłka", "Proces", "Pon", "Wt", "Śr", "Czw", "Pt"],
+            rows,
+            [90, 300, 80, 95, 105, 85, 85, 85, 85, 85],
+            300,
+        )
+        self.root.addWidget(table, alignment=Qt.AlignLeft)
 
-        forecast = QFrame()
-        forecast.setObjectName("infoPanel")
-        fl = QHBoxLayout(forecast)
-        fl.addWidget(QLabel("Prognoza Planisty — ATRAPA"))
-        fl.addStretch(1)
-        fl.addWidget(QLabel("Wąskie gardło: Zgrzewarki"))
-        fl.addWidget(QLabel("Szac. zakończenie: 09.10"))
-        fl.addWidget(QLabel("Rezerwa: +1 dzień"))
-        root.addWidget(forecast)
+        lower = QHBoxLayout()
+        lower.addWidget(card("Wąskie gardło", "Zgrzewarki", "Planista — atrapa", 240))
+        lower.addWidget(card("Ryzyko terminu", "2 ZL", "wymaga uwagi", 240))
+        lower.addWidget(card("Najbliższa wysyłka", "08.10", "ZL-763", 240))
+        lower.addWidget(card("Dokładność prognozy", "—", "zbieranie danych", 240))
+        lower.addStretch(1)
+        self.root.addLayout(lower)
+
+        info = QFrame()
+        info.setObjectName("panel")
+        info.setMaximumWidth(1000)
+        layout = QVBoxLayout(info)
+        layout.addWidget(QLabel("<b>Planista — docelowe działania</b>"))
+        desc = QLabel(
+            "Prognoza zakończenia • obciążenie działów • grupowanie malarni po RAL • "
+            "propozycja soboty/nadgodzin/III zmiany • porównanie prognozy z wykonaniem."
+        )
+        desc.setWordWrap(True)
+        desc.setObjectName("hint")
+        layout.addWidget(desc)
+        self.root.addWidget(info, alignment=Qt.AlignLeft)
+        self.root.addStretch(1)
 
 
-class ProductsPage(QWidget):
-    def __init__(self, go_home):
-        super().__init__()
-        root = QVBoxLayout(self)
-        root.setContentsMargins(28, 20, 28, 20)
-        root.addWidget(Header("Produkty / karty produktu", go_home, "Cyfrowa teczka produktu."))
+class ProductsPage(PageBase):
+    def __init__(self, go_home: Callable):
+        super().__init__("Produkty", go_home, "Karty produktów, BOM, dokumentacja, technologia i historia.")
 
-        top = QHBoxLayout()
+        controls = QHBoxLayout()
         search = QLineEdit()
-        search.setPlaceholderText("Szukaj po symbolu lub nazwie...")
-        top.addWidget(search, 1)
-        for text in ("Nowy produkt", "Import katalogów 2014–2016", "Do weryfikacji"):
-            b = QPushButton(text)
-            b.clicked.connect(lambda checked=False, t=text: mock_message(self, t))
-            top.addWidget(b)
-        root.addLayout(top)
+        search.setPlaceholderText("Szukaj po symbolu lub nazwie…")
+        search.setFixedWidth(340)
+        controls.addWidget(search)
+        for text in ("Nowy produkt", "Import katalogów 2014–2016", "Do weryfikacji", "Półprodukty"):
+            btn = QPushButton(text)
+            if text == "Nowy produkt":
+                btn.setObjectName("primary")
+            btn.clicked.connect(lambda checked=False, t=text: mock_message(self, t))
+            controls.addWidget(btn)
+        controls.addStretch(1)
+        self.root.addLayout(controls)
 
-        table = QTableWidget(len(MOCK_PRODUCTS), 5)
-        table.setHorizontalHeaderLabels(["Symbol", "Nazwa", "RAL", "Technologia", "Karta"])
-        for r, row in enumerate(MOCK_PRODUCTS):
-            for c, value in enumerate(row):
-                table.setItem(r, c, QTableWidgetItem(value))
-            table.setItem(r, 4, QTableWidgetItem("Otwórz teczkę"))
-        table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        table.verticalHeader().setVisible(False)
-        root.addWidget(table, 1)
-
-        details = QFrame()
-        details.setObjectName("infoPanel")
-        dl = QVBoxLayout(details)
-        dl.addWidget(QLabel("<b>Karta produktu — sekcje docelowe</b>"))
-        dl.addWidget(
-            QLabel(
-                "Dane podstawowe  •  BOM  •  Dokumentacja  •  Technologia  •  Maszyny  •  "
-                "Narzędzia z WM  •  RAL/malowanie  •  Pakowanie  •  Kontrola jakości  •  Statystyki  •  Historia"
-            )
+        table = compact_table(
+            ["Symbol", "Nazwa", "RAL", "Technologia", "Status", "Karta"],
+            [list(row) + ["Otwórz"] for row in PRODUCTS],
+            [145, 260, 135, 150, 110, 90],
+            290,
         )
-        root.addWidget(details)
+        self.root.addWidget(table, alignment=Qt.AlignLeft)
 
-
-class EmployeesPage(QWidget):
-    def __init__(self, go_home):
-        super().__init__()
-        root = QVBoxLayout(self)
-        root.setContentsMargins(28, 20, 28, 20)
-        root.addWidget(
-            Header(
-                "Pracownicy i uprawnienia",
-                go_home,
-                "Jedna baza pracowników, kompetencji, rang, identyfikatorów i opcjonalnych e-maili.",
-            )
+        detail = QFrame()
+        detail.setObjectName("panel")
+        detail.setMaximumWidth(1180)
+        layout = QVBoxLayout(detail)
+        layout.addWidget(QLabel("<b>Karta produktu — układ docelowy</b>"))
+        chips = QHBoxLayout()
+        for text in (
+            "Dane",
+            "BOM",
+            "Dokumentacja",
+            "Technologia",
+            "Maszyny",
+            "Narzędzia WM",
+            "RAL",
+            "Pakowanie",
+            "Jakość",
+            "Statystyki",
+            "Historia",
+        ):
+            btn = QPushButton(text)
+            btn.clicked.connect(lambda checked=False, t=text: mock_message(self, t))
+            chips.addWidget(btn)
+        chips.addStretch(1)
+        layout.addLayout(chips)
+        hint = QLabel(
+            "Półprodukt może w przyszłości być wykonany niezależnie od ZL i odłożony do bufora "
+            "dla konkretnego produktu."
         )
+        hint.setObjectName("hint")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+        self.root.addWidget(detail, alignment=Qt.AlignLeft)
+        self.root.addStretch(1)
 
-        top = QHBoxLayout()
-        for text in ("Dodaj pracownika", "Rangi i uprawnienia", "RFID / QR / PIN", "Profile kierownictwa"):
-            b = QPushButton(text)
-            b.clicked.connect(lambda checked=False, t=text: mock_message(self, t))
-            top.addWidget(b)
-        top.addStretch(1)
-        root.addLayout(top)
 
-        table = QTableWidget(len(MOCK_EMPLOYEES), 6)
-        table.setHorizontalHeaderLabels(
-            ["Pracownik", "Dział", "Kompetencja", "Ranga", "E-mail", "Status"]
+class EmployeesPage(PageBase):
+    def __init__(self, go_home: Callable):
+        super().__init__(
+            "Pracownicy i uprawnienia",
+            go_home,
+            "Profile, kompetencje, rangi, identyfikatory oraz opcjonalne e-maile kierownictwa.",
         )
-        for r, row in enumerate(MOCK_EMPLOYEES):
-            values = list(row) + ["Aktywny"]
-            for c, value in enumerate(values):
-                table.setItem(r, c, QTableWidgetItem(value))
-        table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        table.verticalHeader().setVisible(False)
-        root.addWidget(table, 1)
+        controls = QHBoxLayout()
+        for text in ("Dodaj pracownika", "Rangi", "Uprawnienia", "RFID / QR / PIN", "Profile kierownictwa"):
+            btn = QPushButton(text)
+            if text == "Dodaj pracownika":
+                btn.setObjectName("primary")
+            btn.clicked.connect(lambda checked=False, t=text: mock_message(self, t))
+            controls.addWidget(btn)
+        controls.addStretch(1)
+        self.root.addLayout(controls)
+
+        table = compact_table(
+            ["Pracownik", "Dział", "Kompetencja", "Ranga", "E-mail", "Status"],
+            [list(row) for row in EMPLOYEES],
+            [190, 170, 150, 140, 260, 100],
+            280,
+        )
+        self.root.addWidget(table, alignment=Qt.AlignLeft)
+
+        lower = QHBoxLayout()
+        lower.addWidget(card("Aktywni", "48", "pracownicy", 210))
+        lower.addWidget(card("Brygadziści", "6", "uprawnienia działowe", 210))
+        lower.addWidget(card("Kierownictwo", "4", "profil + e-mail opcjonalny", 240))
+        lower.addStretch(1)
+        self.root.addLayout(lower)
+        self.root.addStretch(1)
 
 
-class ReportsPage(QWidget):
-    def __init__(self, go_home):
-        super().__init__()
-        root = QVBoxLayout(self)
-        root.setContentsMargins(28, 20, 28, 20)
-        root.addWidget(Header("Raporty / akord / statystyki", go_home))
+class QualityPage(PageBase):
+    def __init__(self, go_home: Callable):
+        super().__init__(
+            "Jakość / braki / poprawki",
+            go_home,
+            "Dobre sztuki idą dalej. Braki, poprawki i cofnięcia etapów zachowują pełną historię.",
+        )
+        controls = QHBoxLayout()
+        for text in ("Nowe zgłoszenie", "Do poprawki", "Wstrzymane", "Złom", "Historia"):
+            btn = QPushButton(text)
+            if text == "Nowe zgłoszenie":
+                btn.setObjectName("primary")
+            btn.clicked.connect(lambda checked=False, t=text: mock_message(self, t))
+            controls.addWidget(btn)
+        controls.addStretch(1)
+        self.root.addLayout(controls)
+
+        table = compact_table(
+            ["Data", "ZL", "Dział", "Produkt", "Ilość", "Status", "Zgłosił"],
+            [list(row) for row in QUALITY_ROWS],
+            [90, 90, 150, 150, 90, 140, 180],
+            240,
+        )
+        self.root.addWidget(table, alignment=Qt.AlignLeft)
+
+        stats = QHBoxLayout()
+        stats.addWidget(card("Dobre sztuki", "2 846", "dzisiaj", 210))
+        stats.addWidget(card("Do poprawki", "17", "otwarte", 210))
+        stats.addWidget(card("Złom", "4", "dzisiaj", 210))
+        stats.addWidget(card("Cofnięcia", "3", "na wcześniejszy etap", 210))
+        stats.addStretch(1)
+        self.root.addLayout(stats)
+        self.root.addStretch(1)
+
+
+class ShippingPage(PageBase):
+    def __init__(self, go_home: Callable):
+        super().__init__(
+            "Wysyłki",
+            go_home,
+            "Plan wysyłek, gotowość, palety i transport. Docelowo dane z arkusza WYSYŁKI.",
+        )
+        controls = QHBoxLayout()
+        for text in ("Dzisiaj", "Ten tydzień", "Niekompletne", "Transport", "Palety"):
+            btn = QPushButton(text)
+            btn.clicked.connect(lambda checked=False, t=text: mock_message(self, t))
+            controls.addWidget(btn)
+        controls.addStretch(1)
+        self.root.addLayout(controls)
+
+        table = compact_table(
+            ["Termin", "ZL", "Klient", "Ilość", "Palety", "Status"],
+            [list(row) for row in SHIPPING_ROWS],
+            [130, 100, 190, 110, 100, 180],
+            280,
+        )
+        self.root.addWidget(table, alignment=Qt.AlignLeft)
+
+        stats = QHBoxLayout()
+        stats.addWidget(card("Gotowe dzisiaj", "1 240", "szt.", 210))
+        stats.addWidget(card("Palety", "18", "zaplanowane", 210))
+        stats.addWidget(card("Niekompletne", "2", "zlecenia", 210))
+        stats.addWidget(card("Najbliższa wysyłka", "08.10", "ZL-763", 230))
+        stats.addStretch(1)
+        self.root.addLayout(stats)
+        self.root.addStretch(1)
+
+
+class ReportsPage(PageBase):
+    def __init__(self, go_home: Callable):
+        super().__init__("Raporty / akord / statystyki", go_home)
 
         filters = QHBoxLayout()
         for label, values in [
@@ -468,151 +820,149 @@ class ReportsPage(QWidget):
         ]:
             box = QComboBox()
             box.addItems(values)
+            box.setFixedWidth(150)
             filters.addWidget(QLabel(label + ":"))
             filters.addWidget(box)
-        filters.addStretch(1)
         export = QPushButton("Eksport Excel")
         export.setObjectName("primary")
         export.clicked.connect(lambda: mock_message(self, "Eksport Excel"))
         filters.addWidget(export)
-        root.addLayout(filters)
+        filters.addStretch(1)
+        self.root.addLayout(filters)
 
-        cards = QHBoxLayout()
-        for title, value, hint in [
+        stats = QHBoxLayout()
+        for title, value, note in [
             ("Dobre sztuki", "2 846", "dzisiaj"),
-            ("Braki / złom", "17", "0,6%"),
+            ("Braki", "17", "0,6%"),
             ("Zgrzewarki", "1 524", "dobre sztuki"),
             ("Malarnia", "1 980", "pomalowane"),
         ]:
-            frame = QFrame()
-            frame.setObjectName("miniStat")
-            fl = QVBoxLayout(frame)
-            v = QLabel(value)
-            v.setObjectName("statValue")
-            fl.addWidget(QLabel(title))
-            fl.addWidget(v)
-            fl.addWidget(QLabel(hint))
-            cards.addWidget(frame)
-        root.addLayout(cards)
+            stats.addWidget(card(title, value, note, 210))
+        stats.addStretch(1)
+        self.root.addLayout(stats)
 
-        table = QTableWidget(4, 7)
-        table.setHorizontalHeaderLabels(
-            ["Pracownik", "Dział", "ZL", "Produkt", "Dobre szt.", "Współczynnik", "Zatwierdził"]
-        )
         rows = [
             ["Jan Kowalski", "Zgrzewarki", "740", "SC600", "212", "1.00", "Brygadzista"],
             ["Piotr Nowak", "Zgrzewarki", "740", "SC600", "201", "0.95", "Brygadzista"],
             ["Adam Testowy", "Linia", "763", "Elimger", "188", "1.00", "Brygadzista"],
             ["Anna Wiśniewska", "Malarnia", "763", "Elimger", "—", "—", "—"],
         ]
-        for r, row in enumerate(rows):
-            for c, value in enumerate(row):
-                table.setItem(r, c, QTableWidgetItem(value))
-        table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        table.verticalHeader().setVisible(False)
-        root.addWidget(table, 1)
+        table = compact_table(
+            ["Pracownik", "Dział", "ZL", "Produkt", "Dobre szt.", "Współczynnik", "Zatwierdził"],
+            rows,
+            [190, 150, 80, 150, 110, 120, 150],
+            250,
+        )
+        self.root.addWidget(table, alignment=Qt.AlignLeft)
 
         note = QLabel(
-            "Stawki pieniężne są ukryte. Domyślnie raport dla płac zawiera wykonanie, pracowników, "
-            "współczynniki, produkt, ZL i zmianę."
+            "Stawki pieniężne są niewidoczne bez odpowiedniego uprawnienia. "
+            "Raport dla płac może zawierać wykonanie, pracowników, współczynniki, ZL, produkt i zmianę."
         )
+        note.setMaximumWidth(980)
+        note.setWordWrap(True)
         note.setObjectName("hint")
-        root.addWidget(note)
+        self.root.addWidget(note)
+        self.root.addStretch(1)
 
 
-class TVPage(QWidget):
-    def __init__(self, go_home):
-        super().__init__()
-        root = QVBoxLayout(self)
-        root.setContentsMargins(28, 20, 28, 20)
-        root.addWidget(Header("Widok TV / hala", go_home, "Tryb tylko do odczytu — ATRAPA"))
+class TVPage(PageBase):
+    def __init__(self, go_home: Callable):
+        super().__init__("Widok TV / hala", go_home, "Tryb tylko do odczytu.")
 
         controls = QHBoxLayout()
-        controls.addWidget(QLabel("Karuzela widoków:"))
+        controls.addWidget(QLabel("Karuzela:"))
         interval = QComboBox()
         interval.addItems(["10 s", "20 s", "30 s", "60 s"])
         interval.setCurrentText("20 s")
+        interval.setFixedWidth(100)
         controls.addWidget(interval)
         for text in ("Start", "Pauza", "Wybierz działy", "Pełny ekran TV"):
-            b = QPushButton(text)
-            b.clicked.connect(lambda checked=False, t=text: mock_message(self, t))
-            controls.addWidget(b)
+            btn = QPushButton(text)
+            btn.clicked.connect(lambda checked=False, t=text: mock_message(self, t))
+            controls.addWidget(btn)
         controls.addStretch(1)
-        root.addLayout(controls)
+        self.root.addLayout(controls)
 
         title = QLabel("PRODUKCJA NA ŻYWO")
         title.setObjectName("tvTitle")
-        title.setAlignment(Qt.AlignCenter)
-        root.addWidget(title)
+        self.root.addWidget(title)
 
         grid = QGridLayout()
-        for idx, (code, product, total, done, status) in enumerate(MOCK_ORDERS):
-            card = QFrame()
-            card.setObjectName("tvCard")
-            cl = QVBoxLayout(card)
-            h = QLabel(f"{code}  •  {product}")
-            h.setObjectName("tvCardTitle")
-            cl.addWidget(h)
+        grid.setHorizontalSpacing(14)
+        grid.setVerticalSpacing(14)
+        for idx, (code, product, total, done, status) in enumerate(DEPARTMENT_ORDER_PROGRESS):
+            frame = QFrame()
+            frame.setObjectName("tvCard")
+            frame.setFixedWidth(560)
+            layout = QVBoxLayout(frame)
+            label = QLabel(f"{code}  •  {product}")
+            label.setObjectName("tvCardTitle")
+            layout.addWidget(label)
             bar = QProgressBar()
             bar.setRange(0, total)
             bar.setValue(done)
             bar.setFormat(f"{done} / {total} szt.     %p%")
-            bar.setMinimumHeight(40)
-            cl.addWidget(bar)
-            cl.addWidget(QLabel(f"Status: {status}"))
-            grid.addWidget(card, idx // 2, idx % 2)
-        root.addLayout(grid, 1)
+            bar.setMinimumHeight(38)
+            layout.addWidget(bar)
+            layout.addWidget(QLabel(f"Status: {status}"))
+            grid.addWidget(frame, idx // 2, idx % 2)
+        grid.setColumnStretch(2, 1)
+        self.root.addLayout(grid)
 
-        bottom = QFrame()
-        bottom.setObjectName("infoPanel")
-        bl = QHBoxLayout(bottom)
-        bl.addWidget(QLabel("Wąskie gardło: ZGRZEWARKI"))
-        bl.addStretch(1)
-        bl.addWidget(QLabel("Malarnia: RAL 9011"))
-        bl.addStretch(1)
-        bl.addWidget(QLabel("Gotowe do wysyłki dziś: 1 240 szt."))
-        root.addWidget(bottom)
+        line = QHBoxLayout()
+        line.addWidget(card("Wąskie gardło", "Zgrzewarki", "", 260))
+        line.addWidget(card("Malarnia", "RAL 9011", "aktualny kolor", 260))
+        line.addWidget(card("Gotowe do wysyłki", "1 240", "szt. dzisiaj", 260))
+        line.addStretch(1)
+        self.root.addLayout(line)
+        self.root.addStretch(1)
 
 
-class SettingsPage(QWidget):
-    def __init__(self, config: ClientConfig, go_home, change_connection):
-        super().__init__()
-        root = QVBoxLayout(self)
-        root.setContentsMargins(28, 20, 28, 20)
-        root.addWidget(Header("Ustawienia", go_home))
+class SettingsPage(PageBase):
+    def __init__(self, config: ClientConfig, go_home: Callable, change_connection: Callable):
+        super().__init__("Ustawienia", go_home, "Konfiguracja stanowiska i przyszłych modułów.")
 
         grid = QGridLayout()
+        grid.setHorizontalSpacing(14)
+        grid.setVerticalSpacing(14)
         sections = [
             ("Połączenie / serwer", f"Serwer: {config.server_ip or 'nie ustawiono'}\nStanowisko: {config.station_name}", "Zmień połączenie"),
-            ("Plan produkcji Excel", "Snapshot kopii roboczej • porównanie zmian • oryginał tylko do odczytu", "Konfiguruj import"),
-            ("Zmiany i kalendarz", "I: 06–14 • II: 14–22 • III: opcjonalna • Sobota: opcjonalna", "Edytuj"),
-            ("Pracownicy i role", "Rangi • kompetencje • RFID/QR/PIN • profile kierownictwa", "Otwórz"),
-            ("Widok TV", "Karuzela działów • interwał • lista ekranów", "Konfiguruj"),
-            ("Tryb pilotażowy", "Excel i A4 nadrzędne • Metalbox obserwuje i zbiera dane", "Ustawienia pilotażu"),
-            ("Produkty", "Import katalogów • aliasy • konflikty • karty produktu", "Konfiguruj"),
-            ("Raporty / akord", "Dobre sztuki • współczynniki • eksport Excel • ukryte stawki", "Konfiguruj"),
+            ("Plan produkcji Excel", "Snapshot kopii • porównanie zmian • oryginał tylko do odczytu", "Konfiguruj"),
+            ("Zmiany i kalendarz", "I 06–14 • II 14–22 • III opcjonalna • sobota opcjonalna", "Edytuj"),
+            ("Pracownicy / role", "Kompetencje • rangi • profile • e-mail • RFID/QR/PIN", "Otwórz"),
+            ("Widok TV", "Karuzela działów • interwał • kolejność ekranów", "Konfiguruj"),
+            ("Pilotaż", "Excel i A4 nadrzędne • Metalbox zbiera dane i porównuje", "Konfiguruj"),
+            ("Produkty", "Katalogi • aliasy • karty • półprodukty • BOM", "Konfiguruj"),
+            ("Raporty / akord", "Dobre sztuki • współczynniki • eksport • ukryte stawki", "Konfiguruj"),
+            ("Jakość", "Braki • poprawki • złom • cofnięcia etapów", "Konfiguruj"),
+            ("Wysyłki", "Palety • gotowość • transport • częściowa wysyłka", "Konfiguruj"),
+            ("Motyw", "Czerń / biel / grafit + zielone akcenty", "Motywy"),
+            ("Diagnostyka", "Wersja • połączenie • logi • stan klienta", "Otwórz"),
         ]
         for idx, (title, desc, action) in enumerate(sections):
             frame = QFrame()
             frame.setObjectName("settingsCard")
-            fl = QVBoxLayout(frame)
-            lab = QLabel(title)
-            lab.setObjectName("sectionTitle")
-            fl.addWidget(lab)
-            d = QLabel(desc)
-            d.setWordWrap(True)
-            d.setObjectName("hint")
-            fl.addWidget(d)
-            fl.addStretch(1)
+            frame.setFixedSize(345, 150)
+            layout = QVBoxLayout(frame)
+            label = QLabel(title)
+            label.setObjectName("sectionTitle")
+            layout.addWidget(label)
+            description = QLabel(desc)
+            description.setWordWrap(True)
+            description.setObjectName("hint")
+            layout.addWidget(description)
+            layout.addStretch(1)
             btn = QPushButton(action)
             if idx == 0:
                 btn.clicked.connect(change_connection)
             else:
                 btn.clicked.connect(lambda checked=False, t=title: mock_message(self, t))
-            fl.addWidget(btn)
-            grid.addWidget(frame, idx // 2, idx % 2)
-
-        root.addLayout(grid, 1)
+            layout.addWidget(btn)
+            grid.addWidget(frame, idx // 4, idx % 4)
+        grid.setColumnStretch(4, 1)
+        self.root.addLayout(grid)
+        self.root.addStretch(1)
 
 
 class MainWindow(QMainWindow):
@@ -625,6 +975,7 @@ class MainWindow(QMainWindow):
         self.stack = QStackedWidget()
         self.setCentralWidget(self.stack)
 
+        self.order_detail_page = OrderDetailPage(self.go_home)
         self.home = self._build_home()
         self.stack.addWidget(self.home)
 
@@ -634,17 +985,24 @@ class MainWindow(QMainWindow):
             self.department_pages[department] = page
             self.stack.addWidget(page)
 
+        self.orders_page = OrdersPage(self.go_home, self.open_order)
         self.planner_page = PlannerPage(self.go_home)
         self.products_page = ProductsPage(self.go_home)
         self.employees_page = EmployeesPage(self.go_home)
+        self.quality_page = QualityPage(self.go_home)
+        self.shipping_page = ShippingPage(self.go_home)
         self.reports_page = ReportsPage(self.go_home)
         self.tv_page = TVPage(self.go_home)
-        self.settings_page = SettingsPage(self.config, self.go_home, self._change_connection_from_page)
+        self.settings_page = SettingsPage(self.config, self.go_home, self._change_connection)
 
         for page in (
+            self.orders_page,
+            self.order_detail_page,
             self.planner_page,
             self.products_page,
             self.employees_page,
+            self.quality_page,
+            self.shipping_page,
             self.reports_page,
             self.tv_page,
             self.settings_page,
@@ -657,323 +1015,364 @@ class MainWindow(QMainWindow):
         QApplication.instance().installEventFilter(self)
 
     def eventFilter(self, obj, event):
-        if event.type() in {
-            QEvent.MouseButtonPress,
-            QEvent.KeyPress,
-            QEvent.TouchBegin,
-            QEvent.Wheel,
-        }:
+        if event.type() in {QEvent.MouseButtonPress, QEvent.KeyPress, QEvent.TouchBegin, QEvent.Wheel}:
             self._restart_inactivity_timer()
         return super().eventFilter(obj, event)
 
-    def _restart_inactivity_timer(self):
+    def _restart_inactivity_timer(self) -> None:
         if self.stack.currentWidget() is self.home:
             self.inactivity_timer.stop()
-            return
-        self.inactivity_timer.start(self.config.inactivity_seconds * 1000)
+        else:
+            self.inactivity_timer.start(self.config.inactivity_seconds * 1000)
 
-    def go_home(self):
+    def go_home(self) -> None:
         self.stack.setCurrentWidget(self.home)
         self.inactivity_timer.stop()
 
-    def open_page(self, page: QWidget):
+    def open_page(self, page: QWidget) -> None:
         self.stack.setCurrentWidget(page)
         self._restart_inactivity_timer()
 
-    def open_department(self, department: str):
+    def open_department(self, department: str) -> None:
         self.open_page(self.department_pages[department])
+
+    def open_order(self, code: str) -> None:
+        self.order_detail_page.set_order(code)
+        self.open_page(self.order_detail_page)
 
     def _build_home(self) -> QWidget:
         page = QWidget()
-        root = QVBoxLayout(page)
-        root.setContentsMargins(28, 18, 28, 12)
-        root.setSpacing(12)
-
-        brand = QLabel("METALBOX")
-        brand.setObjectName("brand")
-        subtitle = QLabel(f"Pulpit produkcyjny  •  prototyp {APP_VERSION}")
-        subtitle.setObjectName("subtitle")
-
-        mode = "TRYB TESTOWY" if self.config.test_mode else "STANOWISKO"
-        connection = QLabel(f"●  {mode}  •  {self.config.server_ip or 'SERWER'}  •  {self.config.station_name}")
-        connection.setObjectName("connectionWarning" if self.config.test_mode else "connection")
+        outer = QVBoxLayout(page)
+        outer.setContentsMargins(24, 16, 24, 12)
+        outer.setSpacing(11)
 
         top = QHBoxLayout()
-        title_col = QVBoxLayout()
-        title_col.addWidget(brand)
-        title_col.addWidget(subtitle)
-        top.addLayout(title_col)
+        titles = QVBoxLayout()
+        brand = QLabel("METALBOX")
+        brand.setObjectName("brand")
+        subtitle = QLabel(f"Pulpit produkcyjny • prototyp {APP_VERSION}")
+        subtitle.setObjectName("subtitle")
+        titles.addWidget(brand)
+        titles.addWidget(subtitle)
+
+        mode = "TRYB TESTOWY" if self.config.test_mode else "STANOWISKO"
+        connection = QLabel(f"● {mode} • {self.config.server_ip or 'SERWER'} • {self.config.station_name}")
+        connection.setObjectName("connectionWarning" if self.config.test_mode else "connection")
+
+        top.addLayout(titles)
         top.addStretch(1)
         top.addWidget(connection)
-        root.addLayout(top)
+        outer.addLayout(top)
 
         management = QHBoxLayout()
-        management_items = [
+        management.setSpacing(8)
+        items = [
+            ("ZLECENIA", self.orders_page if hasattr(self, "orders_page") else None),
+        ]
+        # Pages are created after home, therefore callbacks resolve attributes at click time.
+        callbacks = [
+            ("ZLECENIA", lambda: self.open_page(self.orders_page)),
             ("PLANISTA", lambda: self.open_page(self.planner_page)),
             ("PRODUKTY", lambda: self.open_page(self.products_page)),
             ("PRACOWNICY", lambda: self.open_page(self.employees_page)),
+            ("JAKOŚĆ", lambda: self.open_page(self.quality_page)),
+            ("WYSYŁKI", lambda: self.open_page(self.shipping_page)),
             ("RAPORTY", lambda: self.open_page(self.reports_page)),
             ("TV", lambda: self.open_page(self.tv_page)),
             ("USTAWIENIA", lambda: self.open_page(self.settings_page)),
         ]
-        for text, callback in management_items:
-            button = QPushButton(text)
-            button.setObjectName("managementButton")
-            button.clicked.connect(callback)
-            management.addWidget(button)
-        root.addLayout(management)
+        for text, callback in callbacks:
+            btn = QPushButton(text)
+            btn.setObjectName("managementButton")
+            btn.setFixedHeight(38)
+            btn.clicked.connect(callback)
+            management.addWidget(btn)
+        management.addStretch(1)
+        outer.addLayout(management)
 
         grid_wrap = QFrame()
         grid_wrap.setObjectName("gridWrap")
+        grid_wrap.setMaximumWidth(1450)
         grid = QGridLayout(grid_wrap)
         grid.setContentsMargins(14, 14, 14, 14)
-        grid.setHorizontalSpacing(12)
-        grid.setVerticalSpacing(12)
+        grid.setHorizontalSpacing(11)
+        grid.setVerticalSpacing(11)
 
         for idx, department in enumerate(DEPARTMENTS):
-            button = QPushButton(department)
-            button.setObjectName("departmentButton")
-            button.setMinimumHeight(88)
-            button.clicked.connect(lambda checked=False, d=department: self.open_department(d))
-            grid.addWidget(button, idx // 5, idx % 5)
+            btn = QPushButton(department)
+            btn.setObjectName("departmentButton")
+            btn.setFixedSize(270, 76)
+            btn.clicked.connect(lambda checked=False, d=department: self.open_department(d))
+            grid.addWidget(btn, idx // 5, idx % 5)
+        grid.setColumnStretch(5, 1)
+        outer.addWidget(grid_wrap, alignment=Qt.AlignLeft)
 
-        root.addWidget(grid_wrap)
+        line = QHBoxLayout()
+        title = QLabel("Produkcja na bieżąco — dane demonstracyjne")
+        title.setObjectName("sectionTitle")
+        line.addWidget(title)
+        line.addStretch(1)
+        alerts = QPushButton("2 ALERTY")
+        alerts.setObjectName("dangerGhost")
+        alerts.clicked.connect(lambda: mock_message(self, "Alerty"))
+        line.addWidget(alerts)
+        outer.addLayout(line)
 
-        live_title = QLabel("Produkcja na bieżąco — dane demonstracyjne")
-        live_title.setObjectName("sectionTitle")
-        root.addWidget(live_title)
+        live_scroll = QScrollArea()
+        live_scroll.setWidgetResizable(True)
+        live_scroll.setFrameShape(QFrame.NoFrame)
+        live_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        live_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        live_scroll.setFixedHeight(142)
 
-        live = QHBoxLayout()
-        for idx, (code, product, total, done, status) in enumerate(MOCK_ORDERS):
+        live_body = QWidget()
+        live = QHBoxLayout(live_body)
+        live.setContentsMargins(0, 0, 0, 0)
+        live.setSpacing(10)
+        for idx, (code, product, total, done, status) in enumerate(DEPARTMENT_ORDER_PROGRESS):
             department = ["Zgrzewarki", "Malarnia", "Pakownia", "Giętarki"][idx]
             live.addWidget(self._progress_card(code, department, product, total, done, status))
-        root.addLayout(live)
+        live.addStretch(1)
+        live_scroll.setWidget(live_body)
+        outer.addWidget(live_scroll)
 
         footer = QLabel("Stworzone przez Edwina Karolczyka dla Metalbox sp. z o.o.")
         footer.setObjectName("footer")
         footer.setAlignment(Qt.AlignCenter)
-        root.addWidget(footer)
-
+        outer.addWidget(footer)
         return page
 
-    def _progress_card(self, code, department, product, total, done, status) -> QFrame:
-        card = QFrame()
-        card.setObjectName("progressCard")
+    def _progress_card(self, code: str, department: str, product: str, total: int, done: int, status: str) -> QFrame:
+        frame = QFrame()
+        frame.setObjectName("progressCard")
+        frame.setFixedWidth(315)
 
-        head = QLabel(f"{code}  •  {department}")
+        layout = QVBoxLayout(frame)
+        layout.setContentsMargins(12, 9, 12, 9)
+        head = QLabel(f"{code} • {department}")
         head.setObjectName("progressHead")
         product_label = QLabel(product)
         product_label.setObjectName("progressProduct")
         product_label.setWordWrap(True)
-
         bar = QProgressBar()
         bar.setRange(0, total)
         bar.setValue(done)
-        bar.setFormat(f"{done} / {total} szt.  •  %p%")
-
+        bar.setFormat(f"{done} / {total} szt. • %p%")
         status_label = QLabel(status)
         status_label.setObjectName("hint")
 
-        layout = QVBoxLayout(card)
         layout.addWidget(head)
         layout.addWidget(product_label)
         layout.addStretch(1)
         layout.addWidget(bar)
         layout.addWidget(status_label)
-        return card
+        return frame
 
-    def _change_connection_from_page(self):
-        self._change_connection()
-
-    def _change_connection(self):
+    def _change_connection(self) -> None:
         dialog = ConnectionDialog(self.config, self)
         if dialog.exec() != QDialog.Accepted:
             return
-
         self.config.server_ip = dialog.ip_edit.text().strip()
         self.config.station_name = dialog.station_edit.text().strip() or "Stanowisko produkcyjne"
         self.config.inactivity_seconds = dialog.timeout_spin.value()
         self.config.test_mode = dialog.use_test_mode
         self.config.configured = True
         self.config.save()
-
         QMessageBox.information(
             self,
             "Zapisano",
-            "Konfiguracja została zapisana. Uruchom ponownie Metalbox, aby odświeżyć nagłówek i tryb stanowiska.",
+            "Konfiguracja została zapisana. Uruchom ponownie Metalbox, aby odświeżyć nagłówek.",
         )
 
 
 STYLESHEET = """
 QWidget {
-    background: #10151c;
-    color: #e9eef5;
+    background: #0b0d0f;
+    color: #f3f5f3;
     font-family: "Segoe UI";
     font-size: 13px;
 }
 QMainWindow, QDialog {
-    background: #10151c;
+    background: #0b0d0f;
 }
 QLabel#brand {
-    font-size: 30px;
-    font-weight: 800;
+    font-size: 29px;
+    font-weight: 900;
     letter-spacing: 2px;
 }
-QLabel#subtitle {
-    color: #8d9aab;
-    font-size: 14px;
+QLabel#subtitle, QLabel#hint {
+    color: #929892;
 }
 QLabel#connection {
-    color: #81d49b;
-    font-weight: 700;
+    color: #45d477;
+    font-weight: 800;
 }
 QLabel#connectionWarning {
-    color: #f7c66b;
+    color: #d9b560;
     font-weight: 800;
 }
 QLabel#pageTitle {
-    font-size: 27px;
+    font-size: 26px;
+    font-weight: 900;
+}
+QLabel#detailTitle {
+    font-size: 23px;
+    font-weight: 900;
+}
+QLabel#sectionTitle, QLabel#cardTitle {
+    font-size: 15px;
     font-weight: 800;
 }
-QLabel#sectionTitle {
-    font-size: 16px;
-    font-weight: 700;
+QLabel#cardValue {
+    font-size: 24px;
+    font-weight: 900;
+    color: #ffffff;
 }
 QLabel#footer {
-    color: #6f7b8c;
+    color: #666c67;
     font-size: 12px;
-}
-QLabel#hint {
-    color: #8794a6;
-    font-size: 12px;
-}
-QLabel#statValue {
-    font-size: 24px;
-    font-weight: 800;
 }
 QLabel#tvTitle {
-    font-size: 34px;
+    font-size: 32px;
     font-weight: 900;
     letter-spacing: 2px;
 }
 QLabel#tvCardTitle {
-    font-size: 19px;
+    font-size: 18px;
     font-weight: 800;
 }
 QFrame#gridWrap,
 QFrame#orderCard,
 QFrame#progressCard,
-QFrame#miniStat,
+QFrame#card,
+QFrame#panel,
 QFrame#settingsCard,
-QFrame#infoPanel,
 QFrame#tvCard {
-    background: #171e27;
-    border: 1px solid #283342;
-    border-radius: 12px;
+    background: #141719;
+    border: 1px solid #292e2b;
+    border-radius: 10px;
 }
 QPushButton {
-    background: #202a36;
-    border: 1px solid #334255;
-    border-radius: 9px;
-    padding: 9px 14px;
-    font-weight: 600;
+    background: #171b1d;
+    border: 1px solid #343a36;
+    border-radius: 7px;
+    padding: 8px 12px;
+    font-weight: 650;
 }
 QPushButton:hover {
-    background: #2a3746;
-    border-color: #59708c;
+    background: #202522;
+    border-color: #45d477;
 }
 QPushButton#primary {
-    background: #2e6ae6;
-    border-color: #2e6ae6;
+    background: #2aa85a;
+    border-color: #43cf73;
+    color: #ffffff;
 }
-QPushButton#warning {
-    background: #49391f;
-    border-color: #7d6232;
+QPushButton#primary:hover {
+    background: #34bc66;
+}
+QPushButton#ghostGreen {
+    background: #121815;
+    border-color: #2d7547;
+    color: #65dc8d;
+}
+QPushButton#dangerGhost {
+    background: #181313;
+    border-color: #693535;
+    color: #e77d7d;
 }
 QPushButton#secondary {
-    background: #171e27;
+    background: #101315;
 }
 QPushButton#departmentButton {
-    background: #1a2430;
-    font-size: 16px;
-    font-weight: 800;
+    background: #15191b;
+    font-size: 15px;
+    font-weight: 850;
     text-align: left;
-    padding: 16px;
+    padding: 14px;
 }
 QPushButton#departmentButton:hover {
-    background: #243244;
+    background: #1a211d;
+    border-color: #45d477;
 }
 QPushButton#managementButton {
-    background: #141c25;
-    min-height: 38px;
-    font-size: 12px;
-    font-weight: 800;
+    background: #101315;
+    font-size: 11px;
+    font-weight: 850;
+    padding-left: 14px;
+    padding-right: 14px;
 }
 QLabel#orderCode {
-    min-width: 82px;
+    min-width: 78px;
     font-size: 18px;
-    font-weight: 800;
+    font-weight: 900;
 }
 QLabel#orderDetails {
-    color: #d0d8e3;
-    font-weight: 600;
+    color: #d6dad7;
+    font-weight: 650;
 }
 QLabel#statusPill {
-    background: #203f32;
-    color: #8de0aa;
-    border-radius: 9px;
-    padding: 6px 10px;
-    font-weight: 800;
+    background: #15331f;
+    color: #65dc8d;
+    border: 1px solid #2d7547;
+    border-radius: 8px;
+    padding: 5px 9px;
+    font-weight: 850;
 }
 QLabel#statusPillPaused {
-    background: #49391f;
-    color: #f3c76d;
-    border-radius: 9px;
-    padding: 6px 10px;
-    font-weight: 800;
+    background: #322716;
+    color: #e2bd68;
+    border: 1px solid #6b5529;
+    border-radius: 8px;
+    padding: 5px 9px;
+    font-weight: 850;
 }
 QLabel#progressHead {
-    font-weight: 800;
+    font-weight: 850;
 }
 QLabel#progressProduct {
-    color: #aeb9c7;
+    color: #b6bcb7;
 }
 QProgressBar {
-    border: 1px solid #334255;
-    border-radius: 7px;
+    border: 1px solid #343a36;
+    border-radius: 6px;
     text-align: center;
     min-height: 22px;
-    background: #0d1218;
-}
-QProgressBar#orderProgress {
-    font-weight: 800;
-    font-size: 13px;
+    background: #0a0c0d;
+    font-weight: 750;
 }
 QProgressBar::chunk {
-    background: #3c7af0;
-    border-radius: 6px;
+    background: #32b963;
+    border-radius: 5px;
 }
 QLineEdit, QSpinBox, QComboBox {
-    background: #171e27;
-    border: 1px solid #334255;
-    border-radius: 7px;
-    padding: 8px;
+    background: #121517;
+    border: 1px solid #343a36;
+    border-radius: 6px;
+    padding: 7px;
+}
+QLineEdit:focus, QSpinBox:focus, QComboBox:focus {
+    border-color: #45d477;
 }
 QTableWidget {
-    background: #111820;
-    alternate-background-color: #151e28;
-    border: 1px solid #283342;
-    gridline-color: #283342;
-    selection-background-color: #264a78;
+    background: #101315;
+    alternate-background-color: #15191b;
+    border: 1px solid #292e2b;
+    gridline-color: #252a27;
+    selection-background-color: #1d5b36;
+    selection-color: #ffffff;
 }
 QHeaderView::section {
-    background: #1a2430;
-    color: #e9eef5;
+    background: #171b1d;
+    color: #f3f5f3;
     border: none;
-    border-right: 1px solid #283342;
-    border-bottom: 1px solid #283342;
-    padding: 8px;
-    font-weight: 700;
+    border-right: 1px solid #292e2b;
+    border-bottom: 1px solid #292e2b;
+    padding: 7px;
+    font-weight: 800;
+}
+QScrollArea {
+    border: none;
 }
 """
 
@@ -984,7 +1383,6 @@ def main() -> int:
     app.setStyleSheet(STYLESHEET)
 
     config = ClientConfig.load()
-
     if not config.configured:
         dialog = ConnectionDialog(config)
         if dialog.exec() != QDialog.Accepted:
