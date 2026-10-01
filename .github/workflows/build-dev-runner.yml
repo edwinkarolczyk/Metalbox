@@ -43,9 +43,9 @@ jobs:
       - name: Smoke test packaged Qt runtime
         shell: pwsh
         run: |
-          & "dist\MetalboxDev.exe" --self-test-qt
-          if ($LASTEXITCODE -ne 0) {
-            throw "MetalboxDev Qt self-test failed with exit code $LASTEXITCODE"
+          $proc = Start-Process -FilePath "dist\MetalboxDev.exe" -ArgumentList "--self-test-qt" -Wait -PassThru
+          if ($proc.ExitCode -ne 0) {
+            throw "MetalboxDev Qt self-test failed with exit code $($proc.ExitCode)"
           }
 
       - name: Create Dev Runner manifest
