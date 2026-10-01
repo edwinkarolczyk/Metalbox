@@ -1,19 +1,13 @@
-name: Build and publish Metalbox Development
+name: Build packaged Metalbox Development
 
 on:
-  push:
-    branches: [ main ]
   workflow_dispatch:
 
 permissions:
   contents: write
 
-concurrency:
-  group: metalbox-development-release
-  cancel-in-progress: true
-
 jobs:
-  build-and-release:
+  build-packaged-development:
     runs-on: windows-latest
 
     steps:
@@ -57,7 +51,7 @@ jobs:
           $notes = git log -1 --pretty=%s
           $manifest = [ordered]@{
             schema = 1
-            channel = "development"
+            channel = "development-packaged"
             version = $env:APP_VERSION
             build = [int]$env:GITHUB_RUN_NUMBER
             commit = $env:GITHUB_SHA
@@ -70,38 +64,12 @@ jobs:
             notes = $notes
           }
           $manifest | ConvertTo-Json -Depth 4 | Set-Content -Encoding UTF8 update.json
-          @"
-          Metalbox Development
-          Version: $env:APP_VERSION
-          Build: $env:GITHUB_RUN_NUMBER
-          Commit: $env:GITHUB_SHA
-
-          $notes
-          "@ | Set-Content -Encoding UTF8 release-notes.txt
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Metalbox-development-${{ github.run_number }}
+          name: Metalbox-packaged-development-${{ github.run_number }}
           path: |
             dist\Metalbox.exe
             dist\MetalboxLauncher.exe
             update.json
-
-      - name: Publish Development release
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release view development *> $null
-          if ($LASTEXITCODE -eq 0) {
-            gh release delete development --yes --cleanup-tag
-          }
-          gh release create development `
-            --target "$env:GITHUB_SHA" `
-            --prerelease `
-            --title "Metalbox Development" `
-            --notes-file release-notes.txt `
-            update.json `
-            "dist\Metalbox.exe" `
-            "dist\MetalboxLauncher.exe"
