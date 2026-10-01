@@ -479,6 +479,62 @@ class MetalboxStore:
         result["items"] = [dict(row) for row in items]
         return result
 
+    def list_department_queue(self, department: str) -> list[dict]:
+        with self._connect() as db:
+            rows = db.execute(
+                """
+                SELECT
+                    o.code,
+                    o.client,
+                    GROUP_CONCAT(DISTINCT oi.symbol || ' ' || oi.name) AS products,
+                    SUM(op.planned_qty) AS planned_qty,
+                    SUM(op.good_qty) AS good_qty,
+                    SUM(op.reject_qty) AS reject_qty,
+                    SUM(op.rework_qty) AS rework_qty,
+                    CASE
+                        WHEN SUM(CASE WHEN op.status = 'WSTRZYMANE' THEN 1 ELSE 0 END) > 0
+                            THEN 'WSTRZYMANE'
+                        WHEN SUM(op.planned_qty) > 0
+                             AND SUM(op.good_qty) >= SUM(op.planned_qty)
+                            THEN 'GOTOWE'
+                        WHEN SUM(op.good_qty) > 0
+                            THEN 'AKTYWNE'
+                        ELSE 'OCZEKUJE'
+                    END AS status,
+                    o.deadline,
+                    o.priority
+                FROM operation_progress op
+                JOIN order_items oi ON oi.id = op.order_item_id
+                JOIN orders o ON o.id = oi.order_id
+                WHERE op.department = ?
+                  AND o.status NOT IN ('ANULOWANE')
+                GROUP BY o.id, o.code, o.client, o.deadline, o.priority
+                ORDER BY
+                    CASE
+                        WHEN o.priority = 'WYSOKI' THEN 0
+                        ELSE 1
+                    END,
+                    o.deadline ASC,
+                    o.code ASC
+                """,
+                (department,),
+            ).fetchall()
+
+        return [dict(row) for row in rows]
+
+    def department_summary(self, department: str) -> dict:
+        queue = self.list_department_queue(department)
+        return {
+            "active": sum(1 for row in queue if row["status"] == "AKTYWNE"),
+            "waiting": sum(1 for row in queue if row["status"] == "OCZEKUJE"),
+            "paused": sum(1 for row in queue if row["status"] == "WSTRZYMANE"),
+            "done": sum(1 for row in queue if row["status"] == "GOTOWE"),
+            "remaining_qty": sum(
+                max(0, int(row["planned_qty"]) - int(row["good_qty"]))
+                for row in queue
+            ),
+        }
+
     def add_audit_event(
         self,
         *,
