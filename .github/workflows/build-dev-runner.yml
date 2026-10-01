@@ -1,0 +1,63 @@
+name: Build Metalbox Dev Runner
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - dev_launcher.py
+      - requirements.txt
+      - .github/workflows/build-dev-runner.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: metalbox-dev-runner
+  cancel-in-progress: true
+
+jobs:
+  build-dev-runner:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Build Dev Runner
+        shell: pwsh
+        run: |
+          python -m PyInstaller --noconfirm --clean --windowed --onefile --name MetalboxDev --collect-all PySide6 dev_launcher.py
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MetalboxDev
+          path: dist\MetalboxDev.exe
+
+      - name: Publish Dev Runner release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view dev-runner *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release delete dev-runner --yes --cleanup-tag
+          }
+          gh release create dev-runner `
+            --target "$env:GITHUB_SHA" `
+            --prerelease `
+            --title "Metalbox Dev Runner" `
+            --notes "Stały runner Development. Przy starcie pobiera aktualny kod z gałęzi main i uruchamia go bez pełnego rebuildu EXE." `
+            "dist\MetalboxDev.exe"
