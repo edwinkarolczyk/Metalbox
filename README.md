@@ -4,13 +4,13 @@ Wyspecjalizowany system do zarządzania produkcją Metalbox sp. z o.o.
 
 ## Aktualny stan
 
-**0.0.3 — pełna wydmuszka UI**
+**0.0.5 — maksymalna wydmuszka UI**
 
-Ta wersja służy do testowania kompletnego układu programu, ergonomii hali i panelu kierowniczego. Nadal nie zawiera właściwej logiki produkcyjnej ani centralnego serwera.
+Ta wersja służy do pełnego przeklikania układu programu przed podłączeniem właściwej logiki produkcyjnej, serwera i danych.
 
-### Ekrany przygotowane w wydmuszce
+### Ekrany i obszary przygotowane
 
-- pulpit główny z działami,
+- pulpit główny z działami i bieżącymi postępami,
 - Gilotyna,
 - Laser,
 - Giętarki,
@@ -22,44 +22,56 @@ Ta wersja służy do testowania kompletnego układu programu, ergonomii hali i p
 - Warsztat mechaniczny / przygotowanie produkcji,
 - Magazyn,
 - Zlecenia,
-- szczegóły zlecenia z postępem po działach,
+- szczegóły ZL z postępem po etapach,
 - Planista,
-- Produkty / karta produktu,
+- Produkty,
+- szczegółowa karta produktu,
+- półprodukty / bufory,
 - Pracownicy / profile / role / e-maile,
+- profil / logowanie użytkownika,
 - Jakość / braki / poprawki,
 - Wysyłki,
 - Raporty / akord / statystyki,
+- centrum alertów,
 - Widok TV,
-- Ustawienia.
+- Ustawienia,
+- Diagnostyka.
 
-### Kierunek UI
+### Dodatkowe elementy makiety
 
-- czarne / grafitowe tło,
+- pełnoszerokie paski postępu zleceń,
+- specjalne informacje dla Laser / Zgrzewarki / Malarnia / Pakownia / Magazyn,
+- przyszły model półproduktów produkowanych bez konkretnego ZL,
+- profile kierownictwa z opcjonalnym e-mailem,
+- przygotowanie pod PIN / QR / RFID,
+- alarmy i problemy wymagające uwagi,
+- karta produktu z trasą technologiczną,
+- dane demonstracyjne dla wysyłek, jakości i akordu.
+
+### Responsywność
+
+Interfejs skaluje się proporcjonalnie do rozdzielczości ekranu. Bazą projektu jest 1536×864, a skala jest ograniczona dla małych i bardzo dużych monitorów.
+
+Tabele nie są sztucznie rozciągane na całą szerokość. Karty, czcionki, marginesy, przyciski i paski postępu skalują się proporcjonalnie.
+
+### Styl
+
+- czerń / grafit,
 - biały tekst,
 - zielone akcenty,
-- żółty tylko dla ostrzeżeń,
-- czerwony tylko dla problemów,
-- ograniczone szerokości kart i tabel,
-- brak sztucznego rozciągania kolumn do szerokości całego ekranu,
-- przewijanie tam, gdzie zawartość faktycznie tego wymaga,
-- pełnoszerokie paski postępu w kaflach zleceń.
+- żółty dla ostrzeżeń,
+- czerwony dla problemów.
 
 ### Tryb testowy
 
 Przy pierwszym uruchomieniu można wybrać **Tryb testowy** bez prawdziwego serwera.
 
-### Portable / EXE
+### EXE
 
-Na Windows:
-
-```bat
-build_portable.bat
-```
-
-GitHub Actions buduje także pojedynczy plik:
+GitHub Actions buduje pojedynczy plik:
 
 ```text
-Metalbox-0.0.3.exe
+Metalbox-0.0.5.exe
 ```
 
 Szczegółowy plan rozwoju znajduje się w [ROADMAP.md](ROADMAP.md).
