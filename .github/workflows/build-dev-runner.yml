@@ -40,11 +40,29 @@ jobs:
         run: |
           python -m PyInstaller --noconfirm --clean --windowed --onefile --name MetalboxDev --collect-all PySide6 dev_launcher.py
 
+      - name: Create Dev Runner manifest
+        shell: pwsh
+        run: |
+          $runnerVersion = python -c "import dev_launcher; print(dev_launcher.DEV_RUNNER_VERSION)"
+          $sha = (Get-FileHash "dist\MetalboxDev.exe" -Algorithm SHA256).Hash.ToLower()
+          $size = (Get-Item "dist\MetalboxDev.exe").Length
+          $manifest = [ordered]@{
+            schema = 1
+            version = $runnerVersion
+            sha256 = $sha
+            size = $size
+            commit = $env:GITHUB_SHA
+            published_at = (Get-Date).ToUniversalTime().ToString("o")
+          }
+          $manifest | ConvertTo-Json -Depth 3 | Set-Content -Encoding UTF8 dev-runner.json
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: MetalboxDev
-          path: dist\MetalboxDev.exe
+          path: |
+            dist\MetalboxDev.exe
+            dev-runner.json
 
       - name: Publish Dev Runner release
         shell: pwsh
@@ -59,5 +77,6 @@ jobs:
             --target "$env:GITHUB_SHA" `
             --prerelease `
             --title "Metalbox Dev Runner" `
-            --notes "Stały runner Development. Przy starcie pobiera aktualny kod z gałęzi main i uruchamia go bez pełnego rebuildu EXE." `
-            "dist\MetalboxDev.exe"
+            --notes "Stały runner Development. Przy starcie aktualizuje siebie, pobiera aktualny kod z gałęzi main i uruchamia go bez pełnego rebuildu EXE." `
+            "dist\MetalboxDev.exe" `
+            dev-runner.json
