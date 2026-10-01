@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import queue
 import shutil
 import subprocess
 import sys
@@ -336,6 +337,8 @@ class LauncherApp:
         self.release = None
         self.manifest = None
 
+        self.ui_queue: queue.Queue = queue.Queue()
+
         self.root = tk.Tk()
         self.root.title(f"Metalbox Launcher {LAUNCHER_VERSION}")
         self.root.geometry("610x410")
@@ -353,7 +356,21 @@ class LauncherApp:
         self._build_ui()
         self._refresh_local_status()
 
+        self.root.after(100, self._drain_ui_queue)
         self.root.after(250, self.startup_flow)
+
+    def _ui(self, callback) -> None:
+        self.ui_queue.put(callback)
+
+    def _drain_ui_queue(self) -> None:
+        try:
+            while True:
+                callback = self.ui_queue.get_nowait()
+                callback()
+        except queue.Empty:
+            pass
+        if self.root.winfo_exists():
+            self.root.after(100, self._drain_ui_queue)
 
     def _build_ui(self) -> None:
         style = ttk.Style()
@@ -506,15 +523,15 @@ class LauncherApp:
     def check_updates(self, user_initiated: bool) -> None:
         self.status_var.set("Sprawdzanie aktualizacji…")
         self.progress_var.set(0)
+        channel = self.channel_var.get()
         threading.Thread(
             target=self._check_worker,
-            args=(user_initiated,),
+            args=(user_initiated, channel),
             daemon=True,
         ).start()
 
-    def _check_worker(self, user_initiated: bool) -> None:
+    def _check_worker(self, user_initiated: bool, channel: str) -> None:
         try:
-            channel = self.channel_var.get()
             release = get_release(channel)
             manifest = get_manifest(release)
             self.release = release
@@ -523,22 +540,23 @@ class LauncherApp:
             version = str(manifest.get("version", "?"))
             build = int(manifest.get("build", 0) or 0)
             remote_label = version + (f" (build {build})" if build else "")
-            self.root.after(0, lambda: self.remote_var.set(remote_label))
+            self._ui(lambda: self.remote_var.set(remote_label))
 
             local = load_state()
             newer = is_remote_newer(manifest, local, channel)
             if newer:
-                self.root.after(0, lambda: self._handle_update_available(user_initiated))
+                self._ui(lambda: self._handle_update_available(user_initiated))
             else:
-                self.root.after(0, lambda: self._handle_up_to_date(user_initiated))
+                self._ui(lambda: self._handle_up_to_date(user_initiated))
         except urllib.error.HTTPError as exc:
             if exc.code == 404 and self.channel_var.get() == "stable":
                 message = "Brak opublikowanej wersji Stable."
             else:
                 message = f"GitHub HTTP {exc.code}"
-            self.root.after(0, lambda: self._handle_check_error(message, user_initiated))
+            self._ui(lambda: self._handle_check_error(message, user_initiated))
         except Exception as exc:
-            self.root.after(0, lambda: self._handle_check_error(str(exc), user_initiated))
+            error_text = str(exc)
+            self._ui(lambda e=error_text: self._handle_check_error(e, user_initiated))
 
     def _handle_update_available(self, user_initiated: bool) -> None:
         assert self.manifest is not None
@@ -596,7 +614,7 @@ class LauncherApp:
 
         def progress(done: int, total: int) -> None:
             percent = min(100.0, (done / total) * 100.0)
-            self.root.after(0, lambda p=percent: self.progress_var.set(p))
+            self._ui(lambda p=percent: self.progress_var.set(p))
 
         def worker() -> None:
             try:
@@ -606,14 +624,14 @@ class LauncherApp:
                     self.config,
                     progress=progress,
                 )
-                self.root.after(0, lambda: self._after_install(state, auto_launch))
+                self._ui(lambda s=state: self._after_install(s, auto_launch))
             except Exception as exc:
                 log(f"Błąd instalacji aktualizacji: {exc}")
-                self.root.after(
-                    0,
-                    lambda: messagebox.showerror("Aktualizacja Metalbox", str(exc)),
+                error_text = str(exc)
+                self._ui(
+                    lambda e=error_text: messagebox.showerror("Aktualizacja Metalbox", e)
                 )
-                self.root.after(0, lambda: self.status_var.set("Aktualizacja nieudana."))
+                self._ui(lambda: self.status_var.set("Aktualizacja nieudana."))
 
         threading.Thread(target=worker, daemon=True).start()
 
