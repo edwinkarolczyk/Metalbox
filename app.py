@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import json
 import os
 import re
+import secrets
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,6 +27,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMainWindow,
     QMessageBox,
+    QInputDialog,
     QProgressBar,
     QPushButton,
     QScrollArea,
@@ -42,6 +47,7 @@ LOCAL_DATA_ROOT = Path(
 CONFIG_DIR = LOCAL_DATA_ROOT / "config"
 CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 CONFIG_FILE = CONFIG_DIR / "metalbox_client.json"
+ACCESS_FILE = CONFIG_DIR / "access.json"
 
 # Projekt bazowy UI: 1536x864. Interfejs skaluje się proporcjonalnie
 # do dostępnej przestrzeni ekranu, z limitami dla małych i bardzo dużych ekranów.
@@ -63,6 +69,115 @@ def configure_ui_scale(app: QApplication) -> float:
 
 def sp(value: int | float) -> int:
     return max(1, int(round(float(value) * UI_SCALE)))
+
+
+def _derive_password_hash(password: str, salt: bytes, iterations: int = 240_000) -> bytes:
+    return hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iterations)
+
+
+def _load_access_record() -> dict:
+    try:
+        return json.loads(ACCESS_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return {}
+
+
+def _save_access_record(password: str) -> None:
+    salt = secrets.token_bytes(16)
+    iterations = 240_000
+    digest = _derive_password_hash(password, salt, iterations)
+    payload = {
+        "schema": 1,
+        "iterations": iterations,
+        "salt": base64.b64encode(salt).decode("ascii"),
+        "hash": base64.b64encode(digest).decode("ascii"),
+    }
+    tmp = ACCESS_FILE.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, ACCESS_FILE)
+
+
+def _verify_password(password: str) -> bool:
+    record = _load_access_record()
+    try:
+        salt = base64.b64decode(record["salt"])
+        expected = base64.b64decode(record["hash"])
+        iterations = int(record.get("iterations", 240_000))
+    except (KeyError, ValueError, TypeError):
+        return False
+    actual = _derive_password_hash(password, salt, iterations)
+    return hmac.compare_digest(actual, expected)
+
+
+def ensure_access_password(parent=None) -> bool:
+    if not ACCESS_FILE.exists():
+        while True:
+            first, ok = QInputDialog.getText(
+                parent,
+                "Metalbox — ustaw hasło",
+                "Ustaw hasło dostępu do Metalbox:",
+                QLineEdit.Password,
+            )
+            if not ok:
+                return False
+            first = first.strip()
+            if len(first) < 6:
+                QMessageBox.warning(
+                    parent,
+                    "Za krótkie hasło",
+                    "Hasło musi mieć co najmniej 6 znaków.",
+                )
+                continue
+
+            second, ok = QInputDialog.getText(
+                parent,
+                "Metalbox — potwierdź hasło",
+                "Powtórz hasło:",
+                QLineEdit.Password,
+            )
+            if not ok:
+                return False
+            if first != second:
+                QMessageBox.warning(
+                    parent,
+                    "Hasła różnią się",
+                    "Wpisane hasła nie są takie same.",
+                )
+                continue
+
+            _save_access_record(first)
+            QMessageBox.information(
+                parent,
+                "Hasło zapisane",
+                "Hasło dostępu zostało ustawione.",
+            )
+            return True
+
+    attempts = 0
+    while attempts < 5:
+        password, ok = QInputDialog.getText(
+            parent,
+            "Metalbox — dostęp",
+            "Podaj hasło:",
+            QLineEdit.Password,
+        )
+        if not ok:
+            return False
+        if _verify_password(password):
+            return True
+        attempts += 1
+        QMessageBox.warning(
+            parent,
+            "Błędne hasło",
+            f"Nieprawidłowe hasło. Pozostało prób: {5 - attempts}.",
+        )
+
+    QMessageBox.critical(
+        parent,
+        "Dostęp zablokowany",
+        "Przekroczono liczbę prób. Uruchom Metalbox ponownie.",
+    )
+    return False
 
 
 def scaled_stylesheet(css: str) -> str:
@@ -1785,6 +1900,9 @@ def main() -> int:
     app.setApplicationName(APP_NAME)
     configure_ui_scale(app)
     app.setStyleSheet(scaled_stylesheet(STYLESHEET))
+
+    if not ensure_access_password():
+        return 0
 
     config = ClientConfig.load()
     if not config.configured:
