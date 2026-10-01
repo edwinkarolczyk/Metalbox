@@ -1056,53 +1056,108 @@ class OrdersPage(PageBase):
             "Wszystkie ZL i ich pozycje. Jedno zlecenie może być równolegle na kilku etapach.",
         )
         self.store = store
-        self.order_rows = self.store.list_orders()
+        self.open_order_callback = open_order
+        self.active_filter = "Wszystkie"
+        self.visible_rows: list[dict] = []
+        self.filter_buttons: dict[str, QPushButton] = {}
 
         controls = QHBoxLayout()
-        search = QLineEdit()
-        search.setPlaceholderText("Szukaj ZL, klienta lub produktu…")
-        search.setFixedWidth(sp(340))
-        controls.addWidget(search)
-        for text in ("Aktywne", "Opóźnione", "Wstrzymane", "Zakończone"):
+        controls.setSpacing(sp(8))
+
+        self.search_edit = QLineEdit()
+        self.search_edit.setPlaceholderText("Szukaj ZL, klienta, symbolu lub produktu…")
+        self.search_edit.setFixedWidth(sp(360))
+        self.search_edit.textChanged.connect(self._reload)
+        controls.addWidget(self.search_edit)
+
+        for text in ("Wszystkie", "Aktywne", "Opóźnione", "Wstrzymane", "Zakończone"):
             btn = QPushButton(text)
-            btn.clicked.connect(lambda checked=False, t=text: mock_message(self, t))
+            btn.setFixedHeight(sp(36))
+            btn.clicked.connect(lambda checked=False, t=text: self._set_filter(t))
+            self.filter_buttons[text] = btn
             controls.addWidget(btn)
+
         controls.addStretch(1)
+
+        refresh = QPushButton("Odśwież")
+        refresh.setObjectName("secondary")
+        refresh.clicked.connect(self._reload)
+        controls.addWidget(refresh)
+
         new_order = QPushButton("Nowe zlecenie")
         new_order.setObjectName("primary")
         new_order.clicked.connect(lambda: mock_message(self, "Nowe zlecenie"))
         controls.addWidget(new_order)
         self.root.addLayout(controls)
 
-        rows = []
-        for order in self.order_rows:
-            rows.append(
-                [
-                    order["code"],
-                    order["client"],
-                    display_date(order["deadline"]),
-                    order["priority"],
-                    order["status"],
-                    f'{order["progress"]}%',
-                    f'{order["ready_percent"]}%',
-                    "Otwórz",
-                ]
-            )
-        table = compact_table(
+        self.table = compact_table(
             ["Nr ZL", "Klient", "Termin", "Priorytet", "Status", "Produkcja", "Gotowe", "Szczegóły"],
-            rows,
+            [],
             [100, 190, 125, 110, 130, 105, 105, 100],
             300,
         )
-        table.cellDoubleClicked.connect(
-            lambda row, col: open_order(self.order_rows[row]["code"])
-        )
-        self.root.addWidget(table, alignment=Qt.AlignLeft)
+        self.table.cellDoubleClicked.connect(self._open_row)
+        self.root.addWidget(self.table, alignment=Qt.AlignLeft)
 
-        note = QLabel("Dwuklik na wierszu otwiera szczegóły ZL.")
-        note.setObjectName("hint")
-        self.root.addWidget(note)
+        self.result_note = QLabel()
+        self.result_note.setObjectName("hint")
+        self.root.addWidget(self.result_note)
         self.root.addStretch(1)
+
+        self._refresh_filter_buttons()
+        self._reload()
+
+    def _set_filter(self, filter_name: str) -> None:
+        self.active_filter = filter_name
+        self._refresh_filter_buttons()
+        self._reload()
+
+    def _refresh_filter_buttons(self) -> None:
+        for name, button in self.filter_buttons.items():
+            button.setObjectName("primary" if name == self.active_filter else "secondary")
+            button.style().unpolish(button)
+            button.style().polish(button)
+
+    def _reload(self, *_args) -> None:
+        self.visible_rows = self.store.list_orders(
+            search=self.search_edit.text(),
+            filter_key=self.active_filter,
+        )
+
+        self.table.setRowCount(len(self.visible_rows))
+        for row_index, order in enumerate(self.visible_rows):
+            values = [
+                order["code"],
+                order["client"],
+                display_date(order["deadline"]),
+                order["priority"],
+                order["status"],
+                f'{order["progress"]}%',
+                f'{order["ready_percent"]}%',
+                "Otwórz",
+            ]
+            self.table.setRowHeight(row_index, sp(38))
+            for column_index, value in enumerate(values):
+                item = QTableWidgetItem(str(value))
+                normalized = str(value).strip().upper()
+                if normalized in {"W TRAKCIE", "AKTYWNY", "AKTYWNE", "GOTOWE", "ZAKOŃCZONE"}:
+                    item.setForeground(QColor("#67dc8e"))
+                elif normalized in {"WSTRZYMANE", "WYSOKI"}:
+                    item.setForeground(QColor("#e4bd68"))
+                elif normalized in {"OPÓŹNIONE", "KRYTYCZNY"}:
+                    item.setForeground(QColor("#eb7373"))
+                self.table.setItem(row_index, column_index, item)
+
+        query = self.search_edit.text().strip()
+        suffix = f' • wyszukiwanie: „{query}”' if query else ""
+        self.result_note.setText(
+            f"{len(self.visible_rows)} zleceń • filtr: {self.active_filter}{suffix} • "
+            "dwuklik otwiera szczegóły."
+        )
+
+    def _open_row(self, row: int, _column: int) -> None:
+        if 0 <= row < len(self.visible_rows):
+            self.open_order_callback(self.visible_rows[row]["code"])
 
 
 class OrderDetailPage(PageBase):
