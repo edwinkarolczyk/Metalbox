@@ -44,7 +44,7 @@ from PySide6.QtWidgets import (
 )
 
 APP_NAME = "Metalbox"
-APP_VERSION = "0.0.7"
+APP_VERSION = "0.0.8"
 LOCAL_DATA_ROOT = Path(
     os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
 ) / "Metalbox"
@@ -55,6 +55,10 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 CONFIG_FILE = CONFIG_DIR / "metalbox_client.json"
 ACCESS_FILE = CONFIG_DIR / "access.json"
 APP_LOG_FILE = LOG_DIR / "metalbox.log"
+
+# Tylko na czas developmentu. Ustaw False przed wersją produkcyjną,
+# aby całkowicie ukryć przycisk szybkiego zamykania aplikacji.
+SHOW_DEV_EXIT_BUTTON = True
 
 # Projekt bazowy UI: 1536x864. Interfejs skaluje się proporcjonalnie
 # do dostępnej przestrzeni ekranu, z limitami dla małych i bardzo dużych ekranów.
@@ -473,7 +477,7 @@ def mock_message(parent, title: str = "Wydmuszka") -> None:
         parent,
         title,
         "To jest element docelowego interfejsu.\n"
-        "W wersji 0.0.7 nie zapisuje jeszcze danych produkcyjnych.",
+        "W wersji 0.0.8 nie zapisuje jeszcze danych produkcyjnych.",
     )
 
 
@@ -594,7 +598,7 @@ class ConnectionDialog(QDialog):
                 self,
                 "Test połączenia",
                 "Konfiguracja wygląda poprawnie.\n\n"
-                "W wersji 0.0.7 prawdziwy Metalbox Server nie jest jeszcze podłączony.",
+                "W wersji 0.0.8 prawdziwy Metalbox Server nie jest jeszcze podłączony.",
             )
 
     def _accept_test_mode(self) -> None:
@@ -1665,10 +1669,38 @@ class MainWindow(QMainWindow):
         self.inactivity_timer.timeout.connect(self.go_home)
         QApplication.instance().installEventFilter(self)
 
+        self.dev_exit_button: QPushButton | None = None
+        if SHOW_DEV_EXIT_BUTTON:
+            self.dev_exit_button = QPushButton("✕", self)
+            self.dev_exit_button.setObjectName("devExitButton")
+            self.dev_exit_button.setToolTip("Zamknij Metalbox — przycisk developerski")
+            self.dev_exit_button.setFixedSize(sp(42), sp(42))
+            self.dev_exit_button.clicked.connect(self._close_from_dev_button)
+            self.dev_exit_button.raise_()
+            self._position_dev_exit_button()
+
     def eventFilter(self, obj, event):
         if event.type() in {QEvent.MouseButtonPress, QEvent.KeyPress, QEvent.TouchBegin, QEvent.Wheel}:
             self._restart_inactivity_timer()
         return super().eventFilter(obj, event)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._position_dev_exit_button()
+
+    def _position_dev_exit_button(self) -> None:
+        if self.dev_exit_button is None:
+            return
+        margin = sp(14)
+        self.dev_exit_button.move(
+            max(margin, self.width() - self.dev_exit_button.width() - margin),
+            max(margin, self.height() - self.dev_exit_button.height() - margin),
+        )
+        self.dev_exit_button.raise_()
+
+    def _close_from_dev_button(self) -> None:
+        app_log("Zamknięcie aplikacji przyciskiem developerskim X.")
+        self.close()
 
     def _restart_inactivity_timer(self) -> None:
         if self.stack.currentWidget() is self.home:
@@ -1948,6 +1980,20 @@ QPushButton#dangerGhost {
     background: #181313;
     border-color: #693535;
     color: #e77d7d;
+}
+QPushButton#devExitButton {
+    background: #181313;
+    border: 1px solid #693535;
+    border-radius: 10px;
+    color: #e77d7d;
+    font-size: 18px;
+    font-weight: 900;
+    padding: 0px;
+}
+QPushButton#devExitButton:hover {
+    background: #3a1717;
+    border-color: #d75e5e;
+    color: #ffffff;
 }
 QPushButton#secondary {
     background: #101315;
