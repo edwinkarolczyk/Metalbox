@@ -555,24 +555,55 @@ class MetalboxStore:
             ).fetchone()
             if order is None:
                 raise ValueError(f"Nie znaleziono zlecenia {code}.")
+            order_id = int(order["id"])
 
-            result = db.execute(
-                """
-                UPDATE operation_progress
-                SET status = ?, updated_at = ?
-                WHERE department = ?
-                  AND order_item_id IN (
-                      SELECT id FROM order_items WHERE order_id = ?
-                  )
-                  AND good_qty < planned_qty
-                """,
-                (status, now, department, int(order["id"])),
-            )
+            if status == "WSTRZYMANE":
+                result = db.execute(
+                    """
+                    UPDATE operation_progress
+                    SET status = ?, updated_at = ?
+                    WHERE department = ?
+                      AND order_item_id IN (
+                          SELECT id FROM order_items WHERE order_id = ?
+                      )
+                      AND good_qty < planned_qty
+                      AND status = 'AKTYWNE'
+                    """,
+                    (status, now, department, order_id),
+                )
+                affected = int(result.rowcount or 0)
+            else:
+                rows = self._department_operation_rows(
+                    db,
+                    order_id=order_id,
+                    department=department,
+                )
+                eligible_ids = [
+                    int(row["id"])
+                    for row in rows
+                    if self._row_available_to_process(row) > 0
+                    and int(row["good_qty"]) < int(row["planned_qty"])
+                ]
+                affected = 0
+                for operation_id in eligible_ids:
+                    result = db.execute(
+                        """
+                        UPDATE operation_progress
+                        SET status = 'AKTYWNE', updated_at = ?
+                        WHERE id = ?
+                        """,
+                        (now, operation_id),
+                    )
+                    affected += int(result.rowcount or 0)
 
-            affected = int(result.rowcount or 0)
             if affected == 0:
+                if status == "AKTYWNE":
+                    raise ValueError(
+                        f"Brak dostępnych sztuk dla {code} w dziale {department}. "
+                        "Najpierw poprzedni etap musi przekazać dobre sztuki."
+                    )
                 raise ValueError(
-                    f"Brak aktywnych pozycji {code} w dziale {department} do zmiany statusu."
+                    f"Brak aktywnych pozycji {code} w dziale {department} do wstrzymania."
                 )
 
             self._audit_in_connection(
@@ -612,34 +643,28 @@ class MetalboxStore:
                 raise ValueError(f"Nie znaleziono zlecenia {code}.")
             order_id = int(order["id"])
 
-            rows = db.execute(
-                """
-                SELECT
-                    op.id,
-                    op.planned_qty,
-                    op.good_qty,
-                    op.status,
-                    oi.position_no
-                FROM operation_progress op
-                JOIN order_items oi ON oi.id = op.order_item_id
-                WHERE oi.order_id = ?
-                  AND op.department = ?
-                ORDER BY oi.position_no ASC
-                """,
-                (order_id, department),
-            ).fetchall()
+            rows = self._department_operation_rows(
+                db,
+                order_id=order_id,
+                department=department,
+            )
 
             if not rows:
                 raise ValueError(f"Brak operacji {department} dla {code}.")
 
-            remaining_total = sum(
-                max(0, int(row["planned_qty"]) - int(row["good_qty"]))
+            available_total = sum(
+                self._row_available_to_process(row)
                 for row in rows
             )
-            if quantity > remaining_total:
+            if available_total <= 0:
                 raise ValueError(
-                    f"Można dodać maksymalnie {remaining_total} szt. "
-                    f"Pozostało do wykonania w tym dziale."
+                    f"Brak dostępnych sztuk dla {code} w dziale {department}. "
+                    "Najpierw poprzedni etap musi przekazać dobre sztuki."
+                )
+            if quantity > available_total:
+                raise ValueError(
+                    f"Można teraz dodać maksymalnie {available_total} szt. "
+                    "Limit wynika z dobrych sztuk przekazanych przez poprzedni etap."
                 )
 
             left = quantity
@@ -650,11 +675,11 @@ class MetalboxStore:
 
                 planned = int(row["planned_qty"])
                 current_good = int(row["good_qty"])
-                remaining = max(0, planned - current_good)
-                if remaining == 0:
+                available = self._row_available_to_process(row)
+                if available <= 0:
                     continue
 
-                add = min(left, remaining)
+                add = min(left, available)
                 new_good = current_good + add
                 new_status = "GOTOWE" if new_good >= planned else "AKTYWNE"
 
@@ -698,6 +723,76 @@ class MetalboxStore:
             "progress": int(progress_row["progress"]),
             "ready_percent": int(progress_row["ready_percent"]),
         }
+
+    def get_department_order_capacity(
+        self,
+        code: str,
+        department: str,
+    ) -> dict:
+        with self._connect() as db:
+            order = db.execute(
+                "SELECT id FROM orders WHERE code = ?",
+                (code,),
+            ).fetchone()
+            if order is None:
+                raise ValueError(f"Nie znaleziono zlecenia {code}.")
+
+            rows = self._department_operation_rows(
+                db,
+                order_id=int(order["id"]),
+                department=department,
+            )
+
+        demand_remaining = sum(
+            max(0, int(row["planned_qty"]) - int(row["good_qty"]))
+            for row in rows
+        )
+        available_now = sum(self._row_available_to_process(row) for row in rows)
+        return {
+            "remaining": demand_remaining,
+            "available_now": available_now,
+        }
+
+    @staticmethod
+    def _department_operation_rows(
+        db: sqlite3.Connection,
+        *,
+        order_id: int,
+        department: str,
+    ) -> list[sqlite3.Row]:
+        return db.execute(
+            """
+            SELECT
+                op.id,
+                op.order_item_id,
+                op.sequence_no,
+                op.planned_qty,
+                op.good_qty,
+                op.status,
+                oi.position_no,
+                CASE
+                    WHEN op.sequence_no = 1 THEN op.planned_qty
+                    ELSE COALESCE(prev.good_qty, 0)
+                END AS upstream_good_qty
+            FROM operation_progress op
+            JOIN order_items oi ON oi.id = op.order_item_id
+            LEFT JOIN operation_progress prev
+                ON prev.order_item_id = op.order_item_id
+               AND prev.sequence_no = op.sequence_no - 1
+            WHERE oi.order_id = ?
+              AND op.department = ?
+            ORDER BY oi.position_no ASC
+            """,
+            (order_id, department),
+        ).fetchall()
+
+    @staticmethod
+    def _row_available_to_process(row: sqlite3.Row) -> int:
+        planned = max(0, int(row["planned_qty"]))
+        good = max(0, int(row["good_qty"]))
+        upstream_good = max(0, int(row["upstream_good_qty"]))
+        allowed_total = min(planned, upstream_good)
+        return max(0, allowed_total - good)
 
     @staticmethod
     def _recalculate_order_percentages(
