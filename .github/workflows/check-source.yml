@@ -6,6 +6,7 @@ on:
     paths:
       - app.py
       - dev_launcher.py
+      - metalbox_core.py
       - .github/workflows/check-source.yml
   workflow_dispatch:
 
@@ -26,3 +27,4 @@ jobs:
         run: |
           python -m py_compile app.py
           python -m py_compile dev_launcher.py
+          python -m py_compile metalbox_core.py
