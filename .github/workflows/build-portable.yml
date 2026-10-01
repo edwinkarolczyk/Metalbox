@@ -28,21 +28,21 @@ jobs:
         shell: pwsh
         run: |
           python -m PyInstaller --noconfirm --clean --windowed --name Metalbox --collect-all PySide6 app.py
-          Compress-Archive -Path dist\Metalbox\* -DestinationPath Metalbox-0.0.4-portable.zip -Force
+          Compress-Archive -Path dist\Metalbox\* -DestinationPath Metalbox-0.0.5-portable.zip -Force
 
       - name: Build single EXE
         shell: pwsh
         run: |
-          python -m PyInstaller --noconfirm --clean --windowed --onefile --name Metalbox-0.0.4 --collect-all PySide6 app.py
+          python -m PyInstaller --noconfirm --clean --windowed --onefile --name Metalbox-0.0.5 --collect-all PySide6 app.py
 
       - name: Upload portable artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Metalbox-0.0.4-portable
-          path: Metalbox-0.0.4-portable.zip
+          name: Metalbox-0.0.5-portable
+          path: Metalbox-0.0.5-portable.zip
 
       - name: Upload single EXE artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Metalbox-0.0.4-exe
-          path: dist\Metalbox-0.0.4.exe
+          name: Metalbox-0.0.5-exe
+          path: dist\Metalbox-0.0.5.exe
