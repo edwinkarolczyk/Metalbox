@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import base64 as _bundle_base64
+import dataclasses as _bundle_dataclasses
 import hashlib
+import hmac as _bundle_hmac
 import json
 import os
 import runpy
+import secrets as _bundle_secrets
 import shutil
+import sqlite3 as _bundle_sqlite3
 import subprocess
 import sys
 import tempfile
@@ -16,7 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from tkinter import Tk, messagebox
 
-DEV_RUNNER_VERSION = "1.3.2"
+DEV_RUNNER_VERSION = "1.3.3"
 REPO = "edwinkarolczyk/Metalbox"
 BRANCH = "main"
 API_BASE = f"https://api.github.com/repos/{REPO}"
@@ -286,15 +291,27 @@ def qt_self_test() -> int:
         return 21
 
     try:
+        # Krytyczne zależności kodu pobieranego z repo muszą istnieć
+        # w interpreterze spakowanym w MetalboxDev.exe.
+        connection = _bundle_sqlite3.connect(":memory:")
+        try:
+            connection.execute("CREATE TABLE smoke(id INTEGER PRIMARY KEY)")
+            connection.execute("INSERT INTO smoke DEFAULT VALUES")
+            count = int(connection.execute("SELECT COUNT(*) FROM smoke").fetchone()[0])
+            if count != 1:
+                raise RuntimeError("SQLite smoke test zwrócił zły wynik.")
+        finally:
+            connection.close()
+
         from PySide6.QtWidgets import QApplication
 
         app = QApplication.instance() or QApplication(["MetalboxDevQtSelfTest"])
         app.processEvents()
-        log("Qt self-test: OK")
+        log("Qt + SQLite self-test: OK")
         return 0
     except Exception as exc:
         log(
-            f"Qt self-test: {type(exc).__name__}: {exc}\n"
+            f"Qt/SQLite self-test: {type(exc).__name__}: {exc}\n"
             + traceback.format_exc(),
             "ERROR",
         )
