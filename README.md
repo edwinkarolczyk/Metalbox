@@ -4,74 +4,110 @@ Wyspecjalizowany system do zarządzania produkcją Metalbox sp. z o.o.
 
 ## Aktualny stan
 
-**0.0.5 — maksymalna wydmuszka UI**
+**0.0.6 — maksymalna wydmuszka UI + Launcher/Updater**
 
-Ta wersja służy do pełnego przeklikania układu programu przed podłączeniem właściwej logiki produkcyjnej, serwera i danych.
+Metalbox jest nadal makietą interfejsu bez właściwej logiki produkcyjnej, ale od tej wersji posiada docelowy mechanizm dystrybucji i aktualizacji.
 
-### Ekrany i obszary przygotowane
+## Metalbox Launcher
 
-- pulpit główny z działami i bieżącymi postępami,
-- Gilotyna,
-- Laser,
-- Giętarki,
-- Spawalnia,
-- Zgrzewarki,
-- Przygotowanie produkcji,
-- Malarnia,
-- Pakownia,
-- Warsztat mechaniczny / przygotowanie produkcji,
-- Magazyn,
+Docelowym punktem uruchamiania programu jest:
+
+```text
+MetalboxLauncher.exe
+```
+
+Launcher:
+
+- sprawdza aktualizację przy uruchomieniu,
+- obsługuje kanał Development i Stable,
+- pobiera nowy `Metalbox.exe` z GitHub Releases,
+- weryfikuje SHA-256 przed instalacją,
+- zachowuje poprzednie wersje,
+- umożliwia rollback,
+- przy braku internetu uruchamia zainstalowaną lokalnie wersję,
+- może uruchamiać się wraz z Windows,
+- nie nadpisuje konfiguracji stanowiska.
+
+### Lokalizacja plików na komputerze
+
+Launcher może znajdować się w dowolnym miejscu, np. na pulpicie.
+
+Właściwa instalacja jest zarządzana w:
+
+```text
+%LOCALAPPDATA%\Metalbox\
+├── app\
+│   └── Metalbox.exe
+├── backup\
+├── config\
+│   ├── launcher.json
+│   └── metalbox_client.json
+├── logs\
+├── temp\
+└── installed.json
+```
+
+Aktualizacja podmienia tylko:
+
+```text
+%LOCALAPPDATA%\Metalbox\app\Metalbox.exe
+```
+
+Konfiguracja IP, nazwa stanowiska i inne lokalne ustawienia pozostają poza plikiem programu.
+
+## Kanały aktualizacji
+
+### Development
+
+Domyślny podczas obecnego rozwoju.
+
+Każdy zaakceptowany push do `main` buduje aktualny program i publikuje stały GitHub Release:
+
+```text
+development
+```
+
+Launcher porównuje również numer builda, więc może wykryć kolejną poprawkę bez zmiany numeru wersji 0.0.6.
+
+### Stable
+
+Stable jest publikowany wyłącznie ręcznie przez workflow:
+
+```text
+Publish Metalbox Stable
+```
+
+Wersje Stable są niemutowalne. Przed publikacją kolejnej Stable trzeba zwiększyć `APP_VERSION`.
+
+## Tryby aktualizacji Launchera
+
+- `ask` — wykrywa zmianę i pyta przed instalacją,
+- `auto` — aktualizuje automatycznie,
+- `manual` — aktualizacja tylko po kliknięciu.
+
+Domyślnie podczas developmentu używany jest kanał `development` i tryb `ask`.
+
+## UI wydmuszki
+
+Przygotowane obszary:
+
+- pulpit główny,
+- wszystkie działy produkcyjne,
 - Zlecenia,
-- szczegóły ZL z postępem po etapach,
+- szczegóły ZL,
 - Planista,
-- Produkty,
-- szczegółowa karta produktu,
+- Produkty i karta produktu,
 - półprodukty / bufory,
-- Pracownicy / profile / role / e-maile,
-- profil / logowanie użytkownika,
+- Pracownicy / role / e-maile,
+- profil / logowanie,
 - Jakość / braki / poprawki,
 - Wysyłki,
-- Raporty / akord / statystyki,
-- centrum alertów,
-- Widok TV,
+- Raporty / akord,
+- Alerty,
+- TV,
 - Ustawienia,
 - Diagnostyka.
 
-### Dodatkowe elementy makiety
-
-- pełnoszerokie paski postępu zleceń,
-- specjalne informacje dla Laser / Zgrzewarki / Malarnia / Pakownia / Magazyn,
-- przyszły model półproduktów produkowanych bez konkretnego ZL,
-- profile kierownictwa z opcjonalnym e-mailem,
-- przygotowanie pod PIN / QR / RFID,
-- alarmy i problemy wymagające uwagi,
-- karta produktu z trasą technologiczną,
-- dane demonstracyjne dla wysyłek, jakości i akordu.
-
-### Responsywność
-
-Interfejs skaluje się proporcjonalnie do rozdzielczości ekranu. Bazą projektu jest 1536×864, a skala jest ograniczona dla małych i bardzo dużych monitorów.
-
-Tabele nie są sztucznie rozciągane na całą szerokość. Karty, czcionki, marginesy, przyciski i paski postępu skalują się proporcjonalnie.
-
-### Styl
-
-- czerń / grafit,
-- biały tekst,
-- zielone akcenty,
-- żółty dla ostrzeżeń,
-- czerwony dla problemów.
-
-### Tryb testowy
-
-Przy pierwszym uruchomieniu można wybrać **Tryb testowy** bez prawdziwego serwera.
-
-### EXE
-
-GitHub Actions buduje pojedynczy plik:
-
-```text
-Metalbox-0.0.5.exe
-```
+Interfejs skaluje się do ekranu, nie rozciąga tabel na siłę i używa czarno-grafitowego motywu z zielonymi akcentami.
 
 Szczegółowy plan rozwoju znajduje się w [ROADMAP.md](ROADMAP.md).
