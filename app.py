@@ -2736,6 +2736,7 @@ class MainWindow(QMainWindow):
 
         management_frame = QFrame()
         management_frame.setObjectName("managementBar")
+        management_frame.setFixedHeight(sp(56))
         management = QHBoxLayout(management_frame)
         management.setContentsMargins(sp(8), sp(8), sp(8), sp(8))
         management.setSpacing(sp(7))
