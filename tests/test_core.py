@@ -20,8 +20,11 @@ class MetalboxStoreTests(unittest.TestCase):
         self.temp_dir.cleanup()
 
     def test_schema_version(self) -> None:
-        with sqlite3.connect(self.db_path) as db:
+        db = sqlite3.connect(self.db_path)
+        try:
             version = int(db.execute("PRAGMA user_version").fetchone()[0])
+        finally:
+            db.close()
         self.assertEqual(version, SCHEMA_VERSION)
 
     def test_seed_and_search(self) -> None:
