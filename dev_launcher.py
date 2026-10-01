@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from tkinter import Tk, messagebox
 
-DEV_RUNNER_VERSION = "1.3.1"
+DEV_RUNNER_VERSION = "1.3.2"
 REPO = "edwinkarolczyk/Metalbox"
 BRANCH = "main"
 API_BASE = f"https://api.github.com/repos/{REPO}"
@@ -34,6 +34,8 @@ STATE_FILE = ROOT / "source_state.json"
 UPDATE_STATE_FILE = ROOT / "update_state.json"
 LOG_FILE = LOG_DIR / "dev-runner.log"
 RUNNER_RELEASE_API = f"{API_BASE}/releases/tags/dev-runner"
+
+_DLL_DIR_HANDLES: list[object] = []
 
 
 def ensure_dirs() -> None:
@@ -220,6 +222,83 @@ def check_self_update() -> bool:
     except Exception as exc:
         log(f"Samouaktualnienie Runnera pominięte: {exc}", "WARN")
         return False
+
+
+def prepare_qt_runtime() -> Path | None:
+    """Ustawia ścieżki do pluginów Qt spakowanych wewnątrz MetalboxDev.exe."""
+    if not getattr(sys, "frozen", False):
+        return None
+
+    base = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
+    candidates = [
+        base / "PySide6" / "plugins",
+        base / "PySide6" / "Qt" / "plugins",
+        base / "plugins",
+    ]
+
+    plugins_root: Path | None = None
+    for candidate in candidates:
+        if (candidate / "platforms" / "qwindows.dll").exists():
+            plugins_root = candidate
+            break
+
+    if plugins_root is None:
+        try:
+            qwindows = next(base.rglob("qwindows.dll"), None)
+        except OSError:
+            qwindows = None
+        if qwindows is not None:
+            plugins_root = qwindows.parent.parent
+
+    if plugins_root is None:
+        log(
+            f"Nie znaleziono qwindows.dll w paczce Runnera: {base}",
+            "ERROR",
+        )
+        return None
+
+    os.environ["QT_PLUGIN_PATH"] = str(plugins_root)
+    os.environ["QT_QPA_PLATFORM_PLUGIN_PATH"] = str(
+        plugins_root / "platforms"
+    )
+
+    if sys.platform == "win32" and hasattr(os, "add_dll_directory"):
+        for dll_dir in (
+            base,
+            base / "PySide6",
+            plugins_root.parent,
+        ):
+            if dll_dir.exists():
+                try:
+                    handle = os.add_dll_directory(str(dll_dir))
+                    _DLL_DIR_HANDLES.append(handle)
+                except OSError:
+                    pass
+
+    log(f"Qt plugins: {plugins_root}")
+    return plugins_root
+
+
+def qt_self_test() -> int:
+    """Test gotowego EXE używany przez CI przed publikacją Runnera."""
+    plugins_root = prepare_qt_runtime()
+    if getattr(sys, "frozen", False) and plugins_root is None:
+        return 21
+
+    try:
+        from PySide6.QtWidgets import QApplication
+
+        app = QApplication.instance() or QApplication(["MetalboxDevQtSelfTest"])
+        app.processEvents()
+        log("Qt self-test: OK")
+        return 0
+    except Exception as exc:
+        log(
+            f"Qt self-test: {type(exc).__name__}: {exc}\n"
+            + traceback.format_exc(),
+            "ERROR",
+        )
+        return 22
 
 
 def latest_commit() -> str:
@@ -471,6 +550,7 @@ def restore_previous_source() -> bool:
 
 
 def run_source() -> int:
+    prepare_qt_runtime()
     state = load_state()
     source_dir = active_source_dir(state)
     if not _valid_source(source_dir):
@@ -515,6 +595,10 @@ def show_warning(title: str, text: str) -> None:
 
 def main() -> int:
     ensure_dirs()
+
+    if "--self-test-qt" in sys.argv:
+        return qt_self_test()
+
     log(f"Start MetalboxDev {DEV_RUNNER_VERSION}")
 
     if check_self_update():
