@@ -27,6 +27,39 @@ class MetalboxStoreTests(unittest.TestCase):
             db.close()
         self.assertEqual(version, SCHEMA_VERSION)
 
+    def test_repairs_incomplete_schema_with_current_user_version(self) -> None:
+        repair_path = Path(self.temp_dir.name) / "repair.sqlite3"
+        db = sqlite3.connect(repair_path)
+        try:
+            db.execute(
+                """
+                CREATE TABLE orders (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    code TEXT NOT NULL UNIQUE,
+                    client TEXT NOT NULL DEFAULT '',
+                    deadline TEXT NOT NULL DEFAULT '',
+                    priority TEXT NOT NULL DEFAULT 'NORMALNY',
+                    status TEXT NOT NULL DEFAULT 'NOWE'
+                )
+                """
+            )
+            db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            db.commit()
+        finally:
+            db.close()
+
+        repaired = MetalboxStore(repair_path)
+        with repaired._connect() as db2:
+            tables = {
+                str(row["name"])
+                for row in db2.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            }
+        self.assertIn("operation_progress", tables)
+        self.assertIn("order_items", tables)
+        self.assertIn("audit_events", tables)
+
     def test_seed_and_search(self) -> None:
         orders = self.store.list_orders()
         self.assertEqual(len(orders), 4)
