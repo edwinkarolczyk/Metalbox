@@ -1,7 +1,7 @@
 {
   "schema": 1,
-  "version": "0.1.8",
-  "title": "Pierwszy działający przepływ produkcyjny",
+  "version": "0.1.8.1",
+  "title": "Pierwszy działający przepływ produkcyjny — poprawka startu",
   "description": "Sprawdź podstawowy przepływ ZL → dział → operacja → ilość → audyt. Punkty zaznaczają się automatycznie podczas używania programu.",
   "checks": [
     {
