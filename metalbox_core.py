@@ -189,14 +189,66 @@ class MetalboxStore:
                 )
         return True
 
-    def list_orders(self) -> list[dict]:
+    def list_orders(
+        self,
+        search: str = "",
+        filter_key: str = "Wszystkie",
+    ) -> list[dict]:
+        search = search.strip()
+        where: list[str] = []
+        params: list[object] = []
+
+        if search:
+            token = f"%{search}%"
+            where.append(
+                """
+                (
+                    o.code LIKE ? COLLATE NOCASE
+                    OR o.client LIKE ? COLLATE NOCASE
+                    OR EXISTS (
+                        SELECT 1
+                        FROM order_items oi
+                        WHERE oi.order_id = o.id
+                          AND (
+                              oi.symbol LIKE ? COLLATE NOCASE
+                              OR oi.name LIKE ? COLLATE NOCASE
+                          )
+                    )
+                )
+                """
+            )
+            params.extend([token, token, token, token])
+
+        if filter_key == "Aktywne":
+            where.append("o.status NOT IN ('ZAKOŃCZONE', 'ANULOWANE', 'WSTRZYMANE')")
+        elif filter_key == "Opóźnione":
+            where.append(
+                "o.deadline <> '' AND o.deadline < date('now') "
+                "AND o.status NOT IN ('ZAKOŃCZONE', 'ANULOWANE')"
+            )
+        elif filter_key == "Wstrzymane":
+            where.append("o.status = 'WSTRZYMANE'")
+        elif filter_key == "Zakończone":
+            where.append("o.status = 'ZAKOŃCZONE'")
+
+        where_sql = (" WHERE " + " AND ".join(where)) if where else ""
+
         with self._connect() as db:
             rows = db.execute(
-                """
-                SELECT code, client, deadline, priority, status, progress, ready_percent
-                FROM orders
-                ORDER BY deadline ASC, code ASC
-                """
+                f"""
+                SELECT
+                    o.code,
+                    o.client,
+                    o.deadline,
+                    o.priority,
+                    o.status,
+                    o.progress,
+                    o.ready_percent
+                FROM orders o
+                {where_sql}
+                ORDER BY o.deadline ASC, o.code ASC
+                """,
+                params,
             ).fetchall()
 
         return [dict(row) for row in rows]
