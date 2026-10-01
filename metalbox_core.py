@@ -854,6 +854,81 @@ class MetalboxStore:
             ),
         )
 
+    def dashboard_live_orders(self, limit: int = 4) -> list[dict]:
+        result: list[dict] = []
+        orders = [
+            row
+            for row in self.list_orders()
+            if row["status"] not in {"ZAKOŃCZONE", "ANULOWANE"}
+        ]
+
+        for order in orders:
+            stages = self.get_order_stage_progress(str(order["code"]))
+            if not stages:
+                continue
+
+            current = next(
+                (stage for stage in stages if stage["status"] == "WSTRZYMANE"),
+                None,
+            )
+            if current is None:
+                current = next(
+                    (
+                        stage
+                        for stage in stages
+                        if int(stage["good_qty"]) < int(stage["planned_qty"])
+                    ),
+                    stages[-1],
+                )
+
+            details = self.get_order(str(order["code"])) or {}
+            items = details.get("items", [])
+            if items:
+                first = items[0]
+                product = f'{first["symbol"]} {first["name"]}'.strip()
+                if len(items) > 1:
+                    product += f"  +{len(items) - 1}"
+            else:
+                product = str(order["client"] or "—")
+
+            result.append(
+                {
+                    "code": order["code"],
+                    "department": current["department"],
+                    "product": product,
+                    "planned_qty": int(current["planned_qty"]),
+                    "good_qty": int(current["good_qty"]),
+                    "status": current["status"],
+                    "deadline": order["deadline"],
+                    "priority": order["priority"],
+                }
+            )
+            if len(result) >= max(1, int(limit)):
+                break
+
+        return result
+
+    def dashboard_alert_count(self) -> int:
+        affected_orders: set[str] = {
+            str(row["code"])
+            for row in self.list_orders(filter_key="Opóźnione")
+        }
+
+        with self._connect() as db:
+            rows = db.execute(
+                """
+                SELECT DISTINCT o.code
+                FROM operation_progress op
+                JOIN order_items oi ON oi.id = op.order_item_id
+                JOIN orders o ON o.id = oi.order_id
+                WHERE op.status = 'WSTRZYMANE'
+                  AND o.status NOT IN ('ZAKOŃCZONE', 'ANULOWANE')
+                """
+            ).fetchall()
+
+        affected_orders.update(str(row["code"]) for row in rows)
+        return len(affected_orders)
+
     def add_audit_event(
         self,
         *,
