@@ -577,7 +577,6 @@ SHIPPING_ROWS = [
 ]
 
 
-@dataclass
 class OrderHistoryDialog(QDialog):
     def __init__(self, store: MetalboxStore, code: str, parent=None):
         super().__init__(parent)
@@ -654,6 +653,7 @@ class OrderHistoryDialog(QDialog):
         root.addLayout(footer)
 
 
+@dataclass
 class ClientConfig:
     server_ip: str = ""
     station_name: str = "Stanowisko produkcyjne"
