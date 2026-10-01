@@ -7,6 +7,7 @@ on:
       - app.py
       - dev_launcher.py
       - metalbox_core.py
+      - tests/**
       - .github/workflows/check-source.yml
   workflow_dispatch:
 
@@ -28,3 +29,7 @@ jobs:
           python -m py_compile app.py
           python -m py_compile dev_launcher.py
           python -m py_compile metalbox_core.py
+
+      - name: Core tests
+        run: |
+          python -m unittest discover -s tests -v
