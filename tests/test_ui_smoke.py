@@ -37,6 +37,41 @@ class UiSmokeTest(unittest.TestCase):
             self.assertEqual(window.windowTitle(), f"Metalbox {metalbox_app.APP_VERSION}")
             window.close()
 
+    def test_update_checklist_dialog_constructs(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            original = metalbox_app.DEV_UPDATE_STATE_FILE
+            try:
+                metalbox_app.DEV_UPDATE_STATE_FILE = Path(temp) / "update_state.json"
+                metalbox_app.save_dev_update_state(
+                    {
+                        "schema": 2,
+                        "status": "updated",
+                        "old_version": "0.1.7",
+                        "new_version": metalbox_app.APP_VERSION,
+                        "title": "Test aktualizacji",
+                        "description": "Sprawdzenie okna.",
+                        "popup_shown": False,
+                        "changes": [
+                            {
+                                "id": "orders-open",
+                                "text": "Otwórz ekran Zlecenia",
+                                "trigger": "page:orders",
+                                "checked": False,
+                                "checked_at": None,
+                                "note": "",
+                                "problem": False,
+                            }
+                        ],
+                    }
+                )
+
+                dialog = metalbox_app.UpdateChecklistDialog()
+                self.assertFalse(dialog.isModal())
+                self.assertEqual(len(dialog.rows), 1)
+                dialog.close()
+            finally:
+                metalbox_app.DEV_UPDATE_STATE_FILE = original
+
 
 if __name__ == "__main__":
     unittest.main()
