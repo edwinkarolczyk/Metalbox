@@ -1,0 +1,53 @@
+{
+  "schema": 1,
+  "version": "0.1.8",
+  "title": "Pierwszy działający przepływ produkcyjny",
+  "description": "Sprawdź podstawowy przepływ ZL → dział → operacja → ilość → audyt. Punkty zaznaczają się automatycznie podczas używania programu.",
+  "checks": [
+    {
+      "id": "orders-open",
+      "text": "Otwórz ekran Zlecenia",
+      "trigger": "page:orders"
+    },
+    {
+      "id": "orders-search",
+      "text": "Wyszukaj ZL po numerze, kliencie, symbolu lub nazwie produktu",
+      "trigger": "orders:search"
+    },
+    {
+      "id": "order-open",
+      "text": "Otwórz szczegóły dowolnego ZL",
+      "trigger": "order:open"
+    },
+    {
+      "id": "department-open",
+      "text": "Wejdź do dowolnego działu produkcyjnego",
+      "trigger": "department:open"
+    },
+    {
+      "id": "operation-status",
+      "text": "Rozpocznij, wstrzymaj albo wznów operację",
+      "trigger": "operation:status"
+    },
+    {
+      "id": "operation-quantity",
+      "text": "Dodaj wykonaną ilość i sprawdź przeliczenie postępu",
+      "trigger": "operation:quantity"
+    },
+    {
+      "id": "alerts-open",
+      "text": "Otwórz Alerty i sprawdź wygenerowane pozycje",
+      "trigger": "alerts:open"
+    },
+    {
+      "id": "order-history",
+      "text": "Otwórz historię ZL i sprawdź zapisane zdarzenia",
+      "trigger": "order:history"
+    },
+    {
+      "id": "logs-export",
+      "text": "Pobierz paczkę diagnostyczną z Ustawień",
+      "trigger": "logs:export"
+    }
+  ]
+}
