@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from tkinter import Tk, messagebox
 
-DEV_RUNNER_VERSION = "1.2.0"
+DEV_RUNNER_VERSION = "1.3.0"
 REPO = "edwinkarolczyk/Metalbox"
 BRANCH = "main"
 API_BASE = f"https://api.github.com/repos/{REPO}"
@@ -25,8 +25,9 @@ LOCAL_APPDATA = Path(
     os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
 )
 ROOT = LOCAL_APPDATA / "Metalbox" / "dev"
-SOURCE_DIR = ROOT / "source"
-PREVIOUS_DIR = ROOT / "previous"
+LEGACY_SOURCE_DIR = ROOT / "source"
+LEGACY_PREVIOUS_DIR = ROOT / "previous"
+RELEASES_DIR = ROOT / "releases"
 TEMP_DIR = ROOT / "temp"
 LOG_DIR = LOCAL_APPDATA / "Metalbox" / "logs"
 STATE_FILE = ROOT / "source_state.json"
@@ -36,7 +37,7 @@ RUNNER_RELEASE_API = f"{API_BASE}/releases/tags/dev-runner"
 
 
 def ensure_dirs() -> None:
-    for path in (ROOT, TEMP_DIR, LOG_DIR):
+    for path in (ROOT, RELEASES_DIR, TEMP_DIR, LOG_DIR):
         path.mkdir(parents=True, exist_ok=True)
 
 
@@ -58,11 +59,52 @@ def load_state() -> dict:
         return {}
 
 
-def save_state(sha: str) -> None:
+def _valid_source(path: Path | None) -> bool:
+    return bool(path and path.exists() and (path / "app.py").exists())
+
+
+def _release_dir(sha: str) -> Path:
+    return RELEASES_DIR / sha
+
+
+def active_source_dir(state: dict | None = None) -> Path | None:
+    state = state or load_state()
+
+    explicit = str(state.get("active_source", "")).strip()
+    if explicit:
+        path = Path(explicit)
+        if _valid_source(path):
+            return path
+
+    sha = str(state.get("commit", "")).strip()
+    if sha:
+        path = _release_dir(sha)
+        if _valid_source(path):
+            return path
+
+    if _valid_source(LEGACY_SOURCE_DIR):
+        return LEGACY_SOURCE_DIR
+
+    if _valid_source(LEGACY_PREVIOUS_DIR):
+        return LEGACY_PREVIOUS_DIR
+
+    return None
+
+
+def save_state(
+    sha: str,
+    active_source: Path,
+    *,
+    previous_commit: str = "",
+    previous_source: Path | None = None,
+) -> None:
     payload = {
         "repo": REPO,
         "branch": BRANCH,
         "commit": sha,
+        "active_source": str(active_source),
+        "previous_commit": previous_commit,
+        "previous_source": str(previous_source) if previous_source else "",
         "updated_at": datetime.now(timezone.utc).isoformat(),
         "runner_version": DEV_RUNNER_VERSION,
     }
@@ -316,55 +358,67 @@ def extract_source(zip_path: Path, destination_root: Path) -> Path:
 
 
 def sync_source() -> tuple[bool, str]:
-    """Zwraca (czy_zaktualizowano, commit). Brak internetu nie blokuje starego kodu."""
+    """Synchronizuje kod bez ruszania katalogu używanego przez uruchomioną wersję."""
     ensure_dirs()
     current = load_state()
-    current_sha = str(current.get("commit", ""))
+    current_sha = str(current.get("commit", "")).strip()
+    current_source = active_source_dir(current)
 
     try:
         remote_sha = latest_commit()
     except Exception as exc:
-        if SOURCE_DIR.exists() and (SOURCE_DIR / "app.py").exists():
+        if _valid_source(current_source):
             log(f"Brak aktualizacji online, uruchamiam cache: {exc}", "WARN")
             return False, current_sha or "offline"
         raise RuntimeError(
             "Nie można połączyć się z GitHubem i brak lokalnej kopii Metalbox."
         ) from exc
 
-    if remote_sha == current_sha and SOURCE_DIR.exists() and (SOURCE_DIR / "app.py").exists():
+    remote_source = _release_dir(remote_sha)
+
+    if remote_sha == current_sha and _valid_source(current_source):
         log(f"Źródła aktualne: {remote_sha[:12]}")
         return False, remote_sha
 
-    old_version = extract_app_version(SOURCE_DIR / "app.py") if SOURCE_DIR.exists() else "brak"
+    old_version = (
+        extract_app_version(current_source / "app.py")
+        if _valid_source(current_source)
+        else "brak"
+    )
     changes = compare_commits(current_sha, remote_sha)
     log(f"Nowy commit: {current_sha[:12] or '-'} -> {remote_sha[:12]}")
-    zip_path = TEMP_DIR / "source.zip"
-    staging_root = TEMP_DIR / "staging"
-    zip_path.unlink(missing_ok=True)
 
-    download_source_zip(remote_sha, zip_path)
-    extracted = extract_source(zip_path, staging_root)
+    if not _valid_source(remote_source):
+        zip_path = TEMP_DIR / f"source-{remote_sha}.zip"
+        staging_root = TEMP_DIR / f"staging-{remote_sha}"
+        zip_path.unlink(missing_ok=True)
+        shutil.rmtree(staging_root, ignore_errors=True)
 
-    # Walidacja podstawowa przed podmianą.
-    source_text = (extracted / "app.py").read_text(encoding="utf-8")
-    compile(source_text, str(extracted / "app.py"), "exec")
-    new_version = extract_app_version(extracted / "app.py")
-    checks_payload = load_update_checks(extracted, changes)
+        download_source_zip(remote_sha, zip_path)
+        extracted = extract_source(zip_path, staging_root)
 
-    if PREVIOUS_DIR.exists():
-        shutil.rmtree(PREVIOUS_DIR, ignore_errors=True)
+        # Walidujemy wszystkie moduły Pythona przed ustawieniem wersji jako aktywnej.
+        for py_file in extracted.glob("*.py"):
+            source_text = py_file.read_text(encoding="utf-8")
+            compile(source_text, str(py_file), "exec")
 
-    if SOURCE_DIR.exists():
-        os.replace(SOURCE_DIR, PREVIOUS_DIR)
+        remote_source.parent.mkdir(parents=True, exist_ok=True)
+        if remote_source.exists():
+            shutil.rmtree(remote_source, ignore_errors=True)
+        os.replace(extracted, remote_source)
 
-    try:
-        os.replace(extracted, SOURCE_DIR)
-    except Exception:
-        if not SOURCE_DIR.exists() and PREVIOUS_DIR.exists():
-            os.replace(PREVIOUS_DIR, SOURCE_DIR)
-        raise
+        shutil.rmtree(staging_root, ignore_errors=True)
+        zip_path.unlink(missing_ok=True)
 
-    save_state(remote_sha)
+    new_version = extract_app_version(remote_source / "app.py")
+    checks_payload = load_update_checks(remote_source, changes)
+
+    save_state(
+        remote_sha,
+        remote_source,
+        previous_commit=current_sha,
+        previous_source=current_source,
+    )
     save_update_state(
         old_version=old_version,
         new_version=new_version,
@@ -372,48 +426,60 @@ def sync_source() -> tuple[bool, str]:
         new_sha=remote_sha,
         checks_payload=checks_payload,
     )
-    shutil.rmtree(staging_root, ignore_errors=True)
-    zip_path.unlink(missing_ok=True)
+
     log(
         f"Źródła zaktualizowane: {old_version} -> {new_version}, "
-        f"{len(checks_payload.get('checks', []))} testów funkcjonalnych."
+        f"{len(checks_payload.get('checks', []))} testów funkcjonalnych. "
+        f"Aktywny katalog: {remote_source}"
     )
     return True, remote_sha
 
 
 def restore_previous_source() -> bool:
-    if not PREVIOUS_DIR.exists() or not (PREVIOUS_DIR / "app.py").exists():
+    state = load_state()
+    previous_commit = str(state.get("previous_commit", "")).strip()
+    previous_source_text = str(state.get("previous_source", "")).strip()
+
+    candidates: list[Path] = []
+    if previous_source_text:
+        candidates.append(Path(previous_source_text))
+    if previous_commit:
+        candidates.append(_release_dir(previous_commit))
+    candidates.extend([LEGACY_SOURCE_DIR, LEGACY_PREVIOUS_DIR])
+
+    previous_source = next(
+        (path for path in candidates if _valid_source(path)),
+        None,
+    )
+    if previous_source is None:
         return False
 
-    broken = ROOT / "broken"
-    if broken.exists():
-        shutil.rmtree(broken, ignore_errors=True)
+    broken_commit = str(state.get("commit", "")).strip()
+    broken_source = active_source_dir(state)
 
-    if SOURCE_DIR.exists():
-        os.replace(SOURCE_DIR, broken)
-
-    os.replace(PREVIOUS_DIR, SOURCE_DIR)
-
-    previous_state = load_state()
-    previous_state["commit"] = "rollback-local"
-    previous_state["updated_at"] = datetime.now(timezone.utc).isoformat()
-    previous_state["rollback"] = True
-    tmp = STATE_FILE.with_suffix(".tmp")
-    tmp.write_text(json.dumps(previous_state, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(tmp, STATE_FILE)
-
-    log("Przywrócono poprzednią lokalną kopię źródeł.", "WARN")
+    save_state(
+        previous_commit or "rollback-local",
+        previous_source,
+        previous_commit=broken_commit,
+        previous_source=broken_source,
+    )
+    log(
+        f"Rollback wskaźnika źródeł: {broken_source} -> {previous_source}",
+        "WARN",
+    )
     return True
 
 
 def run_source() -> int:
-    app_path = SOURCE_DIR / "app.py"
-    if not app_path.exists():
-        raise RuntimeError("Brak lokalnego app.py.")
+    state = load_state()
+    source_dir = active_source_dir(state)
+    if not _valid_source(source_dir):
+        raise RuntimeError("Brak aktywnej lokalnej wersji app.py.")
 
+    app_path = source_dir / "app.py"
     old_cwd = Path.cwd()
-    sys.path.insert(0, str(SOURCE_DIR))
-    os.chdir(SOURCE_DIR)
+    sys.path.insert(0, str(source_dir))
+    os.chdir(source_dir)
 
     try:
         runpy.run_path(str(app_path), run_name="__main__")
@@ -424,7 +490,7 @@ def run_source() -> int:
     finally:
         os.chdir(old_cwd)
         try:
-            sys.path.remove(str(SOURCE_DIR))
+            sys.path.remove(str(source_dir))
         except ValueError:
             pass
 
