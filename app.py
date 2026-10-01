@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Callable
 
 from PySide6.QtCore import QEvent, Qt, QTimer
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -45,7 +46,7 @@ from PySide6.QtWidgets import (
 )
 
 APP_NAME = "Metalbox"
-APP_VERSION = "0.0.9"
+APP_VERSION = "0.0.10"
 LOCAL_DATA_ROOT = Path(
     os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
 ) / "Metalbox"
@@ -612,7 +613,7 @@ def mock_message(parent, title: str = "Wydmuszka") -> None:
         parent,
         title,
         "To jest element docelowego interfejsu.\n"
-        "W wersji 0.0.9 nie zapisuje jeszcze danych produkcyjnych.",
+        "W wersji 0.0.10 nie zapisuje jeszcze danych produkcyjnych.",
     )
 
 
@@ -620,20 +621,26 @@ def card(title: str, value: str = "", note: str = "", width: int = 220) -> QFram
     frame = QFrame()
     frame.setObjectName("card")
     frame.setFixedWidth(sp(width))
+    frame.setMinimumHeight(sp(112))
     layout = QVBoxLayout(frame)
-    layout.setContentsMargins(sp(16), sp(12), sp(16), sp(12))
-    label = QLabel(title)
+    layout.setContentsMargins(sp(16), sp(13), sp(16), sp(13))
+    layout.setSpacing(sp(5))
+
+    label = QLabel(title.upper())
     label.setObjectName("cardTitle")
     layout.addWidget(label)
+
     if value:
         val = QLabel(value)
         val.setObjectName("cardValue")
         layout.addWidget(val)
+
     if note:
         hint = QLabel(note)
         hint.setWordWrap(True)
         hint.setObjectName("hint")
         layout.addWidget(hint)
+
     layout.addStretch(1)
     return frame
 
@@ -646,15 +653,39 @@ def compact_table(headers: list[str], rows: list[list[str]], widths: list[int], 
     table.setSelectionBehavior(QAbstractItemView.SelectRows)
     table.setSelectionMode(QAbstractItemView.SingleSelection)
     table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-    table.horizontalHeader().setSectionResizeMode(QHeaderView.Fixed)
+    table.setFocusPolicy(Qt.NoFocus)
+    table.setWordWrap(False)
+    table.setShowGrid(False)
+
+    header = table.horizontalHeader()
+    header.setSectionResizeMode(QHeaderView.Fixed)
+    header.setFixedHeight(sp(38))
+    header.setHighlightSections(False)
+
     scaled_widths = [sp(width) for width in widths]
     for column, width in enumerate(scaled_widths):
         table.setColumnWidth(column, width)
+
+    green_terms = {"AKTYWNY", "AKTYWNE", "GOTOWE", "ZAKOŃCZONE", "ZGOTOWE", "DOSTĘPNE"}
+    yellow_terms = {"WSTRZYMANE", "WYSOKI", "CZĘŚCIOWO GOTOWE", "PLANOWANY", "DO POPRAWKI"}
+    red_terms = {"BŁĄD", "ZŁOM", "OPÓŹNIONE", "ALARM", "KRYTYCZNY"}
+
     for row_index, row in enumerate(rows):
+        table.setRowHeight(row_index, sp(38))
         for column_index, value in enumerate(row):
-            table.setItem(row_index, column_index, QTableWidgetItem(str(value)))
-    table.setMinimumWidth(min(sum(scaled_widths) + sp(40), sp(1450)))
-    table.setMaximumWidth(sum(scaled_widths) + sp(40))
+            item = QTableWidgetItem(str(value))
+            normalized = str(value).strip().upper()
+            if normalized in green_terms:
+                item.setForeground(QColor("#67dc8e"))
+            elif normalized in yellow_terms:
+                item.setForeground(QColor("#e4bd68"))
+            elif normalized in red_terms:
+                item.setForeground(QColor("#eb7373"))
+            table.setItem(row_index, column_index, item)
+
+    total_width = sum(scaled_widths) + sp(24)
+    table.setMinimumWidth(min(total_width, sp(1480)))
+    table.setMaximumWidth(total_width)
     if height:
         table.setFixedHeight(sp(height))
     return table
@@ -733,7 +764,7 @@ class ConnectionDialog(QDialog):
                 self,
                 "Test połączenia",
                 "Konfiguracja wygląda poprawnie.\n\n"
-                "W wersji 0.0.9 prawdziwy Metalbox Server nie jest jeszcze podłączony.",
+                "W wersji 0.0.10 prawdziwy Metalbox Server nie jest jeszcze podłączony.",
             )
 
     def _accept_test_mode(self) -> None:
@@ -767,12 +798,19 @@ class Header(QWidget):
             sub.setMaximumWidth(sp(1050))
             titles.addWidget(sub)
 
-        back = QPushButton("← Pulpit główny")
+        back = QPushButton("←  Pulpit główny")
         back.setObjectName("secondary")
+        back.setMinimumWidth(sp(150))
+        back.setFixedHeight(sp(38))
         back.clicked.connect(go_home)
 
         layout.addLayout(titles)
         layout.addStretch(1)
+
+        version = QLabel(f"DEV  {APP_VERSION}")
+        version.setObjectName("versionChip")
+        layout.addWidget(version)
+        layout.addSpacing(sp(8))
         layout.addWidget(back)
 
 
@@ -788,6 +826,11 @@ class PageBase(QWidget):
         self.root.setContentsMargins(0, 0, 0, 0)
         self.root.setSpacing(sp(14))
         self.root.addWidget(Header(title, go_home, subtitle))
+
+        separator = QFrame()
+        separator.setObjectName("pageSeparator")
+        separator.setFixedHeight(sp(1))
+        self.root.addWidget(separator)
 
         # Zawartość wykorzystuje dostępną szerokość ekranu. Nie dzielimy jej
         # przez boczne stretch-e, które wcześniej zwężały widok do ok. 1/3.
@@ -816,8 +859,10 @@ class DepartmentPage(PageBase):
         self.root.addLayout(stats)
 
         controls = QHBoxLayout()
+        controls.setSpacing(sp(8))
         for text in ("Aktywne", "Kolejka", "Wstrzymane", "Zakończone"):
             btn = QPushButton(text)
+            btn.setFixedHeight(sp(36))
             if text == "Aktywne":
                 btn.setObjectName("primary")
             btn.clicked.connect(lambda checked=False, t=text: mock_message(self, t))
@@ -1688,8 +1733,8 @@ class SettingsPage(PageBase):
         super().__init__("Ustawienia", go_home, "Konfiguracja stanowiska i przyszłych modułów.")
 
         grid = QGridLayout()
-        grid.setHorizontalSpacing(14)
-        grid.setVerticalSpacing(14)
+        grid.setHorizontalSpacing(sp(14))
+        grid.setVerticalSpacing(sp(14))
         sections = [
             ("Połączenie / serwer", f"Serwer: {config.server_ip or 'nie ustawiono'}\nStanowisko: {config.station_name}", "Zmień połączenie"),
             ("Plan produkcji Excel", "Snapshot kopii • porównanie zmian • oryginał tylko do odczytu", "Konfiguruj"),
@@ -1707,7 +1752,7 @@ class SettingsPage(PageBase):
         for idx, (title, desc, action) in enumerate(sections):
             frame = QFrame()
             frame.setObjectName("settingsCard")
-            frame.setFixedSize(sp(345), sp(164))
+            frame.setFixedSize(sp(338), sp(188))
             layout = QVBoxLayout(frame)
             label = QLabel(title)
             label.setObjectName("sectionTitle")
@@ -1893,7 +1938,7 @@ class MainWindow(QMainWindow):
         titles = QVBoxLayout()
         brand = QLabel("METALBOX")
         brand.setObjectName("brand")
-        subtitle = QLabel(f"Pulpit produkcyjny • prototyp {APP_VERSION}")
+        subtitle = QLabel(f"Pulpit produkcyjny • Development {APP_VERSION}")
         subtitle.setObjectName("subtitle")
         titles.addWidget(brand)
         titles.addWidget(subtitle)
@@ -1911,11 +1956,12 @@ class MainWindow(QMainWindow):
         top.addWidget(profile_btn)
         outer.addLayout(top)
 
-        management = QHBoxLayout()
-        management.setSpacing(sp(8))
-        items = [
-            ("ZLECENIA", self.orders_page if hasattr(self, "orders_page") else None),
-        ]
+        management_frame = QFrame()
+        management_frame.setObjectName("managementBar")
+        management = QHBoxLayout(management_frame)
+        management.setContentsMargins(sp(8), sp(8), sp(8), sp(8))
+        management.setSpacing(sp(7))
+
         # Pages are created after home, therefore callbacks resolve attributes at click time.
         callbacks = [
             ("ZLECENIA", lambda: self.open_page(self.orders_page)),
@@ -1936,7 +1982,7 @@ class MainWindow(QMainWindow):
             btn.clicked.connect(callback)
             management.addWidget(btn)
         management.addStretch(1)
-        outer.addLayout(management)
+        outer.addWidget(management_frame)
 
         grid_wrap = QFrame()
         grid_wrap.setObjectName("gridWrap")
@@ -1946,17 +1992,22 @@ class MainWindow(QMainWindow):
         grid.setHorizontalSpacing(sp(11))
         grid.setVerticalSpacing(sp(11))
 
+        screen = QApplication.primaryScreen()
+        screen_width = screen.availableGeometry().width() if screen is not None else 1536
+        department_columns = 5 if screen_width >= 1450 else 4
+
         for idx, department in enumerate(DEPARTMENTS):
             btn = QPushButton(department)
             btn.setObjectName("departmentButton")
             btn.setFixedSize(sp(270), sp(76))
             btn.clicked.connect(lambda checked=False, d=department: self.open_department(d))
-            grid.addWidget(btn, idx // 5, idx % 5)
-        grid.setColumnStretch(5, 1)
+            grid.addWidget(btn, idx // department_columns, idx % department_columns)
+
+        grid.setColumnStretch(department_columns, 1)
         outer.addWidget(grid_wrap, alignment=Qt.AlignLeft)
 
         line = QHBoxLayout()
-        title = QLabel("Produkcja na bieżąco — dane demonstracyjne")
+        title = QLabel("Produkcja na bieżąco")
         title.setObjectName("sectionTitle")
         line.addWidget(title)
         line.addStretch(1)
@@ -2007,7 +2058,7 @@ class MainWindow(QMainWindow):
         bar.setValue(done)
         bar.setFormat(f"{done} / {total} szt. • %p%")
         status_label = QLabel(status)
-        status_label.setObjectName("hint")
+        status_label.setObjectName("statusHintPaused" if status == "WSTRZYMANE" else "statusHint")
 
         layout.addWidget(head)
         layout.addWidget(product_label)
@@ -2067,8 +2118,21 @@ QLabel#connectionWarning {
     font-weight: 800;
 }
 QLabel#pageTitle {
-    font-size: 26px;
+    font-size: 27px;
     font-weight: 900;
+}
+QLabel#versionChip {
+    background: #101814;
+    color: #67dc8e;
+    border: 1px solid #2d7547;
+    border-radius: 7px;
+    padding: 5px 9px;
+    font-size: 11px;
+    font-weight: 850;
+}
+QFrame#pageSeparator {
+    background: #272d29;
+    border: none;
 }
 QLabel#detailTitle {
     font-size: 23px;
@@ -2096,6 +2160,7 @@ QLabel#tvCardTitle {
     font-size: 18px;
     font-weight: 800;
 }
+QFrame#managementBar,
 QFrame#gridWrap,
 QFrame#orderCard,
 QFrame#progressCard,
@@ -2158,7 +2223,8 @@ QPushButton#departmentButton {
     font-size: 15px;
     font-weight: 850;
     text-align: left;
-    padding: 14px;
+    padding: 14px 16px;
+    border-left: 3px solid #2f8f52;
 }
 QPushButton#departmentButton:hover {
     background: #1a211d;
@@ -2168,8 +2234,11 @@ QPushButton#managementButton {
     background: #101315;
     font-size: 11px;
     font-weight: 850;
-    padding-left: 14px;
-    padding-right: 14px;
+    padding-left: 13px;
+    padding-right: 13px;
+}
+QPushButton#managementButton:hover {
+    background: #18201b;
 }
 QLabel#orderCode {
     min-width: 78px;
@@ -2201,6 +2270,16 @@ QLabel#progressHead {
 }
 QLabel#progressProduct {
     color: #b6bcb7;
+}
+QLabel#statusHint {
+    color: #68dc8e;
+    font-size: 11px;
+    font-weight: 800;
+}
+QLabel#statusHintPaused {
+    color: #e1b95f;
+    font-size: 11px;
+    font-weight: 800;
 }
 QLabel#routeBadge {
     background: #15331f;
@@ -2240,21 +2319,51 @@ QTableWidget {
     background: #101315;
     alternate-background-color: #15191b;
     border: 1px solid #292e2b;
-    gridline-color: #252a27;
+    border-radius: 8px;
+    gridline-color: transparent;
     selection-background-color: #1d5b36;
     selection-color: #ffffff;
+    padding: 2px;
 }
 QHeaderView::section {
     background: #171b1d;
-    color: #f3f5f3;
+    color: #dfe4e0;
     border: none;
     border-right: 1px solid #292e2b;
-    border-bottom: 1px solid #292e2b;
-    padding: 7px;
-    font-weight: 800;
+    border-bottom: 1px solid #343a36;
+    padding: 8px;
+    font-size: 11px;
+    font-weight: 850;
+}
+QFrame#settingsCard {
+    background: #141719;
+    border: 1px solid #292e2b;
+    border-radius: 10px;
 }
 QScrollArea {
     border: none;
+}
+QScrollBar:vertical {
+    background: #0e1112;
+    width: 10px;
+    margin: 0px;
+}
+QScrollBar::handle:vertical {
+    background: #343b36;
+    min-height: 28px;
+    border-radius: 5px;
+}
+QScrollBar::handle:vertical:hover {
+    background: #45835b;
+}
+QScrollBar:horizontal {
+    background: #0e1112;
+    height: 10px;
+}
+QScrollBar::handle:horizontal {
+    background: #343b36;
+    min-width: 28px;
+    border-radius: 5px;
 }
 """
 
