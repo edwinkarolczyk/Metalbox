@@ -609,12 +609,12 @@ class ClientConfig:
         )
 
 
-def mock_message(parent, title: str = "Wydmuszka") -> None:
+def mock_message(parent, title: str = "Metalbox Development") -> None:
     QMessageBox.information(
         parent,
         title,
-        "To jest element docelowego interfejsu.\n"
-        "W wersji 0.0.10 nie zapisuje jeszcze danych produkcyjnych.",
+        "Interfejs tej funkcji jest przygotowany.\n"
+        "Logika biznesowa zostanie podłączona w kolejnych etapach Development.",
     )
 
 
@@ -784,13 +784,13 @@ class ConnectionDialog(QDialog):
                 self,
                 "Test połączenia",
                 "Konfiguracja wygląda poprawnie.\n\n"
-                "W wersji 0.0.10 prawdziwy Metalbox Server nie jest jeszcze podłączony.",
+                "Metalbox Server nie jest jeszcze podłączony w tym etapie Development.",
             )
 
     def _accept_test_mode(self) -> None:
         self.use_test_mode = True
         self.ip_edit.setText("127.0.0.1")
-        self.station_edit.setText("TEST — wydmuszka")
+        self.station_edit.setText("TEST — Development")
         self.password_edit.setText("test")
         self.accept()
 
@@ -918,7 +918,7 @@ class DepartmentPage(PageBase):
             "Laser": (
                 "Laser / półprodukty",
                 "Bieżące cięcie: 1.435.135 • 420/1200 szt.",
-                "Bufor półproduktów: przyszła funkcja — produkcja również bez konkretnego ZL.",
+                "Planowane: produkcja półproduktów również bez konkretnego ZL.",
             ),
             "Zgrzewarki": (
                 "Obsada i akord",
@@ -928,22 +928,22 @@ class DepartmentPage(PageBase):
             "Malarnia": (
                 "Aktualny kolor",
                 "RAL 9011 • ZL-763 • 612/864 szt.",
-                "Docelowo: grupowanie po RAL, zużycie farby w kg i kolejka tylko z gotowych sztuk.",
+                "Planowane: grupowanie po RAL, zużycie farby w kg i kolejka tylko z gotowych sztuk.",
             ),
             "Pakownia": (
                 "Pakowanie",
                 "Najbliższa wysyłka: ZL-763 • 08.10",
-                "Docelowo: sposób pakowania z karty produktu, palety, etykiety i gotowość wysyłki.",
+                "Planowane: sposób pakowania z karty produktu, palety, etykiety i gotowość wysyłki.",
             ),
             "Magazyn": (
                 "Magazyn / bufory",
                 "Surowce • półprodukty • gotowe elementy",
-                "Docelowo: bufor półproduktów, rezerwacje dla ZL i przekazania między działami.",
+                "Planowane: bufor półproduktów, rezerwacje dla ZL i przekazania między działami.",
             ),
             "Spawalnia": (
                 "Spawalnia",
                 "2 aktywne zlecenia • 1 poprawka",
-                "Docelowo: sesje pracy, kontrola jakości i cofnięcia do naprawy.",
+                "Planowane: sesje pracy, kontrola jakości i cofnięcia do naprawy.",
             ),
         }
         if department not in configs:
@@ -1009,12 +1009,18 @@ class DepartmentPage(PageBase):
         box.addWidget(bar)
 
         bottom = QHBoxLayout()
-        info = QLabel("Zmiana I • obsada: 4 osoby" if idx == 0 else "Dane demonstracyjne")
+        info = QLabel("Zmiana I • obsada: 4 osoby" if idx == 0 else "Dane testowe")
         info.setObjectName("hint")
         bottom.addWidget(info)
         bottom.addStretch(1)
         for text in ("Rozpocznij", "Wstrzymaj", "Wznów", "Dodaj ilość", "Problem", "Szczegóły"):
             btn = QPushButton(text)
+            if text in {"Rozpocznij", "Wznów"}:
+                btn.setObjectName("primary")
+            elif text == "Wstrzymaj":
+                btn.setObjectName("warningGhost")
+            elif text == "Problem":
+                btn.setObjectName("dangerGhost")
             btn.clicked.connect(lambda checked=False, t=text: mock_message(self, t))
             bottom.addWidget(btn)
         box.addLayout(bottom)
@@ -1095,8 +1101,8 @@ class OrderDetailPage(PageBase):
         summary = QHBoxLayout()
         summary.addWidget(card("Postęp produkcji", "58%", "wszystkie etapy", 230))
         summary.addWidget(card("Gotowe do wysyłki", "31%", "ostatni ukończony etap", 230))
-        summary.addWidget(card("Prognoza", "18.10", "Planista — atrapa", 230))
-        summary.addWidget(card("Wąskie gardło", "Zgrzewarki", "dane demonstracyjne", 230))
+        summary.addWidget(card("Prognoza", "18.10", "Planista — symulacja", 230))
+        summary.addWidget(card("Wąskie gardło", "Zgrzewarki", "dane testowe", 230))
         summary.addStretch(1)
         self.root.addLayout(summary)
 
@@ -1141,6 +1147,8 @@ class OrderDetailPage(PageBase):
         actions = QHBoxLayout()
         for text in ("Historia", "Jakość / braki", "Dokumentacja", "Wysyłka", "Korekta"):
             btn = QPushButton(text)
+            if text == "Korekta":
+                btn.setObjectName("warningGhost")
             btn.clicked.connect(lambda checked=False, t=text: mock_message(self, t))
             actions.addWidget(btn)
         actions.addStretch(1)
@@ -1459,11 +1467,11 @@ class UserProfilePage(PageBase):
         super().__init__(
             "Profil / identyfikacja",
             go_home,
-            "Odczyt programu może być otwarty; zapis docelowo wymaga identyfikacji użytkownika.",
+            "Odczyt programu może być otwarty; operacje zapisu wymagają identyfikacji użytkownika.",
         )
         summary = QHBoxLayout()
         summary.addWidget(card("Użytkownik", "Nie zalogowano", "tryb stanowiskowy", 260))
-        summary.addWidget(card("Stanowisko", "TEST", "wydmuszka", 220))
+        summary.addWidget(card("Stanowisko", "TEST", "Development", 220))
         summary.addWidget(card("Uprawnienia", "Podgląd", "bez zapisu", 220))
         summary.addStretch(1)
         self.root.addLayout(summary)
@@ -1508,7 +1516,7 @@ class DiagnosticsPage(PageBase):
         panel.setMaximumWidth(sp(1000))
         pl = QVBoxLayout(panel)
         for label, value in [
-            ("Połączenie z serwerem", "Nieaktywne w wersji demonstracyjnej"),
+            ("Połączenie z serwerem", "Niepodłączone"),
             ("Import Excel", "Nieaktywny"),
             ("Ostatni snapshot", "—"),
             ("Baza centralna", "Niepodłączona"),
@@ -1613,7 +1621,7 @@ class ShippingPage(PageBase):
         super().__init__(
             "Wysyłki",
             go_home,
-            "Plan wysyłek, gotowość, palety i transport. Docelowo dane z arkusza WYSYŁKI.",
+            "Plan wysyłek, gotowość, palety i transport. Integracja z arkuszem WYSYŁKI jest planowana.",
         )
         controls = QHBoxLayout()
         for text in ("Dzisiaj", "Ten tydzień", "Niekompletne", "Transport", "Palety"):
@@ -2226,6 +2234,11 @@ QPushButton:hover {
     background: #202522;
     border-color: #45d477;
 }
+QPushButton:disabled {
+    background: #111315;
+    border-color: #252925;
+    color: #666d68;
+}
 QPushButton#primary {
     background: #2aa85a;
     border-color: #43cf73;
@@ -2238,6 +2251,15 @@ QPushButton#ghostGreen {
     background: #121815;
     border-color: #2d7547;
     color: #65dc8d;
+}
+QPushButton#warningGhost {
+    background: #1d1910;
+    border-color: #6c572d;
+    color: #e2bd68;
+}
+QPushButton#warningGhost:hover {
+    background: #302715;
+    border-color: #b9903f;
 }
 QPushButton#dangerGhost {
     background: #181313;
