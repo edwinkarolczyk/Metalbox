@@ -48,7 +48,7 @@ from PySide6.QtWidgets import (
 )
 
 APP_NAME = "Metalbox"
-APP_VERSION = "0.1.3"
+APP_VERSION = "0.1.4"
 LOCAL_DATA_ROOT = Path(
     os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
 ) / "Metalbox"
@@ -1032,8 +1032,18 @@ class DepartmentPage(PageBase):
 
         bottom = QHBoxLayout()
         remaining = max(0, total - done)
+        try:
+            capacity = self.store.get_department_order_capacity(
+                code,
+                self.department,
+            )
+            available_now = int(capacity["available_now"])
+        except ValueError:
+            available_now = 0
+
         info = QLabel(
-            f"Pozostało: {remaining} szt. • kolejność: {idx + 1}"
+            f"Pozostało: {remaining} szt. • dostępne teraz: {available_now} szt. • "
+            f"kolejność: {idx + 1}"
         )
         info.setObjectName("hint")
         bottom.addWidget(info)
@@ -1063,7 +1073,11 @@ class DepartmentPage(PageBase):
                     lambda checked=False, z=code: self._set_status(z, "AKTYWNE")
                 )
             elif text == "Dodaj ilość":
-                btn.setEnabled(status_text == "AKTYWNE" and remaining > 0)
+                btn.setEnabled(
+                    status_text == "AKTYWNE"
+                    and remaining > 0
+                    and available_now > 0
+                )
                 btn.clicked.connect(
                     lambda checked=False, z=code, r=remaining: self._add_quantity(z, r)
                 )
@@ -1141,13 +1155,37 @@ class DepartmentPage(PageBase):
         if remaining <= 0:
             return
 
+        try:
+            capacity = self.store.get_department_order_capacity(
+                code,
+                self.department,
+            )
+        except ValueError as exc:
+            QMessageBox.warning(self, "Nie można dodać ilości", str(exc))
+            return
+
+        available_now = int(capacity["available_now"])
+        demand_remaining = int(capacity["remaining"])
+
+        if available_now <= 0:
+            QMessageBox.information(
+                self,
+                "Brak dostępnych sztuk",
+                f"{code} • {self.department}\n\n"
+                "Poprzedni etap nie przekazał jeszcze kolejnych dobrych sztuk.",
+            )
+            return
+
         quantity, ok = QInputDialog.getInt(
             self,
             "Dodaj wykonaną ilość",
-            f"{code} • {self.department}\nPozostało: {remaining} szt.\n\nDodaj:",
+            f"{code} • {self.department}\n"
+            f"Dostępne teraz: {available_now} szt.\n"
+            f"Pozostało wg planu: {demand_remaining} szt.\n\n"
+            "Dodaj:",
             1,
             1,
-            remaining,
+            available_now,
             1,
         )
         if not ok:
