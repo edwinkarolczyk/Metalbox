@@ -958,6 +958,55 @@ class MetalboxStore:
     def dashboard_alert_count(self) -> int:
         return len(self.list_alerts())
 
+    def list_audit_events(
+        self,
+        *,
+        entity_type: str | None = None,
+        entity_id: str | None = None,
+        limit: int = 200,
+    ) -> list[dict]:
+        where: list[str] = []
+        params: list[object] = []
+
+        if entity_type:
+            where.append("entity_type = ?")
+            params.append(entity_type)
+        if entity_id:
+            where.append("entity_id = ?")
+            params.append(entity_id)
+
+        where_sql = (" WHERE " + " AND ".join(where)) if where else ""
+        params.append(max(1, min(int(limit), 1000)))
+
+        with self._connect() as db:
+            rows = db.execute(
+                f"""
+                SELECT
+                    occurred_at,
+                    actor,
+                    action,
+                    entity_type,
+                    entity_id,
+                    payload_json
+                FROM audit_events
+                {where_sql}
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                params,
+            ).fetchall()
+
+        result = []
+        for row in rows:
+            item = dict(row)
+            try:
+                item["payload"] = json.loads(item.pop("payload_json"))
+            except (ValueError, TypeError):
+                item["payload"] = {}
+                item.pop("payload_json", None)
+            result.append(item)
+        return result
+
     def add_audit_event(
         self,
         *,
