@@ -48,7 +48,7 @@ from PySide6.QtWidgets import (
 )
 
 APP_NAME = "Metalbox"
-APP_VERSION = "0.1.6"
+APP_VERSION = "0.1.7"
 LOCAL_DATA_ROOT = Path(
     os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
 ) / "Metalbox"
@@ -578,6 +578,82 @@ SHIPPING_ROWS = [
 
 
 @dataclass
+class OrderHistoryDialog(QDialog):
+    def __init__(self, store: MetalboxStore, code: str, parent=None):
+        super().__init__(parent)
+        self.store = store
+        self.code = code
+        self.setWindowTitle(f"Historia {code}")
+        self.setModal(True)
+        self.setMinimumSize(sp(980), sp(560))
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(sp(20), sp(18), sp(20), sp(18))
+        root.setSpacing(sp(12))
+
+        root.addWidget(section_heading(
+            f"Historia {code}",
+            "Zdarzenia zapisane w audit_events — najnowsze na górze.",
+        ))
+
+        events = self.store.list_audit_events(
+            entity_type="order",
+            entity_id=code,
+            limit=300,
+        )
+
+        rows = []
+        action_labels = {
+            "seed_created": "Utworzono dane Development",
+            "order_opened": "Otwarto zlecenie",
+            "operation_status_changed": "Zmieniono status operacji",
+            "good_quantity_added": "Dodano dobrą ilość",
+        }
+
+        for event in events:
+            occurred_at = str(event.get("occurred_at", ""))
+            try:
+                dt = datetime.fromisoformat(occurred_at)
+                occurred_at = dt.strftime("%d.%m.%Y %H:%M:%S")
+            except ValueError:
+                pass
+
+            action = str(event.get("action", ""))
+            payload = event.get("payload", {})
+            payload_text = json.dumps(
+                payload,
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+
+            rows.append([
+                occurred_at,
+                str(event.get("actor", "—")),
+                action_labels.get(action, action),
+                payload_text,
+            ])
+
+        table = compact_table(
+            ["Czas", "Użytkownik", "Akcja", "Dane"],
+            rows,
+            [165, 180, 240, 500],
+            390,
+        )
+        root.addWidget(table)
+
+        footer = QHBoxLayout()
+        count = QLabel(f"{len(rows)} zdarzeń")
+        count.setObjectName("hint")
+        footer.addWidget(count)
+        footer.addStretch(1)
+
+        close = QPushButton("Zamknij")
+        close.setObjectName("primary")
+        close.clicked.connect(self.accept)
+        footer.addWidget(close)
+        root.addLayout(footer)
+
+
 class ClientConfig:
     server_ip: str = ""
     station_name: str = "Stanowisko produkcyjne"
@@ -1416,7 +1492,11 @@ class OrderDetailPage(PageBase):
             btn = QPushButton(text)
             if text == "Korekta":
                 btn.setObjectName("warningGhost")
-            btn.clicked.connect(lambda checked=False, t=text: mock_message(self, t))
+
+            if text == "Historia":
+                btn.clicked.connect(self._open_history)
+            else:
+                btn.clicked.connect(lambda checked=False, t=text: mock_message(self, t))
             actions.addWidget(btn)
         actions.addStretch(1)
         self.root.addLayout(actions)
@@ -1449,6 +1529,16 @@ class OrderDetailPage(PageBase):
         layout.addWidget(hint)
         layout.addStretch(1)
         return frame, value_label
+
+    def _open_history(self) -> None:
+        if not self._current_code:
+            return
+        dialog = OrderHistoryDialog(
+            self.store,
+            self._current_code,
+            self,
+        )
+        dialog.exec()
 
     def set_order(self, code: str) -> None:
         order = self.store.get_order(code)
