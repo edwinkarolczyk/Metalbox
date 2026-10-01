@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 from dataclasses import dataclass
@@ -35,7 +36,12 @@ from PySide6.QtWidgets import (
 
 APP_NAME = "Metalbox"
 APP_VERSION = "0.0.6"
-CONFIG_FILE = Path(__file__).resolve().with_name("metalbox_client.json")
+LOCAL_DATA_ROOT = Path(
+    os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
+) / "Metalbox"
+CONFIG_DIR = LOCAL_DATA_ROOT / "config"
+CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+CONFIG_FILE = CONFIG_DIR / "metalbox_client.json"
 
 # Projekt bazowy UI: 1536x864. Interfejs skaluje się proporcjonalnie
 # do dostępnej przestrzeni ekranu, z limitami dla małych i bardzo dużych ekranów.
