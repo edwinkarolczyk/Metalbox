@@ -48,7 +48,7 @@ from PySide6.QtWidgets import (
 )
 
 APP_NAME = "Metalbox"
-APP_VERSION = "0.1.1"
+APP_VERSION = "0.1.2"
 LOCAL_DATA_ROOT = Path(
     os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
 ) / "Metalbox"
@@ -874,21 +874,24 @@ class PageBase(QWidget):
 
 
 class DepartmentPage(PageBase):
-    def __init__(self, department: str, go_home: Callable):
+    def __init__(self, department: str, go_home: Callable, store: MetalboxStore):
         super().__init__(
             department,
             go_home,
             "Kolejka działu i bieżąca produkcja. Wszystkie dane poniżej są demonstracyjne.",
         )
         self.department = department
+        self.store = store
+        self.queue_rows = self.store.list_department_queue(department)
+        summary = self.store.department_summary(department)
 
         stats = QHBoxLayout()
         stats.setSpacing(sp(12))
         for title, value, note in [
-            ("Aktywne", "2", "zlecenia"),
-            ("Oczekuje", "4", "w kolejce"),
-            ("Wstrzymane", "1", "wymaga uwagi"),
-            ("Do wykonania", "1 826", "szt."),
+            ("Aktywne", str(summary["active"]), "zlecenia"),
+            ("Oczekuje", str(summary["waiting"]), "w kolejce"),
+            ("Wstrzymane", str(summary["paused"]), "wymaga uwagi"),
+            ("Do wykonania", f'{summary["remaining_qty"]:,}'.replace(",", " "), "szt."),
         ]:
             stats.addWidget(card(title, value, note, 205))
         stats.addStretch(1)
@@ -923,8 +926,28 @@ class DepartmentPage(PageBase):
         cards = QVBoxLayout(body)
         cards.setContentsMargins(0, 0, 0, 0)
         cards.setSpacing(sp(12))
-        for idx, order in enumerate(DEPARTMENT_ORDER_PROGRESS):
-            cards.addWidget(self._order_card(*order, idx))
+        if not self.queue_rows:
+            empty = QFrame()
+            empty.setObjectName("panel")
+            empty_layout = QVBoxLayout(empty)
+            empty_layout.setContentsMargins(sp(18), sp(18), sp(18), sp(18))
+            empty_layout.addWidget(section_heading("Brak zleceń w kolejce"))
+            hint = QLabel("Dla tego działu nie ma obecnie pozycji w bazie Development.")
+            hint.setObjectName("hint")
+            empty_layout.addWidget(hint)
+            cards.addWidget(empty)
+        else:
+            for idx, order in enumerate(self.queue_rows):
+                cards.addWidget(
+                    self._order_card(
+                        str(order["code"]),
+                        str(order["products"] or "—"),
+                        int(order["planned_qty"]),
+                        int(order["good_qty"]),
+                        str(order["status"]),
+                        idx,
+                    )
+                )
         cards.addStretch(1)
         scroll.setWidget(body)
         self.root.addWidget(scroll, 1)
@@ -1025,7 +1048,10 @@ class DepartmentPage(PageBase):
         box.addWidget(bar)
 
         bottom = QHBoxLayout()
-        info = QLabel("Zmiana I • obsada: 4 osoby" if idx == 0 else "Dane testowe")
+        remaining = max(0, total - done)
+        info = QLabel(
+            f"Pozostało: {remaining} szt. • kolejność: {idx + 1}"
+        )
         info.setObjectName("hint")
         bottom.addWidget(info)
         bottom.addStretch(1)
@@ -2052,7 +2078,7 @@ class MainWindow(QMainWindow):
 
         self.department_pages: dict[str, QWidget] = {}
         for department in DEPARTMENTS:
-            page = DepartmentPage(department, self.go_home)
+            page = DepartmentPage(department, self.go_home, self.store)
             self.department_pages[department] = page
             self.stack.addWidget(page)
 
