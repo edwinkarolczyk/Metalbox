@@ -7,8 +7,12 @@ import json
 import os
 import re
 import secrets
+import shutil
 import sys
+import traceback
+import zipfile
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
@@ -40,14 +44,17 @@ from PySide6.QtWidgets import (
 )
 
 APP_NAME = "Metalbox"
-APP_VERSION = "0.0.6"
+APP_VERSION = "0.0.7"
 LOCAL_DATA_ROOT = Path(
     os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
 ) / "Metalbox"
 CONFIG_DIR = LOCAL_DATA_ROOT / "config"
+LOG_DIR = LOCAL_DATA_ROOT / "logs"
 CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+LOG_DIR.mkdir(parents=True, exist_ok=True)
 CONFIG_FILE = CONFIG_DIR / "metalbox_client.json"
 ACCESS_FILE = CONFIG_DIR / "access.json"
+APP_LOG_FILE = LOG_DIR / "metalbox.log"
 
 # Projekt bazowy UI: 1536x864. Interfejs skaluje się proporcjonalnie
 # do dostępnej przestrzeni ekranu, z limitami dla małych i bardzo dużych ekranów.
@@ -69,6 +76,138 @@ def configure_ui_scale(app: QApplication) -> float:
 
 def sp(value: int | float) -> int:
     return max(1, int(round(float(value) * UI_SCALE)))
+
+
+def app_log(message: str, level: str = "INFO") -> None:
+    """Lekki log lokalny aplikacji. Nie zapisujemy haseł ani danych uwierzytelniających."""
+    stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        with APP_LOG_FILE.open("a", encoding="utf-8") as handle:
+            handle.write(f"[{stamp}] [{level}] {message}\n")
+    except OSError:
+        pass
+
+
+def install_exception_logger() -> None:
+    original_hook = sys.excepthook
+
+    def _hook(exc_type, exc_value, exc_traceback):
+        details = "".join(traceback.format_exception(exc_type, exc_value, exc_traceback))
+        app_log("Nieobsłużony wyjątek:\n" + details, "ERROR")
+        original_hook(exc_type, exc_value, exc_traceback)
+
+    sys.excepthook = _hook
+
+
+def _desktop_directory() -> Path:
+    """Zwraca systemowy Pulpit, z bezpiecznym fallbackiem."""
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            buffer = ctypes.create_unicode_buffer(260)
+            # CSIDL_DESKTOPDIRECTORY = 0x0010
+            result = ctypes.windll.shell32.SHGetFolderPathW(None, 0x0010, None, 0, buffer)
+            if result == 0 and buffer.value:
+                path = Path(buffer.value)
+                path.mkdir(parents=True, exist_ok=True)
+                return path
+        except Exception:
+            pass
+
+    candidates = [
+        Path(os.environ.get("OneDrive", "")) / "Desktop" if os.environ.get("OneDrive") else None,
+        Path.home() / "Desktop",
+        Path.home(),
+    ]
+    for candidate in candidates:
+        if candidate is not None and candidate.exists():
+            return candidate
+    return Path.home()
+
+
+def _safe_json(path: Path) -> dict:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError, TypeError):
+        return {}
+
+
+def export_diagnostics(parent, config: "ClientConfig") -> Path | None:
+    """Eksportuje diagnostykę jednym kliknięciem. Plik access.json jest celowo pomijany."""
+    stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    destination = _desktop_directory() / f"Metalbox-diagnostyka-{stamp}.zip"
+    launcher_log = LOG_DIR / "launcher.log"
+    installed_file = LOCAL_DATA_ROOT / "installed.json"
+    launcher_config = CONFIG_DIR / "launcher.json"
+
+    installed = _safe_json(installed_file)
+    launcher_settings = _safe_json(launcher_config)
+
+    diagnostic_lines = [
+        "METALBOX — DIAGNOSTYKA",
+        f"Data: {datetime.now().isoformat(timespec='seconds')}",
+        f"Wersja aplikacji: {APP_VERSION}",
+        f"Python: {sys.version.split()[0]}",
+        f"Platforma: {sys.platform}",
+        f"LOCAL_DATA_ROOT: {LOCAL_DATA_ROOT}",
+        "",
+        "STANOWISKO",
+        f"Serwer: {config.server_ip or 'nie ustawiono'}",
+        f"Nazwa stanowiska: {config.station_name}",
+        f"Tryb testowy: {config.test_mode}",
+        f"Powrót po bezczynności: {config.inactivity_seconds} s",
+        "",
+        "LAUNCHER",
+        f"Kanał: {launcher_settings.get('channel', 'brak danych')}",
+        f"Tryb aktualizacji: {launcher_settings.get('update_mode', 'brak danych')}",
+        f"Zainstalowana wersja: {installed.get('version', 'brak danych')}",
+        f"Build: {installed.get('build', 'brak danych')}",
+        f"Commit: {installed.get('commit', 'brak danych')}",
+        "",
+        "BEZPIECZEŃSTWO",
+        "Hasła i plik access.json NIE są dołączane do paczki.",
+    ]
+
+    try:
+        app_log(f"Eksport diagnostyki do {destination}")
+        with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr("diagnostyka.txt", "\n".join(diagnostic_lines))
+
+            if APP_LOG_FILE.exists():
+                archive.write(APP_LOG_FILE, "logs/metalbox.log")
+            if launcher_log.exists():
+                archive.write(launcher_log, "logs/launcher.log")
+            if installed_file.exists():
+                archive.write(installed_file, "stan/installed.json")
+
+            # launcher.json nie zawiera haseł, ale filtrujemy tylko znane bezpieczne pola.
+            safe_launcher = {
+                "channel": launcher_settings.get("channel"),
+                "update_mode": launcher_settings.get("update_mode"),
+                "auto_launch": launcher_settings.get("auto_launch"),
+                "autostart_windows": launcher_settings.get("autostart_windows"),
+                "keep_backups": launcher_settings.get("keep_backups"),
+            }
+            archive.writestr(
+                "stan/launcher.json",
+                json.dumps(safe_launcher, ensure_ascii=False, indent=2),
+            )
+
+        QMessageBox.information(
+            parent,
+            "Logi zapisane",
+            f"Gotowe. Paczka diagnostyczna została zapisana na Pulpicie:\n\n{destination.name}",
+        )
+        return destination
+    except Exception as exc:
+        app_log(f"Błąd eksportu diagnostyki: {exc}", "ERROR")
+        QMessageBox.critical(
+            parent,
+            "Błąd eksportu",
+            f"Nie udało się zapisać paczki diagnostycznej:\n{exc}",
+        )
+        return None
 
 
 def _derive_password_hash(password: str, salt: bytes, iterations: int = 240_000) -> bytes:
@@ -146,6 +285,7 @@ def ensure_access_password(parent=None) -> bool:
                 continue
 
             _save_access_record(first)
+            app_log("Ustawiono hasło dostępu do aplikacji.")
             QMessageBox.information(
                 parent,
                 "Hasło zapisane",
@@ -164,8 +304,10 @@ def ensure_access_password(parent=None) -> bool:
         if not ok:
             return False
         if _verify_password(password):
+            app_log("Poprawne uwierzytelnienie hasłem.")
             return True
         attempts += 1
+        app_log(f"Błędne hasło — próba {attempts}/5.", "WARN")
         QMessageBox.warning(
             parent,
             "Błędne hasło",
@@ -331,7 +473,7 @@ def mock_message(parent, title: str = "Wydmuszka") -> None:
         parent,
         title,
         "To jest element docelowego interfejsu.\n"
-        "W wersji 0.0.3 nie zapisuje jeszcze danych produkcyjnych.",
+        "W wersji 0.0.7 nie zapisuje jeszcze danych produkcyjnych.",
     )
 
 
@@ -452,7 +594,7 @@ class ConnectionDialog(QDialog):
                 self,
                 "Test połączenia",
                 "Konfiguracja wygląda poprawnie.\n\n"
-                "W wersji 0.0.3 prawdziwy Metalbox Server nie jest jeszcze podłączony.",
+                "W wersji 0.0.7 prawdziwy Metalbox Server nie jest jeszcze podłączony.",
             )
 
     def _accept_test_mode(self) -> None:
@@ -1365,8 +1507,8 @@ class TVPage(PageBase):
         self.root.addWidget(title)
 
         grid = QGridLayout()
-        grid.setHorizontalSpacing(14)
-        grid.setVerticalSpacing(14)
+        grid.setHorizontalSpacing(sp(14))
+        grid.setVerticalSpacing(sp(14))
         for idx, (code, product, total, done, status) in enumerate(DEPARTMENT_ORDER_PROGRESS):
             frame = QFrame()
             frame.setObjectName("tvCard")
@@ -1396,7 +1538,14 @@ class TVPage(PageBase):
 
 
 class SettingsPage(PageBase):
-    def __init__(self, config: ClientConfig, go_home: Callable, change_connection: Callable, open_diagnostics: Callable):
+    def __init__(
+        self,
+        config: ClientConfig,
+        go_home: Callable,
+        change_connection: Callable,
+        open_diagnostics: Callable,
+        export_logs: Callable,
+    ):
         super().__init__("Ustawienia", go_home, "Konfiguracja stanowiska i przyszłych modułów.")
 
         grid = QGridLayout()
@@ -1414,12 +1563,12 @@ class SettingsPage(PageBase):
             ("Jakość", "Braki • poprawki • złom • cofnięcia etapów", "Konfiguruj"),
             ("Wysyłki", "Palety • gotowość • transport • częściowa wysyłka", "Konfiguruj"),
             ("Motyw", "Czerń / biel / grafit + zielone akcenty", "Motywy"),
-            ("Diagnostyka", "Wersja • połączenie • logi • stan klienta", "Otwórz"),
+            ("Diagnostyka i logi", "1 klik → log Metalbox + Launcher + stan wersji • zapis ZIP na Pulpicie", "Pobierz logi"),
         ]
         for idx, (title, desc, action) in enumerate(sections):
             frame = QFrame()
             frame.setObjectName("settingsCard")
-            frame.setFixedSize(sp(345), sp(150))
+            frame.setFixedSize(sp(345), sp(164))
             layout = QVBoxLayout(frame)
             label = QLabel(title)
             label.setObjectName("sectionTitle")
@@ -1432,8 +1581,16 @@ class SettingsPage(PageBase):
             btn = QPushButton(action)
             if idx == 0:
                 btn.clicked.connect(change_connection)
-            elif title == "Diagnostyka":
-                btn.clicked.connect(open_diagnostics)
+            elif title == "Diagnostyka i logi":
+                btn.setObjectName("primary")
+                btn.clicked.connect(export_logs)
+                layout.addWidget(btn)
+
+                details_btn = QPushButton("Podgląd diagnostyki")
+                details_btn.clicked.connect(open_diagnostics)
+                layout.addWidget(details_btn)
+                grid.addWidget(frame, idx // 4, idx % 4)
+                continue
             else:
                 btn.clicked.connect(lambda checked=False, t=title: mock_message(self, t))
             layout.addWidget(btn)
@@ -1481,6 +1638,7 @@ class MainWindow(QMainWindow):
             self.go_home,
             self._change_connection,
             lambda: self.open_page(self.diagnostics_page),
+            lambda: export_diagnostics(self, self.config),
         )
 
         for page in (
@@ -1524,6 +1682,7 @@ class MainWindow(QMainWindow):
 
     def open_page(self, page: QWidget) -> None:
         self.stack.setCurrentWidget(page)
+        app_log(f"Otwarty ekran: {page.__class__.__name__}")
         self._restart_inactivity_timer()
 
     def open_department(self, department: str) -> None:
@@ -1680,6 +1839,10 @@ class MainWindow(QMainWindow):
         self.config.test_mode = dialog.use_test_mode
         self.config.configured = True
         self.config.save()
+        app_log(
+            f"Zmieniono konfigurację stanowiska: serwer={self.config.server_ip or '-'}, "
+            f"stanowisko={self.config.station_name}, test_mode={self.config.test_mode}"
+        )
         QMessageBox.information(
             self,
             "Zapisano",
@@ -1900,6 +2063,8 @@ def main() -> int:
     app.setApplicationName(APP_NAME)
     configure_ui_scale(app)
     app.setStyleSheet(scaled_stylesheet(STYLESHEET))
+    install_exception_logger()
+    app_log(f"Start Metalbox {APP_VERSION}")
 
     if not ensure_access_password():
         return 0
