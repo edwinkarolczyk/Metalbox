@@ -28,6 +28,7 @@ PREVIOUS_DIR = ROOT / "previous"
 TEMP_DIR = ROOT / "temp"
 LOG_DIR = LOCAL_APPDATA / "Metalbox" / "logs"
 STATE_FILE = ROOT / "source_state.json"
+UPDATE_STATE_FILE = ROOT / "update_state.json"
 LOG_FILE = LOG_DIR / "dev-runner.log"
 
 
@@ -87,6 +88,63 @@ def latest_commit() -> str:
         raise RuntimeError("GitHub nie zwrócił poprawnego SHA commita.")
     return sha
 
+def compare_commits(old_sha: str, new_sha: str) -> list[dict]:
+    if not old_sha or old_sha == new_sha or old_sha in {"offline", "rollback-local"}:
+        return []
+    try:
+        raw = github_bytes(f"{API_BASE}/compare/{old_sha}...{new_sha}")
+        data = json.loads(raw.decode("utf-8"))
+        changes = []
+        for commit in data.get("commits", []):
+            sha = str(commit.get("sha", ""))
+            message = str(commit.get("commit", {}).get("message", "")).splitlines()[0].strip()
+            if message:
+                changes.append({"sha": sha[:12], "message": message})
+        return changes
+    except Exception as exc:
+        log(f"Nie udało się pobrać listy zmian: {exc}", "WARN")
+        return []
+
+
+def extract_app_version(path: Path) -> str:
+    try:
+        text = path.read_text(encoding="utf-8")
+        match = __import__("re").search(r'APP_VERSION\s*=\s*["\']([^"\']+)["\']', text)
+        return match.group(1) if match else "nieznana"
+    except OSError:
+        return "nieznana"
+
+
+def save_update_state(
+    old_version: str,
+    new_version: str,
+    old_sha: str,
+    new_sha: str,
+    changes: list[dict],
+) -> None:
+    payload = {
+        "schema": 1,
+        "status": "updated",
+        "old_version": old_version,
+        "new_version": new_version,
+        "old_commit": old_sha,
+        "new_commit": new_sha,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "changes": [
+            {
+                "id": f"{item.get('sha', '')}:{index}",
+                "sha": item.get("sha", ""),
+                "text": item.get("message", ""),
+                "checked": False,
+            }
+            for index, item in enumerate(changes)
+        ],
+    }
+    tmp = UPDATE_STATE_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, UPDATE_STATE_FILE)
+
+
 
 def download_source_zip(sha: str, destination: Path) -> None:
     request = urllib.request.Request(
@@ -135,6 +193,8 @@ def sync_source() -> tuple[bool, str]:
         log(f"Źródła aktualne: {remote_sha[:12]}")
         return False, remote_sha
 
+    old_version = extract_app_version(SOURCE_DIR / "app.py") if SOURCE_DIR.exists() else "brak"
+    changes = compare_commits(current_sha, remote_sha)
     log(f"Nowy commit: {current_sha[:12] or '-'} -> {remote_sha[:12]}")
     zip_path = TEMP_DIR / "source.zip"
     staging_root = TEMP_DIR / "staging"
@@ -146,6 +206,7 @@ def sync_source() -> tuple[bool, str]:
     # Walidacja podstawowa przed podmianą.
     source_text = (extracted / "app.py").read_text(encoding="utf-8")
     compile(source_text, str(extracted / "app.py"), "exec")
+    new_version = extract_app_version(extracted / "app.py")
 
     if PREVIOUS_DIR.exists():
         shutil.rmtree(PREVIOUS_DIR, ignore_errors=True)
@@ -161,9 +222,19 @@ def sync_source() -> tuple[bool, str]:
         raise
 
     save_state(remote_sha)
+    save_update_state(
+        old_version=old_version,
+        new_version=new_version,
+        old_sha=current_sha or "brak",
+        new_sha=remote_sha,
+        changes=changes,
+    )
     shutil.rmtree(staging_root, ignore_errors=True)
     zip_path.unlink(missing_ok=True)
-    log(f"Źródła zaktualizowane do {remote_sha[:12]}")
+    log(
+        f"Źródła zaktualizowane: {old_version} -> {new_version}, "
+        f"{len(changes)} zmian."
+    )
     return True, remote_sha
 
 
