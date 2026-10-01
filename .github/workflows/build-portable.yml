@@ -34,8 +34,8 @@ jobs:
       - name: Read versions
         shell: pwsh
         run: |
-          $appVersion = python -c "import re; s=open('app.py',encoding='utf-8').read(); print(re.search(r'APP_VERSION\s*=\s*[\"\'']([^\"\'']+)',s).group(1))"
-          $launcherVersion = python -c "import re; s=open('launcher.py',encoding='utf-8').read(); print(re.search(r'LAUNCHER_VERSION\s*=\s*[\"\'']([^\"\'']+)',s).group(1))"
+          $appVersion = python -c "import app; print(app.APP_VERSION)"
+          $launcherVersion = python -c "import launcher; print(launcher.LAUNCHER_VERSION)"
           "APP_VERSION=$appVersion" | Out-File -FilePath $env:GITHUB_ENV -Append
           "LAUNCHER_VERSION=$launcherVersion" | Out-File -FilePath $env:GITHUB_ENV -Append
 
