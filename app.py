@@ -48,7 +48,7 @@ from PySide6.QtWidgets import (
 )
 
 APP_NAME = "Metalbox"
-APP_VERSION = "0.1.7"
+APP_VERSION = "0.1.8"
 LOCAL_DATA_ROOT = Path(
     os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
 ) / "Metalbox"
@@ -211,6 +211,7 @@ def export_diagnostics(parent, config: "ClientConfig") -> Path | None:
                 json.dumps(safe_launcher, ensure_ascii=False, indent=2),
             )
 
+        mark_update_check("logs:export")
         QMessageBox.information(
             parent,
             "Logi zapisane",
@@ -242,14 +243,47 @@ def save_dev_update_state(data: dict) -> None:
     os.replace(tmp, DEV_UPDATE_STATE_FILE)
 
 
+def mark_update_check(trigger: str) -> bool:
+    """Automatycznie zalicza punkt testu aktualizacji po wykonaniu realnej czynności."""
+    state = load_dev_update_state()
+    if not state or str(state.get("new_version", "")) != APP_VERSION:
+        return False
+
+    changes = state.get("changes", [])
+    if not isinstance(changes, list):
+        return False
+
+    changed = False
+    for item in changes:
+        if str(item.get("trigger", "")) != trigger:
+            continue
+        if str(item.get("note", "")).strip():
+            continue
+        if bool(item.get("checked", False)):
+            continue
+
+        item["checked"] = True
+        item["problem"] = False
+        item["checked_at"] = datetime.now().isoformat(timespec="seconds")
+        changed = True
+
+    if changed:
+        save_dev_update_state(state)
+        app_log(f"Automatycznie zaliczono test aktualizacji: {trigger}")
+    return changed
+
+
 class UpdateChecklistDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Metalbox — zmiany po aktualizacji")
-        self.setModal(True)
-        self.setMinimumWidth(sp(720))
-        self.setMinimumHeight(sp(460))
+        self.setWindowTitle("Metalbox — test zmian po aktualizacji")
+        self.setModal(False)
+        self.setWindowModality(Qt.NonModal)
+        self.setWindowFlag(Qt.WindowStaysOnTopHint, True)
+        self.setMinimumSize(sp(760), sp(600))
+        self.resize(sp(820), sp(680))
         self.state = load_dev_update_state()
+        self.rows: list[dict] = []
 
         root = QVBoxLayout(self)
         root.setContentsMargins(sp(20), sp(18), sp(20), sp(18))
@@ -257,20 +291,25 @@ class UpdateChecklistDialog(QDialog):
 
         old_version = str(self.state.get("old_version", "—"))
         new_version = str(self.state.get("new_version", APP_VERSION))
-        old_commit = str(self.state.get("old_commit", "—"))[:12]
-        new_commit = str(self.state.get("new_commit", "—"))[:12]
 
-        title = QLabel(f"Zmiany: {old_version}  →  {new_version}")
+        title = QLabel(f"Aktualizacja: {old_version}  →  {new_version}")
         title.setObjectName("detailTitle")
         root.addWidget(title)
 
-        meta = QLabel(f"{old_commit}  →  {new_commit}")
-        meta.setObjectName("hint")
-        root.addWidget(meta)
+        update_title = QLabel(str(self.state.get("title", "Zmiany po aktualizacji")))
+        update_title.setObjectName("sectionHeader")
+        root.addWidget(update_title)
+
+        description = str(self.state.get("description", "")).strip()
+        if description:
+            desc = QLabel(description)
+            desc.setWordWrap(True)
+            desc.setObjectName("hint")
+            root.addWidget(desc)
 
         info = QLabel(
-            "Kliknij pozycję, aby zaznaczyć ją jako sprawdzoną. "
-            "Kliknij ponownie, aby odznaczyć. Przy następnej aktualizacji lista zostanie zastąpiona nową."
+            "Testuj normalnie program. Metalbox sam zaznaczy punkt po wykonaniu opisanej czynności. "
+            "Jeśli coś nie działa, wpisz uwagę pod tym punktem — wtedy zostanie oznaczony jako DO POPRAWY."
         )
         info.setWordWrap(True)
         info.setObjectName("hint")
@@ -279,85 +318,193 @@ class UpdateChecklistDialog(QDialog):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
+
         body = QWidget()
-        body_layout = QVBoxLayout(body)
-        body_layout.setContentsMargins(0, 0, 0, 0)
-        body_layout.setSpacing(sp(8))
+        self.body_layout = QVBoxLayout(body)
+        self.body_layout.setContentsMargins(0, 0, 0, 0)
+        self.body_layout.setSpacing(sp(9))
 
         changes = self.state.get("changes", [])
         if not isinstance(changes, list):
             changes = []
 
-        self.checkboxes: list[tuple[QCheckBox, int]] = []
         if not changes:
-            empty = QLabel("Brak opisanych zmian dla tej aktualizacji.")
+            empty = QLabel("Brak checklisty testowej dla tej aktualizacji.")
             empty.setObjectName("hint")
-            body_layout.addWidget(empty)
+            self.body_layout.addWidget(empty)
         else:
             for index, item in enumerate(changes):
-                text = str(item.get("text", "")).strip() or "Zmiana bez opisu"
-                sha = str(item.get("sha", ""))[:12]
-                checkbox = QCheckBox(f"{text}   [{sha}]")
-                checkbox.setChecked(bool(item.get("checked", False)))
-                checkbox.stateChanged.connect(
-                    lambda state, i=index: self._toggle_change(i, bool(state))
-                )
-                body_layout.addWidget(checkbox)
-                self.checkboxes.append((checkbox, index))
+                self._add_check_row(index, item)
 
-        body_layout.addStretch(1)
+        self.body_layout.addStretch(1)
         scroll.setWidget(body)
         root.addWidget(scroll, 1)
 
         footer = QHBoxLayout()
-        progress = self._progress_text()
-        self.progress_label = QLabel(progress)
+        self.progress_label = QLabel()
         self.progress_label.setObjectName("hint")
         footer.addWidget(self.progress_label)
         footer.addStretch(1)
 
-        reset = QPushButton("Odznacz wszystko")
+        reset = QPushButton("Wyczyść wynik testu")
         reset.clicked.connect(self._reset_all)
         footer.addWidget(reset)
 
-        close = QPushButton("Zamknij")
+        close = QPushButton("Zamknij okno")
         close.setObjectName("primary")
-        close.clicked.connect(self.accept)
+        close.clicked.connect(self.close)
         footer.addWidget(close)
         root.addLayout(footer)
+
+        self.poll_timer = QTimer(self)
+        self.poll_timer.setInterval(350)
+        self.poll_timer.timeout.connect(self._refresh_from_disk)
+        self.poll_timer.start()
+
+        self._refresh_from_disk()
+
+    def _add_check_row(self, index: int, item: dict) -> None:
+        frame = QFrame()
+        frame.setObjectName("updateCheckRow")
+        layout = QVBoxLayout(frame)
+        layout.setContentsMargins(sp(12), sp(10), sp(12), sp(10))
+        layout.setSpacing(sp(7))
+
+        top = QHBoxLayout()
+        checkbox = QCheckBox(str(item.get("text", "Punkt testu")))
+        checkbox.stateChanged.connect(
+            lambda state, i=index: self._toggle_change(i, bool(state))
+        )
+        top.addWidget(checkbox, 1)
+
+        status = QLabel("OCZEKUJE")
+        status.setObjectName("checkWaiting")
+        top.addWidget(status)
+        layout.addLayout(top)
+
+        note = QLineEdit()
+        note.setPlaceholderText("Jeśli coś jest nie tak — wpisz tutaj uwagę / problem…")
+        note.setText(str(item.get("note", "")))
+        note.textChanged.connect(
+            lambda text, i=index: self._note_changed(i, text)
+        )
+        layout.addWidget(note)
+
+        self.body_layout.addWidget(frame)
+        self.rows.append(
+            {
+                "index": index,
+                "checkbox": checkbox,
+                "status": status,
+                "note": note,
+            }
+        )
 
     def _progress_text(self) -> str:
         changes = self.state.get("changes", [])
         if not isinstance(changes, list) or not changes:
             return "0 / 0 sprawdzone"
+
         checked = sum(1 for item in changes if bool(item.get("checked", False)))
+        problems = sum(1 for item in changes if str(item.get("note", "")).strip())
+
+        if problems:
+            return f"{checked} / {len(changes)} sprawdzone  •  DO POPRAWY: {problems}"
+        if checked == len(changes):
+            return f"{checked} / {len(changes)} sprawdzone  •  GOTOWE"
         return f"{checked} / {len(changes)} sprawdzone"
 
     def _toggle_change(self, index: int, checked: bool) -> None:
-        changes = self.state.get("changes", [])
-        if isinstance(changes, list) and 0 <= index < len(changes):
-            changes[index]["checked"] = checked
-            save_dev_update_state(self.state)
-            self.progress_label.setText(self._progress_text())
+        state = load_dev_update_state()
+        changes = state.get("changes", [])
+        if not isinstance(changes, list) or not (0 <= index < len(changes)):
+            return
+
+        item = changes[index]
+        if checked and str(item.get("note", "")).strip():
+            self._refresh_from_disk()
+            return
+
+        item["checked"] = checked
+        item["problem"] = bool(str(item.get("note", "")).strip())
+        item["checked_at"] = (
+            datetime.now().isoformat(timespec="seconds") if checked else None
+        )
+        save_dev_update_state(state)
+        self._refresh_from_disk()
+
+    def _note_changed(self, index: int, text: str) -> None:
+        state = load_dev_update_state()
+        changes = state.get("changes", [])
+        if not isinstance(changes, list) or not (0 <= index < len(changes)):
+            return
+
+        item = changes[index]
+        note = text.strip()
+        item["note"] = text
+        item["problem"] = bool(note)
+        if note:
+            item["checked"] = False
+            item["checked_at"] = None
+        save_dev_update_state(state)
 
     def _reset_all(self) -> None:
-        changes = self.state.get("changes", [])
+        state = load_dev_update_state()
+        changes = state.get("changes", [])
         if not isinstance(changes, list):
             return
+
         for item in changes:
             item["checked"] = False
-        save_dev_update_state(self.state)
-        for checkbox, _index in self.checkboxes:
-            checkbox.blockSignals(True)
-            checkbox.setChecked(False)
-            checkbox.blockSignals(False)
-        self.progress_label.setText(self._progress_text())
+            item["checked_at"] = None
+            item["note"] = ""
+            item["problem"] = False
 
-    def done(self, result: int) -> None:
-        self.state["popup_shown"] = True
-        self.state["popup_shown_at"] = datetime.now().isoformat(timespec="seconds")
-        save_dev_update_state(self.state)
-        super().done(result)
+        save_dev_update_state(state)
+        for row in self.rows:
+            note = row["note"]
+            note.blockSignals(True)
+            note.clear()
+            note.blockSignals(False)
+        self._refresh_from_disk()
+
+    def _refresh_from_disk(self) -> None:
+        state = load_dev_update_state()
+        if not state:
+            return
+        self.state = state
+        changes = state.get("changes", [])
+        if not isinstance(changes, list):
+            return
+
+        for row in self.rows:
+            index = int(row["index"])
+            if not (0 <= index < len(changes)):
+                continue
+
+            item = changes[index]
+            checked = bool(item.get("checked", False))
+            problem = bool(str(item.get("note", "")).strip())
+
+            checkbox = row["checkbox"]
+            checkbox.blockSignals(True)
+            checkbox.setChecked(checked)
+            checkbox.blockSignals(False)
+
+            status = row["status"]
+            if problem:
+                status.setText("DO POPRAWY")
+                status.setObjectName("checkProblem")
+            elif checked:
+                status.setText("OK")
+                status.setObjectName("checkOk")
+            else:
+                status.setText("OCZEKUJE")
+                status.setObjectName("checkWaiting")
+            status.style().unpolish(status)
+            status.style().polish(status)
+
+        self.progress_label.setText(self._progress_text())
 
 
 def _derive_password_hash(password: str, salt: bytes, iterations: int = 240_000) -> bytes:
@@ -667,9 +814,14 @@ class ClientConfig:
             return cls()
         try:
             data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+            station_name = str(
+                data.get("station_name", "Stanowisko produkcyjne")
+            )
+            if station_name == "TEST — wydmuszka":
+                station_name = "TEST — Development"
             return cls(
                 server_ip=str(data.get("server_ip", "")),
-                station_name=str(data.get("station_name", "Stanowisko produkcyjne")),
+                station_name=station_name,
                 inactivity_seconds=int(data.get("inactivity_seconds", 90)),
                 configured=bool(data.get("configured", False)),
                 test_mode=bool(data.get("test_mode", False)),
@@ -1223,6 +1375,7 @@ class DepartmentPage(PageBase):
             app_log(
                 f"Status operacji: {code} • {self.department} -> {status}"
             )
+            mark_update_check("operation:status")
             self.refresh_data()
         except ValueError as exc:
             QMessageBox.warning(self, "Nie można zmienić statusu", str(exc))
@@ -1278,6 +1431,7 @@ class DepartmentPage(PageBase):
                 f"Dodano ilość: {code} • {self.department} • +{quantity} "
                 f"• postęp={result['progress']}% • gotowe={result['ready_percent']}%"
             )
+            mark_update_check("operation:quantity")
             self.refresh_data()
         except ValueError as exc:
             QMessageBox.warning(self, "Nie można dodać ilości", str(exc))
@@ -1389,6 +1543,8 @@ class OrdersPage(PageBase):
                 self.table.setItem(row_index, column_index, item)
 
         query = self.search_edit.text().strip()
+        if query:
+            mark_update_check("orders:search")
         suffix = f' • wyszukiwanie: „{query}”' if query else ""
         self.result_note.setText(
             f"{len(self.visible_rows)} zleceń • filtr: {self.active_filter}{suffix} • "
@@ -1533,6 +1689,7 @@ class OrderDetailPage(PageBase):
     def _open_history(self) -> None:
         if not self._current_code:
             return
+        mark_update_check("order:history")
         dialog = OrderHistoryDialog(
             self.store,
             self._current_code,
@@ -2502,10 +2659,15 @@ class MainWindow(QMainWindow):
                     "ERROR",
                 )
         self.stack.setCurrentWidget(page)
+        if page is self.orders_page:
+            mark_update_check("page:orders")
+        elif page is self.alerts_page:
+            mark_update_check("alerts:open")
         app_log(f"Otwarty ekran: {page.__class__.__name__}")
         self._restart_inactivity_timer()
 
     def open_department(self, department: str) -> None:
+        mark_update_check("department:open")
         page = self.department_pages[department]
         if hasattr(page, "refresh_data"):
             page.refresh_data()
@@ -2513,6 +2675,7 @@ class MainWindow(QMainWindow):
 
     def open_order(self, code: str) -> None:
         self.order_detail_page.set_order(code)
+        mark_update_check("order:open")
         self.open_page(self.order_detail_page)
 
     def open_product(self, symbol: str) -> None:
@@ -2531,11 +2694,17 @@ class MainWindow(QMainWindow):
             return
 
         app_log(
-            "Wyświetlam jednorazowe okno zmian po aktualizacji: "
+            "Wyświetlam jednorazowe okno testu zmian po aktualizacji: "
             f"{state.get('old_version', '—')} -> {state.get('new_version', APP_VERSION)}"
         )
-        dialog = UpdateChecklistDialog(self)
-        dialog.exec()
+        state["popup_shown"] = True
+        state["popup_shown_at"] = datetime.now().isoformat(timespec="seconds")
+        save_dev_update_state(state)
+
+        self.update_checklist_window = UpdateChecklistDialog(self)
+        self.update_checklist_window.show()
+        self.update_checklist_window.raise_()
+        self.update_checklist_window.activateWindow()
 
     def _build_home(self) -> QWidget:
         page = QWidget()
@@ -2948,6 +3117,23 @@ QCheckBox {
 }
 QCheckBox:hover {
     background: #121815;
+}
+QFrame#updateCheckRow {
+    background: #111416;
+    border: 1px solid #2a302c;
+    border-radius: 8px;
+}
+QLabel#checkOk {
+    color: #67dc8e;
+    font-weight: 900;
+}
+QLabel#checkProblem {
+    color: #eb7373;
+    font-weight: 900;
+}
+QLabel#checkWaiting {
+    color: #e4bd68;
+    font-weight: 850;
 }
 QLineEdit:focus, QSpinBox:focus, QComboBox:focus {
     border-color: #45d477;
