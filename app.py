@@ -342,6 +342,12 @@ class UpdateChecklistDialog(QDialog):
             checkbox.blockSignals(False)
         self.progress_label.setText(self._progress_text())
 
+    def done(self, result: int) -> None:
+        self.state["popup_shown"] = True
+        self.state["popup_shown_at"] = datetime.now().isoformat(timespec="seconds")
+        save_dev_update_state(self.state)
+        super().done(result)
+
 
 def _derive_password_hash(password: str, salt: bytes, iterations: int = 240_000) -> bytes:
     return hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iterations)
@@ -1808,6 +1814,8 @@ class MainWindow(QMainWindow):
             self.dev_exit_button.raise_()
             self._position_dev_exit_button()
 
+        QTimer.singleShot(350, self._show_update_popup_once)
+
     def eventFilter(self, obj, event):
         if event.type() in {QEvent.MouseButtonPress, QEvent.KeyPress, QEvent.TouchBegin, QEvent.Wheel}:
             self._restart_inactivity_timer()
@@ -1857,36 +1865,23 @@ class MainWindow(QMainWindow):
         self.product_detail_page.set_product(symbol)
         self.open_page(self.product_detail_page)
 
-    def _open_update_checklist(self) -> None:
-        dialog = UpdateChecklistDialog(self)
-        dialog.exec()
-        self._refresh_update_banner()
-
-    def _refresh_update_banner(self) -> None:
-        if not hasattr(self, "update_status_label"):
-            return
+    def _show_update_popup_once(self) -> None:
         state = load_dev_update_state()
         if not state:
-            self.update_status_label.setText(f"✓ AKTUALNA WERSJA  •  {APP_VERSION}")
-            self.update_details_button.setText("Brak nowych zmian")
-            self.update_details_button.setEnabled(False)
+            return
+        if bool(state.get("popup_shown", False)):
             return
 
-        old_version = str(state.get("old_version", "—"))
-        new_version = str(state.get("new_version", APP_VERSION))
-        changes = state.get("changes", [])
-        if not isinstance(changes, list):
-            changes = []
-        checked = sum(1 for item in changes if bool(item.get("checked", False)))
-        total = len(changes)
+        new_version = str(state.get("new_version", ""))
+        if new_version and new_version != APP_VERSION:
+            return
 
-        self.update_status_label.setText(
-            f"✓ ZAKTUALIZOWANO  •  {old_version}  →  {new_version}"
+        app_log(
+            "Wyświetlam jednorazowe okno zmian po aktualizacji: "
+            f"{state.get('old_version', '—')} -> {state.get('new_version', APP_VERSION)}"
         )
-        self.update_details_button.setText(
-            f"Sprawdź zmiany  {checked}/{total}"
-        )
-        self.update_details_button.setEnabled(True)
+        dialog = UpdateChecklistDialog(self)
+        dialog.exec()
 
     def _build_home(self) -> QWidget:
         page = QWidget()
@@ -1915,29 +1910,6 @@ class MainWindow(QMainWindow):
         profile_btn.clicked.connect(lambda: self.open_page(self.user_profile_page))
         top.addWidget(profile_btn)
         outer.addLayout(top)
-
-        update_bar = QFrame()
-        update_bar.setObjectName("updateBar")
-        update_layout = QHBoxLayout(update_bar)
-        update_layout.setContentsMargins(sp(12), sp(8), sp(12), sp(8))
-        update_layout.setSpacing(sp(10))
-
-        update_icon = QLabel("↻")
-        update_icon.setObjectName("updateIcon")
-        update_layout.addWidget(update_icon)
-
-        self.update_status_label = QLabel()
-        self.update_status_label.setObjectName("updateStatus")
-        update_layout.addWidget(self.update_status_label)
-        update_layout.addStretch(1)
-
-        self.update_details_button = QPushButton("Sprawdź zmiany")
-        self.update_details_button.setObjectName("ghostGreen")
-        self.update_details_button.clicked.connect(self._open_update_checklist)
-        update_layout.addWidget(self.update_details_button)
-
-        outer.addWidget(update_bar)
-        QTimer.singleShot(0, self._refresh_update_banner)
 
         management = QHBoxLayout()
         management.setSpacing(sp(8))
@@ -2092,20 +2064,6 @@ QLabel#connection {
 }
 QLabel#connectionWarning {
     color: #d9b560;
-    font-weight: 800;
-}
-QFrame#updateBar {
-    background: #111815;
-    border: 1px solid #285f3c;
-    border-radius: 8px;
-}
-QLabel#updateIcon {
-    color: #65dc8d;
-    font-size: 18px;
-    font-weight: 900;
-}
-QLabel#updateStatus {
-    color: #dce7df;
     font-weight: 800;
 }
 QLabel#pageTitle {
