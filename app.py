@@ -16,6 +16,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
+from metalbox_core import MetalboxStore
+
 from PySide6.QtCore import QEvent, Qt, QTimer
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
@@ -46,7 +48,7 @@ from PySide6.QtWidgets import (
 )
 
 APP_NAME = "Metalbox"
-APP_VERSION = "0.0.10"
+APP_VERSION = "0.1.0"
 LOCAL_DATA_ROOT = Path(
     os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
 ) / "Metalbox"
@@ -58,6 +60,8 @@ CONFIG_FILE = CONFIG_DIR / "metalbox_client.json"
 ACCESS_FILE = CONFIG_DIR / "access.json"
 APP_LOG_FILE = LOG_DIR / "metalbox.log"
 DEV_ROOT = LOCAL_DATA_ROOT / "dev"
+DEV_DATA_DIR = DEV_ROOT / "data"
+DEV_DB_FILE = DEV_DATA_DIR / "metalbox-dev.sqlite3"
 DEV_UPDATE_STATE_FILE = DEV_ROOT / "update_state.json"
 
 # Tylko na czas developmentu. Ustaw False przed wersją produkcyjną,
@@ -172,6 +176,11 @@ def export_diagnostics(parent, config: "ClientConfig") -> Path | None:
         f"Zainstalowana wersja: {installed.get('version', 'brak danych')}",
         f"Build: {installed.get('build', 'brak danych')}",
         f"Commit: {installed.get('commit', 'brak danych')}",
+        "",
+        "BAZA DEVELOPMENT",
+        f"Plik: {DEV_DB_FILE}",
+        f"Istnieje: {DEV_DB_FILE.exists()}",
+        f"Rozmiar: {DEV_DB_FILE.stat().st_size if DEV_DB_FILE.exists() else 0} B",
         "",
         "BEZPIECZEŃSTWO",
         "Hasła i plik access.json NIE są dołączane do paczki.",
@@ -618,6 +627,13 @@ def mock_message(parent, title: str = "Metalbox Development") -> None:
     )
 
 
+def display_date(value: str) -> str:
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").strftime("%d.%m.%Y")
+    except (TypeError, ValueError):
+        return value or "—"
+
+
 def section_heading(title: str, note: str = "") -> QWidget:
     wrapper = QWidget()
     layout = QVBoxLayout(wrapper)
@@ -1028,12 +1044,20 @@ class DepartmentPage(PageBase):
 
 
 class OrdersPage(PageBase):
-    def __init__(self, go_home: Callable, open_order: Callable[[str], None]):
+    def __init__(
+        self,
+        go_home: Callable,
+        open_order: Callable[[str], None],
+        store: MetalboxStore,
+    ):
         super().__init__(
             "Zlecenia",
             go_home,
             "Wszystkie ZL i ich pozycje. Jedno zlecenie może być równolegle na kilku etapach.",
         )
+        self.store = store
+        self.order_rows = self.store.list_orders()
+
         controls = QHBoxLayout()
         search = QLineEdit()
         search.setPlaceholderText("Szukaj ZL, klienta lub produktu…")
@@ -1051,16 +1075,16 @@ class OrdersPage(PageBase):
         self.root.addLayout(controls)
 
         rows = []
-        for order in ORDERS:
+        for order in self.order_rows:
             rows.append(
                 [
                     order["code"],
                     order["client"],
-                    order["deadline"],
+                    display_date(order["deadline"]),
                     order["priority"],
                     order["status"],
                     f'{order["progress"]}%',
-                    f'{order["ready"]}%',
+                    f'{order["ready_percent"]}%',
                     "Otwórz",
                 ]
             )
@@ -1070,7 +1094,9 @@ class OrdersPage(PageBase):
             [100, 190, 125, 110, 130, 105, 105, 100],
             300,
         )
-        table.cellDoubleClicked.connect(lambda row, col: open_order(ORDERS[row]["code"]))
+        table.cellDoubleClicked.connect(
+            lambda row, col: open_order(self.order_rows[row]["code"])
+        )
         self.root.addWidget(table, alignment=Qt.AlignLeft)
 
         note = QLabel("Dwuklik na wierszu otwiera szczegóły ZL.")
@@ -1080,29 +1106,49 @@ class OrdersPage(PageBase):
 
 
 class OrderDetailPage(PageBase):
-    def __init__(self, go_home: Callable):
-        super().__init__("Szczegóły zlecenia", go_home)
-        self._current_code = "ZL-740"
+    def __init__(self, go_home: Callable, store: MetalboxStore):
+        super().__init__(
+            "Szczegóły zlecenia",
+            go_home,
+            "Dane zlecenia i pozycje są ładowane z bazy Development.",
+        )
+        self.store = store
+        self._current_code = ""
 
         top = QHBoxLayout()
-        self.order_title = QLabel("ZL-740")
+        self.order_title = QLabel("—")
         self.order_title.setObjectName("detailTitle")
         top.addWidget(self.order_title)
         top.addSpacing(sp(24))
-        top.addWidget(QLabel("Termin: 18.10.2026"))
-        top.addWidget(QLabel("Klient: Sorta"))
-        top.addWidget(QLabel("Priorytet: WYSOKI"))
+
+        self.deadline_label = QLabel("Termin: —")
+        self.client_label = QLabel("Klient: —")
+        self.priority_label = QLabel("Priorytet: —")
+        top.addWidget(self.deadline_label)
+        top.addWidget(self.client_label)
+        top.addWidget(self.priority_label)
         top.addStretch(1)
-        status = QLabel("W TRAKCIE")
-        status.setObjectName("statusPill")
-        top.addWidget(status)
+
+        self.status_label = QLabel("—")
+        self.status_label.setObjectName("statusPill")
+        top.addWidget(self.status_label)
         self.root.addLayout(top)
 
         summary = QHBoxLayout()
-        summary.addWidget(card("Postęp produkcji", "58%", "wszystkie etapy", 230))
-        summary.addWidget(card("Gotowe do wysyłki", "31%", "ostatni ukończony etap", 230))
-        summary.addWidget(card("Prognoza", "18.10", "Planista — symulacja", 230))
-        summary.addWidget(card("Wąskie gardło", "Zgrzewarki", "dane testowe", 230))
+        progress_card, self.progress_value = self._metric_card(
+            "Postęp produkcji", "0%", "wartość z bazy", 230
+        )
+        ready_card, self.ready_value = self._metric_card(
+            "Gotowe do wysyłki", "0%", "wartość z bazy", 230
+        )
+        forecast_card, self.forecast_value = self._metric_card(
+            "Termin", "—", "planowana wysyłka", 230
+        )
+        item_card, self.item_count_value = self._metric_card(
+            "Pozycje", "0", "produkty w ZL", 230
+        )
+        for widget in (progress_card, ready_card, forecast_card, item_card):
+            summary.addWidget(widget)
         summary.addStretch(1)
         self.root.addLayout(summary)
 
@@ -1110,39 +1156,39 @@ class OrderDetailPage(PageBase):
         stages.setObjectName("panel")
         stages.setMaximumWidth(sp(1320))
         stage_layout = QVBoxLayout(stages)
-        stage_layout.addWidget(section_heading("Postęp po działach"))
-        for name, done, total in [
-            ("Laser", 2400, 2400),
-            ("Giętarki", 2400, 2400),
-            ("Zgrzewarki", 1420, 2400),
-            ("Malarnia", 1160, 2400),
-            ("Pakownia", 744, 2400),
-        ]:
+        stage_layout.addWidget(
+            section_heading(
+                "Postęp po działach",
+                "Agregacja etapów zostanie podłączona w kolejnym rzucie logiki.",
+            )
+        )
+        self.stage_rows: list[tuple[QLabel, QProgressBar]] = []
+        for name in ("Laser", "Giętarki", "Zgrzewarki", "Malarnia", "Pakownia"):
             row = QHBoxLayout()
             label = QLabel(name)
             label.setFixedWidth(sp(130))
             row.addWidget(label)
             bar = QProgressBar()
-            bar.setRange(0, total)
-            bar.setValue(done)
-            bar.setFormat(f"{done} / {total} szt.  •  %p%")
+            bar.setRange(0, 100)
+            bar.setValue(0)
+            bar.setFormat("—")
             bar.setFixedWidth(sp(900))
             row.addWidget(bar)
             row.addStretch(1)
             stage_layout.addLayout(row)
+            self.stage_rows.append((label, bar))
         self.root.addWidget(stages, alignment=Qt.AlignLeft)
 
-        positions = []
-        for symbol, name, qty in ORDERS[0]["positions"]:
-            positions.append([symbol, name, str(qty), "Otwórz kartę"])
-        table = compact_table(
-            ["Symbol", "Produkt", "Ilość", "Karta produktu"],
-            positions,
-            [150, 430, 110, 150],
-            230,
+        self.positions_table = compact_table(
+            ["Lp.", "Symbol", "Produkt", "Ilość", "Karta produktu"],
+            [],
+            [70, 150, 430, 110, 150],
+            250,
         )
-        self.root.addWidget(section_heading("Pozycje zlecenia", "Pozycje należące do bieżącego ZL."))
-        self.root.addWidget(table, alignment=Qt.AlignLeft)
+        self.root.addWidget(
+            section_heading("Pozycje zlecenia", "Dane zapisane w tabeli order_items.")
+        )
+        self.root.addWidget(self.positions_table, alignment=Qt.AlignLeft)
 
         actions = QHBoxLayout()
         for text in ("Historia", "Jakość / braki", "Dokumentacja", "Wysyłka", "Korekta"):
@@ -1154,9 +1200,87 @@ class OrderDetailPage(PageBase):
         actions.addStretch(1)
         self.root.addLayout(actions)
 
+    def _metric_card(
+        self,
+        title: str,
+        value: str,
+        note: str,
+        width: int,
+    ) -> tuple[QFrame, QLabel]:
+        frame = QFrame()
+        frame.setObjectName("card")
+        frame.setFixedWidth(sp(width))
+        frame.setMinimumHeight(sp(112))
+        layout = QVBoxLayout(frame)
+        layout.setContentsMargins(sp(16), sp(13), sp(16), sp(13))
+        layout.setSpacing(sp(5))
+
+        title_label = QLabel(title.upper())
+        title_label.setObjectName("cardTitle")
+        layout.addWidget(title_label)
+
+        value_label = QLabel(value)
+        value_label.setObjectName("cardValue")
+        layout.addWidget(value_label)
+
+        hint = QLabel(note)
+        hint.setObjectName("hint")
+        layout.addWidget(hint)
+        layout.addStretch(1)
+        return frame, value_label
+
     def set_order(self, code: str) -> None:
+        order = self.store.get_order(code)
+        if order is None:
+            QMessageBox.warning(
+                self,
+                "Nie znaleziono zlecenia",
+                f"Zlecenie {code} nie istnieje w bazie Development.",
+            )
+            return
+
         self._current_code = code
         self.order_title.setText(code)
+        self.deadline_label.setText(f"Termin: {display_date(order['deadline'])}")
+        self.client_label.setText(f"Klient: {order['client']}")
+        self.priority_label.setText(f"Priorytet: {order['priority']}")
+        self.status_label.setText(str(order["status"]))
+        self.status_label.setObjectName(
+            "statusPillPaused" if order["status"] == "WSTRZYMANE" else "statusPill"
+        )
+        self.status_label.style().unpolish(self.status_label)
+        self.status_label.style().polish(self.status_label)
+
+        self.progress_value.setText(f"{order['progress']}%")
+        self.ready_value.setText(f"{order['ready_percent']}%")
+        self.forecast_value.setText(display_date(order["deadline"]))
+        items = order.get("items", [])
+        self.item_count_value.setText(str(len(items)))
+
+        self.positions_table.setRowCount(len(items))
+        for row_index, item in enumerate(items):
+            values = [
+                item["position_no"],
+                item["symbol"],
+                item["name"],
+                item["quantity"],
+                "Otwórz kartę",
+            ]
+            self.positions_table.setRowHeight(row_index, sp(38))
+            for column_index, value in enumerate(values):
+                self.positions_table.setItem(
+                    row_index,
+                    column_index,
+                    QTableWidgetItem(str(value)),
+                )
+
+        self.store.add_audit_event(
+            actor="development-user",
+            action="order_opened",
+            entity_type="order",
+            entity_id=code,
+            payload={"screen": "OrderDetailPage"},
+        )
 
 
 class PlannerPage(PageBase):
@@ -1507,7 +1631,7 @@ class DiagnosticsPage(PageBase):
         stats.addWidget(card("Wersja", APP_VERSION, "Development", 220))
         stats.addWidget(card("Serwer", config.server_ip or "—", "konfiguracja stanowiska", 260))
         stats.addWidget(card("Tryb", "TEST" if config.test_mode else "NORMALNY", "stan klienta", 220))
-        stats.addWidget(card("Dane", "DEMO", "brak centralnej bazy", 220))
+        stats.addWidget(card("Dane", "SQLITE DEV", "trwała baza Development", 220))
         stats.addStretch(1)
         self.root.addLayout(stats)
 
@@ -1830,16 +1954,17 @@ class SettingsPage(PageBase):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, config: ClientConfig):
+    def __init__(self, config: ClientConfig, store: MetalboxStore):
         super().__init__()
         self.config = config
+        self.store = store
         self.setWindowTitle(f"{APP_NAME} {APP_VERSION}")
         self.setMinimumSize(sp(1180), sp(720))
 
         self.stack = QStackedWidget()
         self.setCentralWidget(self.stack)
 
-        self.order_detail_page = OrderDetailPage(self.go_home)
+        self.order_detail_page = OrderDetailPage(self.go_home, self.store)
         self.home = self._build_home()
         self.stack.addWidget(self.home)
 
@@ -1849,7 +1974,7 @@ class MainWindow(QMainWindow):
             self.department_pages[department] = page
             self.stack.addWidget(page)
 
-        self.orders_page = OrdersPage(self.go_home, self.open_order)
+        self.orders_page = OrdersPage(self.go_home, self.open_order, self.store)
         self.planner_page = PlannerPage(self.go_home)
         self.product_detail_page = ProductDetailPage(self.go_home)
         self.products_page = ProductsPage(self.go_home, self.open_product)
@@ -2473,7 +2598,15 @@ def main() -> int:
         config.configured = True
         config.save()
 
-    window = MainWindow(config)
+    DEV_DATA_DIR.mkdir(parents=True, exist_ok=True)
+    store = MetalboxStore(DEV_DB_FILE)
+    seeded = store.seed_development_data()
+    app_log(
+        f"Baza Development gotowa: {DEV_DB_FILE} • "
+        f"seed={'tak' if seeded else 'nie'}"
+    )
+
+    window = MainWindow(config, store)
     window.showFullScreen()
     return app.exec()
 
