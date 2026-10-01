@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -33,8 +34,37 @@ from PySide6.QtWidgets import (
 )
 
 APP_NAME = "Metalbox"
-APP_VERSION = "0.0.3"
+APP_VERSION = "0.0.4"
 CONFIG_FILE = Path(__file__).resolve().with_name("metalbox_client.json")
+
+# Projekt bazowy UI: 1536x864. Interfejs skaluje się proporcjonalnie
+# do dostępnej przestrzeni ekranu, z limitami dla małych i bardzo dużych ekranów.
+UI_SCALE = 1.0
+
+
+def configure_ui_scale(app: QApplication) -> float:
+    global UI_SCALE
+    screen = app.primaryScreen()
+    if screen is None:
+        UI_SCALE = 1.0
+        return UI_SCALE
+    geometry = screen.availableGeometry()
+    sx = geometry.width() / 1536.0
+    sy = geometry.height() / 864.0
+    UI_SCALE = max(0.86, min(1.50, min(sx, sy)))
+    return UI_SCALE
+
+
+def sp(value: int | float) -> int:
+    return max(1, int(round(float(value) * UI_SCALE)))
+
+
+def scaled_stylesheet(css: str) -> str:
+    return re.sub(
+        r"(\d+)px",
+        lambda match: f"{sp(int(match.group(1)))}px",
+        css,
+    )
 
 DEPARTMENTS = [
     "Gilotyna",
@@ -187,9 +217,9 @@ def mock_message(parent, title: str = "Wydmuszka") -> None:
 def card(title: str, value: str = "", note: str = "", width: int = 220) -> QFrame:
     frame = QFrame()
     frame.setObjectName("card")
-    frame.setFixedWidth(width)
+    frame.setFixedWidth(sp(width))
     layout = QVBoxLayout(frame)
-    layout.setContentsMargins(16, 12, 16, 12)
+    layout.setContentsMargins(sp(16), sp(12), sp(16), sp(12))
     label = QLabel(title)
     label.setObjectName("cardTitle")
     layout.addWidget(label)
@@ -215,15 +245,16 @@ def compact_table(headers: list[str], rows: list[list[str]], widths: list[int], 
     table.setSelectionMode(QAbstractItemView.SingleSelection)
     table.setEditTriggers(QAbstractItemView.NoEditTriggers)
     table.horizontalHeader().setSectionResizeMode(QHeaderView.Fixed)
-    for column, width in enumerate(widths):
+    scaled_widths = [sp(width) for width in widths]
+    for column, width in enumerate(scaled_widths):
         table.setColumnWidth(column, width)
     for row_index, row in enumerate(rows):
         for column_index, value in enumerate(row):
             table.setItem(row_index, column_index, QTableWidgetItem(str(value)))
-    table.setMinimumWidth(min(sum(widths) + 40, 1450))
-    table.setMaximumWidth(sum(widths) + 40)
+    table.setMinimumWidth(min(sum(scaled_widths) + sp(40), sp(1450)))
+    table.setMaximumWidth(sum(scaled_widths) + sp(40))
     if height:
-        table.setFixedHeight(height)
+        table.setFixedHeight(sp(height))
     return table
 
 
@@ -232,7 +263,7 @@ class ConnectionDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Metalbox — konfiguracja połączenia")
         self.setModal(True)
-        self.setFixedWidth(590)
+        self.setFixedWidth(sp(590))
         self.use_test_mode = False
 
         self.ip_edit = QLineEdit(config.server_ip)
@@ -247,8 +278,8 @@ class ConnectionDialog(QDialog):
         self.timeout_spin.setValue(config.inactivity_seconds)
 
         form = QFormLayout()
-        form.setHorizontalSpacing(18)
-        form.setVerticalSpacing(12)
+        form.setHorizontalSpacing(sp(18))
+        form.setVerticalSpacing(sp(12))
         form.addRow("IP / nazwa serwera:", self.ip_edit)
         form.addRow("Hasło techniczne:", self.password_edit)
         form.addRow("Nazwa stanowiska:", self.station_edit)
@@ -277,12 +308,12 @@ class ConnectionDialog(QDialog):
         buttons.addWidget(save)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 22, 24, 22)
+        layout.setContentsMargins(sp(24), sp(22), sp(24), sp(22))
         layout.addWidget(QLabel("<h2>Połączenie z serwerem Metalbox</h2>"))
         layout.addLayout(form)
-        layout.addSpacing(8)
+        layout.addSpacing(sp(8))
         layout.addWidget(note)
-        layout.addSpacing(8)
+        layout.addSpacing(sp(8))
         layout.addLayout(buttons)
 
     def _validate(self) -> bool:
@@ -319,7 +350,7 @@ class ConnectionDialog(QDialog):
 class Header(QWidget):
     def __init__(self, title: str, go_home: Callable, subtitle: str = ""):
         super().__init__()
-        self.setMaximumWidth(1500)
+        self.setMaximumWidth(sp(1680))
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
@@ -331,7 +362,7 @@ class Header(QWidget):
             sub = QLabel(subtitle)
             sub.setObjectName("hint")
             sub.setWordWrap(True)
-            sub.setMaximumWidth(900)
+            sub.setMaximumWidth(sp(1050))
             titles.addWidget(sub)
 
         back = QPushButton("← Pulpit główny")
@@ -347,18 +378,18 @@ class PageBase(QWidget):
     def __init__(self, title: str, go_home: Callable, subtitle: str = ""):
         super().__init__()
         outer = QHBoxLayout(self)
-        outer.setContentsMargins(22, 18, 22, 18)
-        outer.addStretch(1)
+        outer.setContentsMargins(sp(22), sp(18), sp(22), sp(18))
 
         self.content = QWidget()
-        self.content.setMaximumWidth(1500)
+        self.content.setMaximumWidth(sp(1680))
         self.root = QVBoxLayout(self.content)
         self.root.setContentsMargins(0, 0, 0, 0)
-        self.root.setSpacing(14)
+        self.root.setSpacing(sp(14))
         self.root.addWidget(Header(title, go_home, subtitle))
 
-        outer.addWidget(self.content, 1)
-        outer.addStretch(1)
+        # Zawartość wykorzystuje dostępną szerokość ekranu. Nie dzielimy jej
+        # przez boczne stretch-e, które wcześniej zwężały widok do ok. 1/3.
+        outer.addWidget(self.content, 1, Qt.AlignTop | Qt.AlignHCenter)
 
 
 class DepartmentPage(PageBase):
@@ -371,7 +402,7 @@ class DepartmentPage(PageBase):
         self.department = department
 
         stats = QHBoxLayout()
-        stats.setSpacing(12)
+        stats.setSpacing(sp(12))
         for title, value, note in [
             ("Aktywne", "2", "zlecenia"),
             ("Oczekuje", "4", "w kolejce"),
@@ -401,10 +432,10 @@ class DepartmentPage(PageBase):
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
         body = QWidget()
-        body.setMaximumWidth(1420)
+        body.setMaximumWidth(sp(1580))
         cards = QVBoxLayout(body)
         cards.setContentsMargins(0, 0, 0, 0)
-        cards.setSpacing(12)
+        cards.setSpacing(sp(12))
         for idx, order in enumerate(DEPARTMENT_ORDER_PROGRESS):
             cards.addWidget(self._order_card(*order, idx))
         cards.addStretch(1)
@@ -414,11 +445,11 @@ class DepartmentPage(PageBase):
     def _order_card(self, code: str, product: str, total: int, done: int, status_text: str, idx: int) -> QFrame:
         frame = QFrame()
         frame.setObjectName("orderCard")
-        frame.setMaximumWidth(1380)
+        frame.setMaximumWidth(sp(1540))
 
         box = QVBoxLayout(frame)
-        box.setContentsMargins(14, 12, 14, 12)
-        box.setSpacing(9)
+        box.setContentsMargins(sp(14), sp(12), sp(14), sp(12))
+        box.setSpacing(sp(9))
 
         top = QHBoxLayout()
         code_label = QLabel(code)
@@ -430,7 +461,7 @@ class DepartmentPage(PageBase):
 
         top.addWidget(code_label)
         top.addWidget(product_label)
-        top.addSpacing(24)
+        top.addSpacing(sp(24))
         top.addWidget(QLabel(f"Plan: {total} szt."))
         top.addWidget(QLabel(f"Wykonano: {done} szt."))
         top.addStretch(1)
@@ -442,7 +473,7 @@ class DepartmentPage(PageBase):
         bar.setRange(0, max(total, 1))
         bar.setValue(done)
         bar.setFormat(f"{done} / {total} szt.     %p%")
-        bar.setMinimumHeight(30)
+        bar.setMinimumHeight(sp(30))
         box.addWidget(bar)
 
         bottom = QHBoxLayout()
@@ -468,7 +499,7 @@ class OrdersPage(PageBase):
         controls = QHBoxLayout()
         search = QLineEdit()
         search.setPlaceholderText("Szukaj ZL, klienta lub produktu…")
-        search.setFixedWidth(340)
+        search.setFixedWidth(sp(340))
         controls.addWidget(search)
         for text in ("Aktywne", "Opóźnione", "Wstrzymane", "Zakończone"):
             btn = QPushButton(text)
@@ -519,7 +550,7 @@ class OrderDetailPage(PageBase):
         self.order_title = QLabel("ZL-740")
         self.order_title.setObjectName("detailTitle")
         top.addWidget(self.order_title)
-        top.addSpacing(24)
+        top.addSpacing(sp(24))
         top.addWidget(QLabel("Termin: 18.10.2026"))
         top.addWidget(QLabel("Klient: Sorta"))
         top.addWidget(QLabel("Priorytet: WYSOKI"))
@@ -539,7 +570,7 @@ class OrderDetailPage(PageBase):
 
         stages = QFrame()
         stages.setObjectName("panel")
-        stages.setMaximumWidth(1160)
+        stages.setMaximumWidth(sp(1320))
         stage_layout = QVBoxLayout(stages)
         stage_layout.addWidget(QLabel("<b>Postęp po działach</b>"))
         for name, done, total in [
@@ -551,13 +582,13 @@ class OrderDetailPage(PageBase):
         ]:
             row = QHBoxLayout()
             label = QLabel(name)
-            label.setFixedWidth(130)
+            label.setFixedWidth(sp(130))
             row.addWidget(label)
             bar = QProgressBar()
             bar.setRange(0, total)
             bar.setValue(done)
             bar.setFormat(f"{done} / {total} szt.  •  %p%")
-            bar.setFixedWidth(760)
+            bar.setFixedWidth(sp(900))
             row.addWidget(bar)
             row.addStretch(1)
             stage_layout.addLayout(row)
@@ -631,7 +662,7 @@ class PlannerPage(PageBase):
 
         info = QFrame()
         info.setObjectName("panel")
-        info.setMaximumWidth(1000)
+        info.setMaximumWidth(sp(1120))
         layout = QVBoxLayout(info)
         layout.addWidget(QLabel("<b>Planista — docelowe działania</b>"))
         desc = QLabel(
@@ -652,7 +683,7 @@ class ProductsPage(PageBase):
         controls = QHBoxLayout()
         search = QLineEdit()
         search.setPlaceholderText("Szukaj po symbolu lub nazwie…")
-        search.setFixedWidth(340)
+        search.setFixedWidth(sp(340))
         controls.addWidget(search)
         for text in ("Nowy produkt", "Import katalogów 2014–2016", "Do weryfikacji", "Półprodukty"):
             btn = QPushButton(text)
@@ -673,7 +704,7 @@ class ProductsPage(PageBase):
 
         detail = QFrame()
         detail.setObjectName("panel")
-        detail.setMaximumWidth(1180)
+        detail.setMaximumWidth(sp(1320))
         layout = QVBoxLayout(detail)
         layout.addWidget(QLabel("<b>Karta produktu — układ docelowy</b>"))
         chips = QHBoxLayout()
@@ -820,7 +851,7 @@ class ReportsPage(PageBase):
         ]:
             box = QComboBox()
             box.addItems(values)
-            box.setFixedWidth(150)
+            box.setFixedWidth(sp(150))
             filters.addWidget(QLabel(label + ":"))
             filters.addWidget(box)
         export = QPushButton("Eksport Excel")
@@ -859,7 +890,7 @@ class ReportsPage(PageBase):
             "Stawki pieniężne są niewidoczne bez odpowiedniego uprawnienia. "
             "Raport dla płac może zawierać wykonanie, pracowników, współczynniki, ZL, produkt i zmianę."
         )
-        note.setMaximumWidth(980)
+        note.setMaximumWidth(sp(1100))
         note.setWordWrap(True)
         note.setObjectName("hint")
         self.root.addWidget(note)
@@ -875,7 +906,7 @@ class TVPage(PageBase):
         interval = QComboBox()
         interval.addItems(["10 s", "20 s", "30 s", "60 s"])
         interval.setCurrentText("20 s")
-        interval.setFixedWidth(100)
+        interval.setFixedWidth(sp(100))
         controls.addWidget(interval)
         for text in ("Start", "Pauza", "Wybierz działy", "Pełny ekran TV"):
             btn = QPushButton(text)
@@ -894,7 +925,7 @@ class TVPage(PageBase):
         for idx, (code, product, total, done, status) in enumerate(DEPARTMENT_ORDER_PROGRESS):
             frame = QFrame()
             frame.setObjectName("tvCard")
-            frame.setFixedWidth(560)
+            frame.setFixedWidth(sp(620))
             layout = QVBoxLayout(frame)
             label = QLabel(f"{code}  •  {product}")
             label.setObjectName("tvCardTitle")
@@ -903,7 +934,7 @@ class TVPage(PageBase):
             bar.setRange(0, total)
             bar.setValue(done)
             bar.setFormat(f"{done} / {total} szt.     %p%")
-            bar.setMinimumHeight(38)
+            bar.setMinimumHeight(sp(38))
             layout.addWidget(bar)
             layout.addWidget(QLabel(f"Status: {status}"))
             grid.addWidget(frame, idx // 2, idx % 2)
@@ -943,7 +974,7 @@ class SettingsPage(PageBase):
         for idx, (title, desc, action) in enumerate(sections):
             frame = QFrame()
             frame.setObjectName("settingsCard")
-            frame.setFixedSize(345, 150)
+            frame.setFixedSize(sp(345), sp(150))
             layout = QVBoxLayout(frame)
             label = QLabel(title)
             label.setObjectName("sectionTitle")
@@ -970,7 +1001,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.config = config
         self.setWindowTitle(f"{APP_NAME} {APP_VERSION}")
-        self.setMinimumSize(1180, 720)
+        self.setMinimumSize(sp(1180), sp(720))
 
         self.stack = QStackedWidget()
         self.setCentralWidget(self.stack)
@@ -1043,8 +1074,8 @@ class MainWindow(QMainWindow):
     def _build_home(self) -> QWidget:
         page = QWidget()
         outer = QVBoxLayout(page)
-        outer.setContentsMargins(24, 16, 24, 12)
-        outer.setSpacing(11)
+        outer.setContentsMargins(sp(24), sp(16), sp(24), sp(12))
+        outer.setSpacing(sp(11))
 
         top = QHBoxLayout()
         titles = QVBoxLayout()
@@ -1065,7 +1096,7 @@ class MainWindow(QMainWindow):
         outer.addLayout(top)
 
         management = QHBoxLayout()
-        management.setSpacing(8)
+        management.setSpacing(sp(8))
         items = [
             ("ZLECENIA", self.orders_page if hasattr(self, "orders_page") else None),
         ]
@@ -1084,7 +1115,7 @@ class MainWindow(QMainWindow):
         for text, callback in callbacks:
             btn = QPushButton(text)
             btn.setObjectName("managementButton")
-            btn.setFixedHeight(38)
+            btn.setFixedHeight(sp(38))
             btn.clicked.connect(callback)
             management.addWidget(btn)
         management.addStretch(1)
@@ -1092,16 +1123,16 @@ class MainWindow(QMainWindow):
 
         grid_wrap = QFrame()
         grid_wrap.setObjectName("gridWrap")
-        grid_wrap.setMaximumWidth(1450)
+        grid_wrap.setMaximumWidth(sp(1680))
         grid = QGridLayout(grid_wrap)
-        grid.setContentsMargins(14, 14, 14, 14)
-        grid.setHorizontalSpacing(11)
-        grid.setVerticalSpacing(11)
+        grid.setContentsMargins(sp(14), sp(14), sp(14), sp(14))
+        grid.setHorizontalSpacing(sp(11))
+        grid.setVerticalSpacing(sp(11))
 
         for idx, department in enumerate(DEPARTMENTS):
             btn = QPushButton(department)
             btn.setObjectName("departmentButton")
-            btn.setFixedSize(270, 76)
+            btn.setFixedSize(sp(270), sp(76))
             btn.clicked.connect(lambda checked=False, d=department: self.open_department(d))
             grid.addWidget(btn, idx // 5, idx % 5)
         grid.setColumnStretch(5, 1)
@@ -1123,12 +1154,12 @@ class MainWindow(QMainWindow):
         live_scroll.setFrameShape(QFrame.NoFrame)
         live_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         live_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        live_scroll.setFixedHeight(142)
+        live_scroll.setFixedHeight(sp(142))
 
         live_body = QWidget()
         live = QHBoxLayout(live_body)
         live.setContentsMargins(0, 0, 0, 0)
-        live.setSpacing(10)
+        live.setSpacing(sp(10))
         for idx, (code, product, total, done, status) in enumerate(DEPARTMENT_ORDER_PROGRESS):
             department = ["Zgrzewarki", "Malarnia", "Pakownia", "Giętarki"][idx]
             live.addWidget(self._progress_card(code, department, product, total, done, status))
@@ -1145,10 +1176,10 @@ class MainWindow(QMainWindow):
     def _progress_card(self, code: str, department: str, product: str, total: int, done: int, status: str) -> QFrame:
         frame = QFrame()
         frame.setObjectName("progressCard")
-        frame.setFixedWidth(315)
+        frame.setFixedWidth(sp(315))
 
         layout = QVBoxLayout(frame)
-        layout.setContentsMargins(12, 9, 12, 9)
+        layout.setContentsMargins(sp(12), sp(9), sp(12), sp(9))
         head = QLabel(f"{code} • {department}")
         head.setObjectName("progressHead")
         product_label = QLabel(product)
@@ -1380,7 +1411,8 @@ QScrollArea {
 def main() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
-    app.setStyleSheet(STYLESHEET)
+    configure_ui_scale(app)
+    app.setStyleSheet(scaled_stylesheet(STYLESHEET))
 
     config = ClientConfig.load()
     if not config.configured:
