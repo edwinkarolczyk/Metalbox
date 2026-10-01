@@ -34,7 +34,7 @@ from PySide6.QtWidgets import (
 )
 
 APP_NAME = "Metalbox"
-APP_VERSION = "0.0.5"
+APP_VERSION = "0.0.6"
 CONFIG_FILE = Path(__file__).resolve().with_name("metalbox_client.json")
 
 # Projekt bazowy UI: 1536x864. Interfejs skaluje się proporcjonalnie
@@ -1575,6 +1575,9 @@ QWidget {
 }
 QMainWindow, QDialog {
     background: #0b0d0f;
+}
+QLabel {
+    background: transparent;
 }
 QLabel#brand {
     font-size: 29px;
