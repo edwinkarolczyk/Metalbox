@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import runpy
 import shutil
+import subprocess
 import sys
 import tempfile
 import traceback
@@ -14,7 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from tkinter import Tk, messagebox
 
-DEV_RUNNER_VERSION = "1.0.0"
+DEV_RUNNER_VERSION = "1.1.0"
 REPO = "edwinkarolczyk/Metalbox"
 BRANCH = "main"
 API_BASE = f"https://api.github.com/repos/{REPO}"
@@ -30,6 +32,7 @@ LOG_DIR = LOCAL_APPDATA / "Metalbox" / "logs"
 STATE_FILE = ROOT / "source_state.json"
 UPDATE_STATE_FILE = ROOT / "update_state.json"
 LOG_FILE = LOG_DIR / "dev-runner.log"
+RUNNER_RELEASE_API = f"{API_BASE}/releases/tags/dev-runner"
 
 
 def ensure_dirs() -> None:
@@ -78,6 +81,103 @@ def github_bytes(url: str, timeout: int = 20) -> bytes:
     )
     with urllib.request.urlopen(request, timeout=timeout) as response:
         return response.read()
+
+
+def _version_tuple(value: str) -> tuple[int, ...]:
+    try:
+        return tuple(int(part) for part in value.split("."))
+    except Exception:
+        return (0,)
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _release_asset_url(release: dict, name: str) -> str:
+    for asset in release.get("assets", []):
+        if asset.get("name") == name:
+            return str(asset.get("browser_download_url", ""))
+    return ""
+
+
+def _download_to(url: str, destination: Path) -> None:
+    request = urllib.request.Request(
+        url,
+        headers={"User-Agent": f"MetalboxDev/{DEV_RUNNER_VERSION}"},
+    )
+    with urllib.request.urlopen(request, timeout=45) as response, destination.open("wb") as out:
+        shutil.copyfileobj(response, out, length=1024 * 1024)
+
+
+def check_self_update() -> bool:
+    """Aktualizuje MetalboxDev.exe i zwraca True, gdy bieżący proces ma się zakończyć."""
+    if not getattr(sys, "frozen", False) or sys.platform != "win32":
+        return False
+
+    try:
+        release = json.loads(github_bytes(RUNNER_RELEASE_API).decode("utf-8"))
+        manifest_url = _release_asset_url(release, "dev-runner.json")
+        exe_url = _release_asset_url(release, "MetalboxDev.exe")
+        if not manifest_url or not exe_url:
+            return False
+
+        manifest = json.loads(github_bytes(manifest_url).decode("utf-8"))
+        remote_version = str(manifest.get("version", "0.0.0"))
+        if _version_tuple(remote_version) <= _version_tuple(DEV_RUNNER_VERSION):
+            return False
+
+        expected_sha = str(manifest.get("sha256", "")).lower()
+        if not expected_sha:
+            raise RuntimeError("Manifest Runnera nie zawiera SHA-256.")
+
+        ensure_dirs()
+        new_exe = TEMP_DIR / "MetalboxDev.new.exe"
+        new_exe.unlink(missing_ok=True)
+        log(f"Samouaktualnienie Runnera {DEV_RUNNER_VERSION} -> {remote_version}")
+        _download_to(exe_url, new_exe)
+
+        actual_sha = _sha256(new_exe).lower()
+        if actual_sha != expected_sha:
+            new_exe.unlink(missing_ok=True)
+            raise RuntimeError("Błąd SHA-256 nowego MetalboxDev.exe.")
+
+        current_exe = Path(sys.executable).resolve()
+        updater = TEMP_DIR / "update-metalbox-dev.cmd"
+        pid = os.getpid()
+        updater.write_text(
+            "@echo off\n"
+            "setlocal\n"
+            f"set \"OLD={current_exe}\"\n"
+            f"set \"NEW={new_exe}\"\n"
+            f"set \"PID={pid}\"\n"
+            ":wait\n"
+            "tasklist /FI \"PID eq %PID%\" | find \"%PID%\" >nul\n"
+            "if not errorlevel 1 (\n"
+            "  timeout /t 1 /nobreak >nul\n"
+            "  goto wait\n"
+            ")\n"
+            "copy /Y \"%NEW%\" \"%OLD%\" >nul\n"
+            "start \"\" \"%OLD%\"\n"
+            "del /Q \"%NEW%\" >nul 2>&1\n"
+            "del /Q \"%~f0\" >nul 2>&1\n",
+            encoding="utf-8",
+        )
+
+        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        subprocess.Popen(
+            ["cmd.exe", "/c", str(updater)],
+            cwd=str(TEMP_DIR),
+            creationflags=creationflags,
+        )
+        return True
+    except Exception as exc:
+        log(f"Samouaktualnienie Runnera pominięte: {exc}", "WARN")
+        return False
 
 
 def latest_commit() -> str:
@@ -307,6 +407,10 @@ def show_warning(title: str, text: str) -> None:
 def main() -> int:
     ensure_dirs()
     log(f"Start MetalboxDev {DEV_RUNNER_VERSION}")
+
+    if check_self_update():
+        log("Uruchomiono podmianę MetalboxDev.exe — kończę bieżący proces.")
+        return 0
 
     try:
         updated, sha = sync_source()
