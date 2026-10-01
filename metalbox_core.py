@@ -535,6 +535,230 @@ class MetalboxStore:
             ),
         }
 
+    def set_department_order_status(
+        self,
+        code: str,
+        department: str,
+        status: str,
+        *,
+        actor: str = "development-user",
+    ) -> int:
+        allowed = {"AKTYWNE", "WSTRZYMANE"}
+        if status not in allowed:
+            raise ValueError(f"Nieobsługiwany status operacji: {status}")
+
+        now = datetime.now(timezone.utc).isoformat()
+        with self._connect() as db:
+            order = db.execute(
+                "SELECT id FROM orders WHERE code = ?",
+                (code,),
+            ).fetchone()
+            if order is None:
+                raise ValueError(f"Nie znaleziono zlecenia {code}.")
+
+            result = db.execute(
+                """
+                UPDATE operation_progress
+                SET status = ?, updated_at = ?
+                WHERE department = ?
+                  AND order_item_id IN (
+                      SELECT id FROM order_items WHERE order_id = ?
+                  )
+                  AND good_qty < planned_qty
+                """,
+                (status, now, department, int(order["id"])),
+            )
+
+            affected = int(result.rowcount or 0)
+            if affected == 0:
+                raise ValueError(
+                    f"Brak aktywnych pozycji {code} w dziale {department} do zmiany statusu."
+                )
+
+            self._audit_in_connection(
+                db,
+                actor=actor,
+                action="operation_status_changed",
+                entity_type="order",
+                entity_id=code,
+                payload={
+                    "department": department,
+                    "status": status,
+                    "affected_rows": affected,
+                },
+            )
+
+        return affected
+
+    def add_department_good_qty(
+        self,
+        code: str,
+        department: str,
+        quantity: int,
+        *,
+        actor: str = "development-user",
+    ) -> dict:
+        quantity = int(quantity)
+        if quantity <= 0:
+            raise ValueError("Ilość musi być większa od zera.")
+
+        now = datetime.now(timezone.utc).isoformat()
+        with self._connect() as db:
+            order = db.execute(
+                "SELECT id FROM orders WHERE code = ?",
+                (code,),
+            ).fetchone()
+            if order is None:
+                raise ValueError(f"Nie znaleziono zlecenia {code}.")
+            order_id = int(order["id"])
+
+            rows = db.execute(
+                """
+                SELECT
+                    op.id,
+                    op.planned_qty,
+                    op.good_qty,
+                    op.status,
+                    oi.position_no
+                FROM operation_progress op
+                JOIN order_items oi ON oi.id = op.order_item_id
+                WHERE oi.order_id = ?
+                  AND op.department = ?
+                ORDER BY oi.position_no ASC
+                """,
+                (order_id, department),
+            ).fetchall()
+
+            if not rows:
+                raise ValueError(f"Brak operacji {department} dla {code}.")
+
+            remaining_total = sum(
+                max(0, int(row["planned_qty"]) - int(row["good_qty"]))
+                for row in rows
+            )
+            if quantity > remaining_total:
+                raise ValueError(
+                    f"Można dodać maksymalnie {remaining_total} szt. "
+                    f"Pozostało do wykonania w tym dziale."
+                )
+
+            left = quantity
+            touched = 0
+            for row in rows:
+                if left <= 0:
+                    break
+
+                planned = int(row["planned_qty"])
+                current_good = int(row["good_qty"])
+                remaining = max(0, planned - current_good)
+                if remaining == 0:
+                    continue
+
+                add = min(left, remaining)
+                new_good = current_good + add
+                new_status = "GOTOWE" if new_good >= planned else "AKTYWNE"
+
+                db.execute(
+                    """
+                    UPDATE operation_progress
+                    SET good_qty = ?, status = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (new_good, new_status, now, int(row["id"])),
+                )
+                touched += 1
+                left -= add
+
+            self._recalculate_order_percentages(db, order_id)
+
+            self._audit_in_connection(
+                db,
+                actor=actor,
+                action="good_quantity_added",
+                entity_type="order",
+                entity_id=code,
+                payload={
+                    "department": department,
+                    "quantity": quantity,
+                    "rows": touched,
+                },
+            )
+
+            progress_row = db.execute(
+                """
+                SELECT progress, ready_percent
+                FROM orders
+                WHERE id = ?
+                """,
+                (order_id,),
+            ).fetchone()
+
+        return {
+            "added": quantity,
+            "progress": int(progress_row["progress"]),
+            "ready_percent": int(progress_row["ready_percent"]),
+        }
+
+    @staticmethod
+    def _recalculate_order_percentages(
+        db: sqlite3.Connection,
+        order_id: int,
+    ) -> None:
+        totals = db.execute(
+            """
+            SELECT
+                COALESCE(SUM(op.planned_qty), 0) AS planned,
+                COALESCE(SUM(op.good_qty), 0) AS good
+            FROM operation_progress op
+            JOIN order_items oi ON oi.id = op.order_item_id
+            WHERE oi.order_id = ?
+            """,
+            (order_id,),
+        ).fetchone()
+
+        final_totals = db.execute(
+            """
+            SELECT
+                COALESCE(SUM(op.planned_qty), 0) AS planned,
+                COALESCE(SUM(op.good_qty), 0) AS good
+            FROM operation_progress op
+            JOIN order_items oi ON oi.id = op.order_item_id
+            WHERE oi.order_id = ?
+              AND op.sequence_no = (
+                  SELECT MAX(op2.sequence_no)
+                  FROM operation_progress op2
+                  WHERE op2.order_item_id = op.order_item_id
+              )
+            """,
+            (order_id,),
+        ).fetchone()
+
+        planned = int(totals["planned"])
+        good = int(totals["good"])
+        final_planned = int(final_totals["planned"])
+        final_good = int(final_totals["good"])
+
+        progress = round((good / planned) * 100) if planned > 0 else 0
+        ready_percent = (
+            round((final_good / final_planned) * 100)
+            if final_planned > 0
+            else 0
+        )
+
+        db.execute(
+            """
+            UPDATE orders
+            SET progress = ?, ready_percent = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                max(0, min(100, progress)),
+                max(0, min(100, ready_percent)),
+                datetime.now(timezone.utc).isoformat(),
+                order_id,
+            ),
+        )
+
     def add_audit_event(
         self,
         *,
