@@ -38,7 +38,15 @@ jobs:
       - name: Build Dev Runner
         shell: pwsh
         run: |
-          python -m PyInstaller --noconfirm --clean --windowed --onefile --name MetalboxDev --collect-all PySide6 dev_launcher.py
+          python -m PyInstaller --noconfirm --clean --windowed --onefile --name MetalboxDev --collect-all PySide6 --hidden-import PySide6.QtCore --hidden-import PySide6.QtGui --hidden-import PySide6.QtWidgets dev_launcher.py
+
+      - name: Smoke test packaged Qt runtime
+        shell: pwsh
+        run: |
+          & "dist\MetalboxDev.exe" --self-test-qt
+          if ($LASTEXITCODE -ne 0) {
+            throw "MetalboxDev Qt self-test failed with exit code $LASTEXITCODE"
+          }
 
       - name: Create Dev Runner manifest
         shell: pwsh
