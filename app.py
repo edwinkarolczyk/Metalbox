@@ -48,7 +48,7 @@ from PySide6.QtWidgets import (
 )
 
 APP_NAME = "Metalbox"
-APP_VERSION = "0.1.5"
+APP_VERSION = "0.1.6"
 LOCAL_DATA_ROOT = Path(
     os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
 ) / "Metalbox"
@@ -1747,43 +1747,86 @@ class ProductDetailPage(PageBase):
 
 
 class AlertsPage(PageBase):
-    def __init__(self, go_home: Callable):
+    def __init__(self, go_home: Callable, store: MetalboxStore):
         super().__init__(
             "Alerty i wymagające uwagi",
             go_home,
-            "Jedno miejsce na opóźnienia, braki, awarie, konflikty importu i ryzyko terminu.",
+            "Opóźnienia i wstrzymane etapy generowane z danych Development.",
         )
+        self.store = store
+        self.alert_rows: list[dict] = []
+
         filters = QHBoxLayout()
-        for text in ("Wszystkie", "Terminy", "Jakość", "Braki", "Import Excel", "Połączenie"):
+        for text in ("Wszystkie", "Terminy", "Wstrzymane"):
             btn = QPushButton(text)
             if text == "Wszystkie":
                 btn.setObjectName("primary")
+            else:
+                btn.setObjectName("secondary")
             btn.clicked.connect(lambda checked=False, t=text: mock_message(self, f"Alerty — {t}"))
             filters.addWidget(btn)
         filters.addStretch(1)
         self.root.addLayout(filters)
 
-        rows = [
-            ["WYSOKI", "ZL-740", "Termin", "Planista: mała rezerwa terminu", "Kierownik"],
-            ["WYSOKI", "ZL-781", "Jakość", "2 szt. złom — możliwe dorobienie", "Brygadzista"],
-            ["ŚREDNI", "ZL-763", "Malarnia", "5 szt. wstrzymane do kontroli", "Malarnia"],
-            ["INFO", "—", "Excel", "Ostatni snapshot bez konfliktów", "System"],
-        ]
-        table = compact_table(
+        self.table = compact_table(
             ["Priorytet", "ZL", "Obszar", "Komunikat", "Dla"],
-            rows,
+            [],
             [110, 100, 150, 430, 160],
             270,
         )
-        self.root.addWidget(table, alignment=Qt.AlignLeft)
+        self.root.addWidget(self.table, alignment=Qt.AlignLeft)
 
         cards = QHBoxLayout()
-        cards.addWidget(card("Krytyczne", "2", "wymagają decyzji", 220))
-        cards.addWidget(card("Ostrzeżenia", "1", "do sprawdzenia", 220))
-        cards.addWidget(card("Informacyjne", "1", "bez działania", 220))
+        self.critical_card = card("Wysokie", "0", "wymagają uwagi", 220)
+        self.warning_card = card("Ostrzeżenia", "0", "do sprawdzenia", 220)
+        self.info_card = card("Informacyjne", "0", "bez działania", 220)
+        cards.addWidget(self.critical_card)
+        cards.addWidget(self.warning_card)
+        cards.addWidget(self.info_card)
         cards.addStretch(1)
         self.root.addLayout(cards)
         self.root.addStretch(1)
+
+        self.refresh_data()
+
+    def refresh_data(self) -> None:
+        self.alert_rows = self.store.list_alerts()
+        self.table.setRowCount(len(self.alert_rows))
+
+        severity_counts = {"WYSOKI": 0, "ŚREDNI": 0, "INFO": 0}
+        for row_index, alert in enumerate(self.alert_rows):
+            values = [
+                alert["severity"],
+                alert["code"],
+                alert["area"],
+                alert["message"],
+                alert["owner"],
+            ]
+            self.table.setRowHeight(row_index, sp(38))
+            for column_index, value in enumerate(values):
+                item = QTableWidgetItem(str(value))
+                normalized = str(value).strip().upper()
+                if normalized == "WYSOKI":
+                    item.setForeground(QColor("#eb7373"))
+                elif normalized == "ŚREDNI":
+                    item.setForeground(QColor("#e4bd68"))
+                elif normalized == "INFO":
+                    item.setForeground(QColor("#67dc8e"))
+                self.table.setItem(row_index, column_index, item)
+
+            severity = str(alert["severity"]).upper()
+            if severity in severity_counts:
+                severity_counts[severity] += 1
+
+        mapping = [
+            (self.critical_card, str(severity_counts["WYSOKI"])),
+            (self.warning_card, str(severity_counts["ŚREDNI"])),
+            (self.info_card, str(severity_counts["INFO"])),
+        ]
+        for frame, value in mapping:
+            label = frame.findChild(QLabel, "cardValue")
+            if label is not None:
+                label.setText(value)
 
 
 class SemiProductsPage(PageBase):
@@ -2224,7 +2267,7 @@ class MainWindow(QMainWindow):
         self.planner_page = PlannerPage(self.go_home)
         self.product_detail_page = ProductDetailPage(self.go_home)
         self.products_page = ProductsPage(self.go_home, self.open_product)
-        self.alerts_page = AlertsPage(self.go_home)
+        self.alerts_page = AlertsPage(self.go_home, self.store)
         self.semiproducts_page = SemiProductsPage(self.go_home)
         self.user_profile_page = UserProfilePage(self.go_home)
         self.diagnostics_page = DiagnosticsPage(self.go_home, self.config)
@@ -2360,6 +2403,14 @@ class MainWindow(QMainWindow):
             )
 
     def open_page(self, page: QWidget) -> None:
+        if hasattr(page, "refresh_data"):
+            try:
+                page.refresh_data()
+            except Exception as exc:
+                app_log(
+                    f"Błąd odświeżania {page.__class__.__name__}: {exc}",
+                    "ERROR",
+                )
         self.stack.setCurrentWidget(page)
         app_log(f"Otwarty ekran: {page.__class__.__name__}")
         self._restart_inactivity_timer()
