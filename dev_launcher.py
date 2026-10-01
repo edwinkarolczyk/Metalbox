@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from tkinter import Tk, messagebox
 
-DEV_RUNNER_VERSION = "1.3.0"
+DEV_RUNNER_VERSION = "1.3.1"
 REPO = "edwinkarolczyk/Metalbox"
 BRANCH = "main"
 API_BASE = f"https://api.github.com/repos/{REPO}"
@@ -536,9 +536,13 @@ def main() -> int:
         log("Błąd uruchomienia źródeł:\n" + details, "ERROR")
 
         if updated and restore_previous_source():
+            short_error = f"{type(exc).__name__}: {exc}"
             show_warning(
                 "Metalbox Development",
-                "Nowy kod nie uruchomił się poprawnie. Przywracam poprzednią lokalną wersję.",
+                "Nowy kod nie uruchomił się poprawnie.\n\n"
+                f"Błąd: {short_error}\n\n"
+                "Przywracam poprzednią lokalną wersję.\n"
+                f"Pełny log: {LOG_FILE}",
             )
             try:
                 return run_source()
@@ -552,9 +556,12 @@ def main() -> int:
                 )
                 log("Błąd również po rollbacku:\n" + rollback_details, "ERROR")
 
+        short_error = f"{type(exc).__name__}: {exc}"
         show_error(
             "Metalbox Development",
-            "Nie udało się uruchomić Metalbox. Szczegóły zapisano w dev-runner.log.",
+            "Nie udało się uruchomić Metalbox.\n\n"
+            f"Błąd: {short_error}\n\n"
+            f"Pełny log: {LOG_FILE}",
         )
         return 1
 
