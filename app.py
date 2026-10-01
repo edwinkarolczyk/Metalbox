@@ -1275,7 +1275,7 @@ class TVPage(PageBase):
 
 
 class SettingsPage(PageBase):
-    def __init__(self, config: ClientConfig, go_home: Callable, change_connection: Callable):
+    def __init__(self, config: ClientConfig, go_home: Callable, change_connection: Callable, open_diagnostics: Callable):
         super().__init__("Ustawienia", go_home, "Konfiguracja stanowiska i przyszłych modułów.")
 
         grid = QGridLayout()
@@ -1312,7 +1312,7 @@ class SettingsPage(PageBase):
             if idx == 0:
                 btn.clicked.connect(change_connection)
             elif title == "Diagnostyka":
-                btn.clicked.connect(lambda: mock_message(self, "Diagnostyka — otwórz z paska głównego"))
+                btn.clicked.connect(open_diagnostics)
             else:
                 btn.clicked.connect(lambda checked=False, t=title: mock_message(self, t))
             layout.addWidget(btn)
@@ -1355,7 +1355,12 @@ class MainWindow(QMainWindow):
         self.shipping_page = ShippingPage(self.go_home)
         self.reports_page = ReportsPage(self.go_home)
         self.tv_page = TVPage(self.go_home)
-        self.settings_page = SettingsPage(self.config, self.go_home, self._change_connection)
+        self.settings_page = SettingsPage(
+            self.config,
+            self.go_home,
+            self._change_connection,
+            lambda: self.open_page(self.diagnostics_page),
+        )
 
         for page in (
             self.orders_page,
