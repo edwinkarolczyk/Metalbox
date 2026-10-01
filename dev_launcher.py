@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from tkinter import Tk, messagebox
 
-DEV_RUNNER_VERSION = "1.1.0"
+DEV_RUNNER_VERSION = "1.2.0"
 REPO = "edwinkarolczyk/Metalbox"
 BRANCH = "main"
 API_BASE = f"https://api.github.com/repos/{REPO}"
@@ -215,29 +215,71 @@ def extract_app_version(path: Path) -> str:
         return "nieznana"
 
 
+def load_update_checks(source_dir: Path, fallback_changes: list[dict]) -> dict:
+    path = source_dir / "update_checks.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError("Nieprawidłowy format update_checks.json")
+        checks = data.get("checks", [])
+        if not isinstance(checks, list):
+            raise ValueError("Pole checks nie jest listą")
+        return {
+            "title": str(data.get("title", "Zmiany po aktualizacji")),
+            "description": str(data.get("description", "")),
+            "checks": checks,
+        }
+    except Exception as exc:
+        log(f"Brak poprawnej checklisty opisowej: {exc}", "WARN")
+        return {
+            "title": "Zmiany techniczne",
+            "description": "Brak checklisty funkcjonalnej dla tej aktualizacji.",
+            "checks": [
+                {
+                    "id": f"commit:{item.get('sha', '')}:{index}",
+                    "text": item.get("message", ""),
+                    "trigger": "",
+                }
+                for index, item in enumerate(fallback_changes)
+                if item.get("message")
+            ],
+        }
+
+
 def save_update_state(
     old_version: str,
     new_version: str,
     old_sha: str,
     new_sha: str,
-    changes: list[dict],
+    checks_payload: dict,
 ) -> None:
+    checks = checks_payload.get("checks", [])
+    if not isinstance(checks, list):
+        checks = []
+
     payload = {
-        "schema": 1,
+        "schema": 2,
         "status": "updated",
         "old_version": old_version,
         "new_version": new_version,
         "old_commit": old_sha,
         "new_commit": new_sha,
         "updated_at": datetime.now(timezone.utc).isoformat(),
+        "title": str(checks_payload.get("title", "Zmiany po aktualizacji")),
+        "description": str(checks_payload.get("description", "")),
+        "popup_shown": False,
         "changes": [
             {
-                "id": f"{item.get('sha', '')}:{index}",
-                "sha": item.get("sha", ""),
-                "text": item.get("message", ""),
+                "id": str(item.get("id", f"check:{index}")),
+                "text": str(item.get("text", "")).strip(),
+                "trigger": str(item.get("trigger", "")).strip(),
                 "checked": False,
+                "checked_at": None,
+                "note": "",
+                "problem": False,
             }
-            for index, item in enumerate(changes)
+            for index, item in enumerate(checks)
+            if str(item.get("text", "")).strip()
         ],
     }
     tmp = UPDATE_STATE_FILE.with_suffix(".tmp")
@@ -307,6 +349,7 @@ def sync_source() -> tuple[bool, str]:
     source_text = (extracted / "app.py").read_text(encoding="utf-8")
     compile(source_text, str(extracted / "app.py"), "exec")
     new_version = extract_app_version(extracted / "app.py")
+    checks_payload = load_update_checks(extracted, changes)
 
     if PREVIOUS_DIR.exists():
         shutil.rmtree(PREVIOUS_DIR, ignore_errors=True)
@@ -327,13 +370,13 @@ def sync_source() -> tuple[bool, str]:
         new_version=new_version,
         old_sha=current_sha or "brak",
         new_sha=remote_sha,
-        changes=changes,
+        checks_payload=checks_payload,
     )
     shutil.rmtree(staging_root, ignore_errors=True)
     zip_path.unlink(missing_ok=True)
     log(
         f"Źródła zaktualizowane: {old_version} -> {new_version}, "
-        f"{len(changes)} zmian."
+        f"{len(checks_payload.get('checks', []))} testów funkcjonalnych."
     )
     return True, remote_sha
 
