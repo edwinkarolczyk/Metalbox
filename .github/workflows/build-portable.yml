@@ -1,12 +1,19 @@
-name: Build Metalbox Windows
+name: Build and publish Metalbox Development
 
 on:
   push:
     branches: [ main ]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
+concurrency:
+  group: metalbox-development-release
+  cancel-in-progress: true
+
 jobs:
-  build-windows:
+  build-and-release:
     runs-on: windows-latest
 
     steps:
@@ -24,25 +31,77 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
 
-      - name: Build portable folder
+      - name: Read versions
         shell: pwsh
         run: |
-          python -m PyInstaller --noconfirm --clean --windowed --name Metalbox --collect-all PySide6 app.py
-          Compress-Archive -Path dist\Metalbox\* -DestinationPath Metalbox-0.0.5-portable.zip -Force
+          $appVersion = python -c "import re; s=open('app.py',encoding='utf-8').read(); print(re.search(r'APP_VERSION\s*=\s*[\"\'']([^\"\'']+)',s).group(1))"
+          $launcherVersion = python -c "import re; s=open('launcher.py',encoding='utf-8').read(); print(re.search(r'LAUNCHER_VERSION\s*=\s*[\"\'']([^\"\'']+)',s).group(1))"
+          "APP_VERSION=$appVersion" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "LAUNCHER_VERSION=$launcherVersion" | Out-File -FilePath $env:GITHUB_ENV -Append
 
-      - name: Build single EXE
+      - name: Build Metalbox
         shell: pwsh
         run: |
-          python -m PyInstaller --noconfirm --clean --windowed --onefile --name Metalbox-0.0.5 --collect-all PySide6 app.py
+          python -m PyInstaller --noconfirm --clean --windowed --onefile --name Metalbox --collect-all PySide6 app.py
 
-      - name: Upload portable artifact
+      - name: Build Launcher
+        shell: pwsh
+        run: |
+          python -m PyInstaller --noconfirm --clean --windowed --onefile --name MetalboxLauncher launcher.py
+
+      - name: Create update manifest
+        shell: pwsh
+        run: |
+          $sha = (Get-FileHash "dist\Metalbox.exe" -Algorithm SHA256).Hash.ToLower()
+          $size = (Get-Item "dist\Metalbox.exe").Length
+          $notes = git log -1 --pretty=%s
+          $manifest = [ordered]@{
+            schema = 1
+            channel = "development"
+            version = $env:APP_VERSION
+            build = [int]$env:GITHUB_RUN_NUMBER
+            commit = $env:GITHUB_SHA
+            published_at = (Get-Date).ToUniversalTime().ToString("o")
+            app_asset = "Metalbox.exe"
+            app_sha256 = $sha
+            app_size = $size
+            launcher_asset = "MetalboxLauncher.exe"
+            launcher_version = $env:LAUNCHER_VERSION
+            notes = $notes
+          }
+          $manifest | ConvertTo-Json -Depth 4 | Set-Content -Encoding UTF8 update.json
+          @"
+          Metalbox Development
+          Version: $env:APP_VERSION
+          Build: $env:GITHUB_RUN_NUMBER
+          Commit: $env:GITHUB_SHA
+
+          $notes
+          "@ | Set-Content -Encoding UTF8 release-notes.txt
+
+      - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Metalbox-0.0.5-portable
-          path: Metalbox-0.0.5-portable.zip
+          name: Metalbox-development-${{ github.run_number }}
+          path: |
+            dist\Metalbox.exe
+            dist\MetalboxLauncher.exe
+            update.json
 
-      - name: Upload single EXE artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: Metalbox-0.0.5-exe
-          path: dist\Metalbox-0.0.5.exe
+      - name: Publish Development release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view development *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release delete development --yes --cleanup-tag
+          }
+          gh release create development `
+            --target "$env:GITHUB_SHA" `
+            --prerelease `
+            --title "Metalbox Development" `
+            --notes-file release-notes.txt `
+            update.json `
+            "dist\Metalbox.exe" `
+            "dist\MetalboxLauncher.exe"
