@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Iterator
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 class MetalboxStore:
@@ -86,6 +86,32 @@ class MetalboxStore:
                     """
                 )
                 db.execute("PRAGMA user_version = 1")
+
+            if current < 2:
+                db.executescript(
+                    """
+                    CREATE TABLE IF NOT EXISTS operation_progress (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        order_item_id INTEGER NOT NULL REFERENCES order_items(id) ON DELETE CASCADE,
+                        department TEXT NOT NULL,
+                        sequence_no INTEGER NOT NULL,
+                        planned_qty INTEGER NOT NULL CHECK(planned_qty >= 0),
+                        good_qty INTEGER NOT NULL DEFAULT 0 CHECK(good_qty >= 0),
+                        reject_qty INTEGER NOT NULL DEFAULT 0 CHECK(reject_qty >= 0),
+                        rework_qty INTEGER NOT NULL DEFAULT 0 CHECK(rework_qty >= 0),
+                        status TEXT NOT NULL DEFAULT 'OCZEKUJE',
+                        updated_at TEXT NOT NULL,
+                        UNIQUE(order_item_id, department)
+                    );
+
+                    CREATE INDEX IF NOT EXISTS idx_operation_progress_item
+                        ON operation_progress(order_item_id);
+
+                    CREATE INDEX IF NOT EXISTS idx_operation_progress_department
+                        ON operation_progress(department, status);
+                    """
+                )
+                db.execute("PRAGMA user_version = 2")
 
     def is_empty(self) -> bool:
         with self._connect() as db:
@@ -170,14 +196,68 @@ class MetalboxStore:
                     ),
                 )
                 order_id = int(cursor.lastrowid)
+                stage_factors_by_order = {
+                    "ZL-740": [1.00, 1.00, 0.59, 0.48, 0.31],
+                    "ZL-763": [1.00, 1.00, 1.00, 0.80, 0.71],
+                    "ZL-781": [1.00, 0.75, 0.45, 0.25, 0.17],
+                    "ZL-785": [1.00, 1.00, 0.90, 0.75, 0.64],
+                }
+                departments = ["Laser", "Giętarki", "Zgrzewarki", "Malarnia", "Pakownia"]
+                factors = stage_factors_by_order.get(
+                    order["code"],
+                    [1.00, 0.80, 0.60, 0.40, 0.20],
+                )
+
                 for position_no, (symbol, name, quantity) in enumerate(order["items"], start=1):
-                    db.execute(
+                    cursor_item = db.execute(
                         """
                         INSERT INTO order_items(order_id, position_no, symbol, name, quantity)
                         VALUES (?, ?, ?, ?, ?)
                         """,
                         (order_id, position_no, symbol, name, quantity),
                     )
+                    order_item_id = int(cursor_item.lastrowid)
+
+                    for sequence_no, (department, factor) in enumerate(
+                        zip(departments, factors),
+                        start=1,
+                    ):
+                        good_qty = min(quantity, max(0, round(quantity * factor)))
+                        if good_qty >= quantity and quantity > 0:
+                            status = "GOTOWE"
+                        elif good_qty > 0:
+                            status = "AKTYWNE"
+                        else:
+                            status = "OCZEKUJE"
+
+                        if order["code"] == "ZL-781" and department == "Zgrzewarki":
+                            status = "WSTRZYMANE"
+
+                        db.execute(
+                            """
+                            INSERT INTO operation_progress(
+                                order_item_id,
+                                department,
+                                sequence_no,
+                                planned_qty,
+                                good_qty,
+                                reject_qty,
+                                rework_qty,
+                                status,
+                                updated_at
+                            )
+                            VALUES (?, ?, ?, ?, ?, 0, 0, ?, ?)
+                            """,
+                            (
+                                order_item_id,
+                                department,
+                                sequence_no,
+                                quantity,
+                                good_qty,
+                                status,
+                                now,
+                            ),
+                        )
 
                 self._audit_in_connection(
                     db,
@@ -188,6 +268,125 @@ class MetalboxStore:
                     payload={"development": True},
                 )
         return True
+
+    def ensure_development_progress_seeded(self) -> bool:
+        """Uzupełnia postęp etapów dla istniejącej bazy Development po migracji 1 → 2."""
+        departments = ["Laser", "Giętarki", "Zgrzewarki", "Malarnia", "Pakownia"]
+        stage_factors_by_order = {
+            "ZL-740": [1.00, 1.00, 0.59, 0.48, 0.31],
+            "ZL-763": [1.00, 1.00, 1.00, 0.80, 0.71],
+            "ZL-781": [1.00, 0.75, 0.45, 0.25, 0.17],
+            "ZL-785": [1.00, 1.00, 0.90, 0.75, 0.64],
+        }
+        now = datetime.now(timezone.utc).isoformat()
+        inserted = 0
+
+        with self._connect() as db:
+            items = db.execute(
+                """
+                SELECT
+                    oi.id,
+                    oi.quantity,
+                    o.code
+                FROM order_items oi
+                JOIN orders o ON o.id = oi.order_id
+                """
+            ).fetchall()
+
+            for item in items:
+                factors = stage_factors_by_order.get(
+                    str(item["code"]),
+                    [1.00, 0.80, 0.60, 0.40, 0.20],
+                )
+                quantity = int(item["quantity"])
+
+                for sequence_no, (department, factor) in enumerate(
+                    zip(departments, factors),
+                    start=1,
+                ):
+                    exists = db.execute(
+                        """
+                        SELECT 1
+                        FROM operation_progress
+                        WHERE order_item_id = ? AND department = ?
+                        """,
+                        (int(item["id"]), department),
+                    ).fetchone()
+                    if exists is not None:
+                        continue
+
+                    good_qty = min(quantity, max(0, round(quantity * factor)))
+                    if good_qty >= quantity and quantity > 0:
+                        status = "GOTOWE"
+                    elif good_qty > 0:
+                        status = "AKTYWNE"
+                    else:
+                        status = "OCZEKUJE"
+
+                    if str(item["code"]) == "ZL-781" and department == "Zgrzewarki":
+                        status = "WSTRZYMANE"
+
+                    db.execute(
+                        """
+                        INSERT INTO operation_progress(
+                            order_item_id,
+                            department,
+                            sequence_no,
+                            planned_qty,
+                            good_qty,
+                            reject_qty,
+                            rework_qty,
+                            status,
+                            updated_at
+                        )
+                        VALUES (?, ?, ?, ?, ?, 0, 0, ?, ?)
+                        """,
+                        (
+                            int(item["id"]),
+                            department,
+                            sequence_no,
+                            quantity,
+                            good_qty,
+                            status,
+                            now,
+                        ),
+                    )
+                    inserted += 1
+
+        return inserted > 0
+
+    def get_order_stage_progress(self, code: str) -> list[dict]:
+        with self._connect() as db:
+            rows = db.execute(
+                """
+                SELECT
+                    op.department,
+                    MIN(op.sequence_no) AS sequence_no,
+                    SUM(op.planned_qty) AS planned_qty,
+                    SUM(op.good_qty) AS good_qty,
+                    SUM(op.reject_qty) AS reject_qty,
+                    SUM(op.rework_qty) AS rework_qty,
+                    CASE
+                        WHEN SUM(CASE WHEN op.status = 'WSTRZYMANE' THEN 1 ELSE 0 END) > 0
+                            THEN 'WSTRZYMANE'
+                        WHEN SUM(op.planned_qty) > 0
+                             AND SUM(op.good_qty) >= SUM(op.planned_qty)
+                            THEN 'GOTOWE'
+                        WHEN SUM(op.good_qty) > 0
+                            THEN 'AKTYWNE'
+                        ELSE 'OCZEKUJE'
+                    END AS status
+                FROM operation_progress op
+                JOIN order_items oi ON oi.id = op.order_item_id
+                JOIN orders o ON o.id = oi.order_id
+                WHERE o.code = ?
+                GROUP BY op.department
+                ORDER BY MIN(op.sequence_no)
+                """,
+                (code,),
+            ).fetchall()
+
+        return [dict(row) for row in rows]
 
     def list_orders(
         self,
