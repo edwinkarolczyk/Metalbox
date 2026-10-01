@@ -42,76 +42,121 @@ class MetalboxStore:
                     f"Baza Metalbox ma nowszy schemat ({current}) niż aplikacja ({SCHEMA_VERSION})."
                 )
 
-            if current < 1:
-                db.executescript(
-                    """
-                    CREATE TABLE IF NOT EXISTS orders (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        code TEXT NOT NULL UNIQUE,
-                        client TEXT NOT NULL DEFAULT '',
-                        deadline TEXT NOT NULL DEFAULT '',
-                        priority TEXT NOT NULL DEFAULT 'NORMALNY',
-                        status TEXT NOT NULL DEFAULT 'NOWE',
-                        progress INTEGER NOT NULL DEFAULT 0 CHECK(progress BETWEEN 0 AND 100),
-                        ready_percent INTEGER NOT NULL DEFAULT 0 CHECK(ready_percent BETWEEN 0 AND 100),
-                        created_at TEXT NOT NULL,
-                        updated_at TEXT NOT NULL
-                    );
+            # Zawsze odtwarzamy brakujące obiekty schematu. To naprawia bazy,
+            # w których PRAGMA user_version zdążył się zapisać, ale poprzedni
+            # proces został przerwany przed utworzeniem wszystkich tabel/indeksów.
+            db.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS orders (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    code TEXT NOT NULL UNIQUE,
+                    client TEXT NOT NULL DEFAULT '',
+                    deadline TEXT NOT NULL DEFAULT '',
+                    priority TEXT NOT NULL DEFAULT 'NORMALNY',
+                    status TEXT NOT NULL DEFAULT 'NOWE',
+                    progress INTEGER NOT NULL DEFAULT 0 CHECK(progress BETWEEN 0 AND 100),
+                    ready_percent INTEGER NOT NULL DEFAULT 0 CHECK(ready_percent BETWEEN 0 AND 100),
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
 
-                    CREATE TABLE IF NOT EXISTS order_items (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
-                        position_no INTEGER NOT NULL DEFAULT 1,
-                        symbol TEXT NOT NULL,
-                        name TEXT NOT NULL DEFAULT '',
-                        quantity INTEGER NOT NULL CHECK(quantity >= 0),
-                        UNIQUE(order_id, position_no)
-                    );
+                CREATE TABLE IF NOT EXISTS order_items (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+                    position_no INTEGER NOT NULL DEFAULT 1,
+                    symbol TEXT NOT NULL,
+                    name TEXT NOT NULL DEFAULT '',
+                    quantity INTEGER NOT NULL CHECK(quantity >= 0),
+                    UNIQUE(order_id, position_no)
+                );
 
-                    CREATE TABLE IF NOT EXISTS audit_events (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        occurred_at TEXT NOT NULL,
-                        actor TEXT NOT NULL DEFAULT 'system',
-                        action TEXT NOT NULL,
-                        entity_type TEXT NOT NULL,
-                        entity_id TEXT NOT NULL,
-                        payload_json TEXT NOT NULL DEFAULT '{}'
-                    );
+                CREATE TABLE IF NOT EXISTS audit_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    occurred_at TEXT NOT NULL,
+                    actor TEXT NOT NULL DEFAULT 'system',
+                    action TEXT NOT NULL,
+                    entity_type TEXT NOT NULL,
+                    entity_id TEXT NOT NULL,
+                    payload_json TEXT NOT NULL DEFAULT '{}'
+                );
 
-                    CREATE INDEX IF NOT EXISTS idx_order_items_order
-                        ON order_items(order_id);
+                CREATE TABLE IF NOT EXISTS operation_progress (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    order_item_id INTEGER NOT NULL REFERENCES order_items(id) ON DELETE CASCADE,
+                    department TEXT NOT NULL,
+                    sequence_no INTEGER NOT NULL,
+                    planned_qty INTEGER NOT NULL CHECK(planned_qty >= 0),
+                    good_qty INTEGER NOT NULL DEFAULT 0 CHECK(good_qty >= 0),
+                    reject_qty INTEGER NOT NULL DEFAULT 0 CHECK(reject_qty >= 0),
+                    rework_qty INTEGER NOT NULL DEFAULT 0 CHECK(rework_qty >= 0),
+                    status TEXT NOT NULL DEFAULT 'OCZEKUJE',
+                    updated_at TEXT NOT NULL,
+                    UNIQUE(order_item_id, department)
+                );
 
-                    CREATE INDEX IF NOT EXISTS idx_audit_entity
-                        ON audit_events(entity_type, entity_id, occurred_at);
-                    """
+                CREATE INDEX IF NOT EXISTS idx_order_items_order
+                    ON order_items(order_id);
+
+                CREATE INDEX IF NOT EXISTS idx_audit_entity
+                    ON audit_events(entity_type, entity_id, occurred_at);
+
+                CREATE INDEX IF NOT EXISTS idx_operation_progress_item
+                    ON operation_progress(order_item_id);
+
+                CREATE INDEX IF NOT EXISTS idx_operation_progress_department
+                    ON operation_progress(department, status);
+                """
+            )
+
+            self._ensure_column(
+                db,
+                "orders",
+                "progress",
+                "INTEGER NOT NULL DEFAULT 0",
+            )
+            self._ensure_column(
+                db,
+                "orders",
+                "ready_percent",
+                "INTEGER NOT NULL DEFAULT 0",
+            )
+            self._ensure_column(
+                db,
+                "orders",
+                "created_at",
+                "TEXT NOT NULL DEFAULT ''",
+            )
+            self._ensure_column(
+                db,
+                "orders",
+                "updated_at",
+                "TEXT NOT NULL DEFAULT ''",
+            )
+
+            db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+
+            integrity = str(db.execute("PRAGMA quick_check").fetchone()[0])
+            if integrity.lower() != "ok":
+                raise RuntimeError(
+                    f"Baza Metalbox nie przeszła kontroli integralności: {integrity}"
                 )
-                db.execute("PRAGMA user_version = 1")
 
-            if current < 2:
-                db.executescript(
-                    """
-                    CREATE TABLE IF NOT EXISTS operation_progress (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        order_item_id INTEGER NOT NULL REFERENCES order_items(id) ON DELETE CASCADE,
-                        department TEXT NOT NULL,
-                        sequence_no INTEGER NOT NULL,
-                        planned_qty INTEGER NOT NULL CHECK(planned_qty >= 0),
-                        good_qty INTEGER NOT NULL DEFAULT 0 CHECK(good_qty >= 0),
-                        reject_qty INTEGER NOT NULL DEFAULT 0 CHECK(reject_qty >= 0),
-                        rework_qty INTEGER NOT NULL DEFAULT 0 CHECK(rework_qty >= 0),
-                        status TEXT NOT NULL DEFAULT 'OCZEKUJE',
-                        updated_at TEXT NOT NULL,
-                        UNIQUE(order_item_id, department)
-                    );
-
-                    CREATE INDEX IF NOT EXISTS idx_operation_progress_item
-                        ON operation_progress(order_item_id);
-
-                    CREATE INDEX IF NOT EXISTS idx_operation_progress_department
-                        ON operation_progress(department, status);
-                    """
-                )
-                db.execute("PRAGMA user_version = 2")
+    @staticmethod
+    def _ensure_column(
+        db: sqlite3.Connection,
+        table: str,
+        column: str,
+        definition: str,
+    ) -> None:
+        columns = {
+            str(row["name"])
+            for row in db.execute(f"PRAGMA table_info({table})").fetchall()
+        }
+        if column in columns:
+            return
+        db.execute(
+            f"ALTER TABLE {table} ADD COLUMN {column} {definition}"
+        )
 
     def is_empty(self) -> bool:
         with self._connect() as db:
