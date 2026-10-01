@@ -48,7 +48,7 @@ from PySide6.QtWidgets import (
 )
 
 APP_NAME = "Metalbox"
-APP_VERSION = "0.1.2"
+APP_VERSION = "0.1.3"
 LOCAL_DATA_ROOT = Path(
     os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
 ) / "Metalbox"
@@ -878,22 +878,26 @@ class DepartmentPage(PageBase):
         super().__init__(
             department,
             go_home,
-            "Kolejka działu i bieżąca produkcja. Wszystkie dane poniżej są demonstracyjne.",
+            "Kolejka działu i bieżąca produkcja z bazy Development.",
         )
         self.department = department
         self.store = store
-        self.queue_rows = self.store.list_department_queue(department)
-        summary = self.store.department_summary(department)
+        self.queue_rows: list[dict] = []
+        self.stat_labels: dict[str, QLabel] = {}
 
         stats = QHBoxLayout()
         stats.setSpacing(sp(12))
-        for title, value, note in [
-            ("Aktywne", str(summary["active"]), "zlecenia"),
-            ("Oczekuje", str(summary["waiting"]), "w kolejce"),
-            ("Wstrzymane", str(summary["paused"]), "wymaga uwagi"),
-            ("Do wykonania", f'{summary["remaining_qty"]:,}'.replace(",", " "), "szt."),
+        for key, title, note in [
+            ("active", "Aktywne", "zlecenia"),
+            ("waiting", "Oczekuje", "w kolejce"),
+            ("paused", "Wstrzymane", "wymaga uwagi"),
+            ("remaining_qty", "Do wykonania", "szt."),
         ]:
-            stats.addWidget(card(title, value, note, 205))
+            metric = card(title, "0", note, 205)
+            value_label = metric.findChild(QLabel, "cardValue")
+            if value_label is not None:
+                self.stat_labels[key] = value_label
+            stats.addWidget(metric)
         stats.addStretch(1)
         self.root.addLayout(stats)
 
@@ -923,34 +927,13 @@ class DepartmentPage(PageBase):
         scroll.setFrameShape(QFrame.NoFrame)
         body = QWidget()
         body.setMaximumWidth(sp(1580))
-        cards = QVBoxLayout(body)
-        cards.setContentsMargins(0, 0, 0, 0)
-        cards.setSpacing(sp(12))
-        if not self.queue_rows:
-            empty = QFrame()
-            empty.setObjectName("panel")
-            empty_layout = QVBoxLayout(empty)
-            empty_layout.setContentsMargins(sp(18), sp(18), sp(18), sp(18))
-            empty_layout.addWidget(section_heading("Brak zleceń w kolejce"))
-            hint = QLabel("Dla tego działu nie ma obecnie pozycji w bazie Development.")
-            hint.setObjectName("hint")
-            empty_layout.addWidget(hint)
-            cards.addWidget(empty)
-        else:
-            for idx, order in enumerate(self.queue_rows):
-                cards.addWidget(
-                    self._order_card(
-                        str(order["code"]),
-                        str(order["products"] or "—"),
-                        int(order["planned_qty"]),
-                        int(order["good_qty"]),
-                        str(order["status"]),
-                        idx,
-                    )
-                )
-        cards.addStretch(1)
+        self.cards_layout = QVBoxLayout(body)
+        self.cards_layout.setContentsMargins(0, 0, 0, 0)
+        self.cards_layout.setSpacing(sp(12))
         scroll.setWidget(body)
         self.root.addWidget(scroll, 1)
+
+        self.refresh_data()
 
     def _special_panel(self, department: str) -> QFrame | None:
         configs = {
@@ -1063,10 +1046,127 @@ class DepartmentPage(PageBase):
                 btn.setObjectName("warningGhost")
             elif text == "Problem":
                 btn.setObjectName("dangerGhost")
-            btn.clicked.connect(lambda checked=False, t=text: mock_message(self, t))
+
+            if text == "Rozpocznij":
+                btn.setEnabled(status_text == "OCZEKUJE")
+                btn.clicked.connect(
+                    lambda checked=False, z=code: self._set_status(z, "AKTYWNE")
+                )
+            elif text == "Wstrzymaj":
+                btn.setEnabled(status_text == "AKTYWNE")
+                btn.clicked.connect(
+                    lambda checked=False, z=code: self._set_status(z, "WSTRZYMANE")
+                )
+            elif text == "Wznów":
+                btn.setEnabled(status_text == "WSTRZYMANE")
+                btn.clicked.connect(
+                    lambda checked=False, z=code: self._set_status(z, "AKTYWNE")
+                )
+            elif text == "Dodaj ilość":
+                btn.setEnabled(status_text == "AKTYWNE" and remaining > 0)
+                btn.clicked.connect(
+                    lambda checked=False, z=code, r=remaining: self._add_quantity(z, r)
+                )
+            elif text == "Problem":
+                btn.clicked.connect(lambda: mock_message(self, "Problem produkcyjny"))
+            else:
+                btn.clicked.connect(lambda: mock_message(self, "Szczegóły zlecenia"))
+
             bottom.addWidget(btn)
         box.addLayout(bottom)
         return frame
+
+    def refresh_data(self) -> None:
+        self.queue_rows = self.store.list_department_queue(self.department)
+        summary = self.store.department_summary(self.department)
+
+        for key in ("active", "waiting", "paused"):
+            label = self.stat_labels.get(key)
+            if label is not None:
+                label.setText(str(summary[key]))
+
+        remaining_label = self.stat_labels.get("remaining_qty")
+        if remaining_label is not None:
+            remaining_label.setText(
+                f'{summary["remaining_qty"]:,}'.replace(",", " ")
+            )
+
+        while self.cards_layout.count():
+            item = self.cards_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+
+        if not self.queue_rows:
+            empty = QFrame()
+            empty.setObjectName("panel")
+            empty_layout = QVBoxLayout(empty)
+            empty_layout.setContentsMargins(sp(18), sp(18), sp(18), sp(18))
+            empty_layout.addWidget(section_heading("Brak zleceń w kolejce"))
+            hint = QLabel("Dla tego działu nie ma obecnie pozycji w bazie Development.")
+            hint.setObjectName("hint")
+            empty_layout.addWidget(hint)
+            self.cards_layout.addWidget(empty)
+        else:
+            for idx, order in enumerate(self.queue_rows):
+                self.cards_layout.addWidget(
+                    self._order_card(
+                        str(order["code"]),
+                        str(order["products"] or "—"),
+                        int(order["planned_qty"]),
+                        int(order["good_qty"]),
+                        str(order["status"]),
+                        idx,
+                    )
+                )
+
+        self.cards_layout.addStretch(1)
+
+    def _set_status(self, code: str, status: str) -> None:
+        try:
+            self.store.set_department_order_status(
+                code,
+                self.department,
+                status,
+                actor="development-user",
+            )
+            app_log(
+                f"Status operacji: {code} • {self.department} -> {status}"
+            )
+            self.refresh_data()
+        except ValueError as exc:
+            QMessageBox.warning(self, "Nie można zmienić statusu", str(exc))
+
+    def _add_quantity(self, code: str, remaining: int) -> None:
+        if remaining <= 0:
+            return
+
+        quantity, ok = QInputDialog.getInt(
+            self,
+            "Dodaj wykonaną ilość",
+            f"{code} • {self.department}\nPozostało: {remaining} szt.\n\nDodaj:",
+            1,
+            1,
+            remaining,
+            1,
+        )
+        if not ok:
+            return
+
+        try:
+            result = self.store.add_department_good_qty(
+                code,
+                self.department,
+                quantity,
+                actor="development-user",
+            )
+            app_log(
+                f"Dodano ilość: {code} • {self.department} • +{quantity} "
+                f"• postęp={result['progress']}% • gotowe={result['ready_percent']}%"
+            )
+            self.refresh_data()
+        except ValueError as exc:
+            QMessageBox.warning(self, "Nie można dodać ilości", str(exc))
 
 
 class OrdersPage(PageBase):
@@ -2178,7 +2278,10 @@ class MainWindow(QMainWindow):
         self._restart_inactivity_timer()
 
     def open_department(self, department: str) -> None:
-        self.open_page(self.department_pages[department])
+        page = self.department_pages[department]
+        if hasattr(page, "refresh_data"):
+            page.refresh_data()
+        self.open_page(page)
 
     def open_order(self, code: str) -> None:
         self.order_detail_page.set_order(code)
