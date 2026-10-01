@@ -289,7 +289,7 @@ class UpdateChecklistDialog(QDialog):
                 checkbox = QCheckBox(f"{text}   [{sha}]")
                 checkbox.setChecked(bool(item.get("checked", False)))
                 checkbox.stateChanged.connect(
-                    lambda state, i=index: self._toggle_change(i, state == Qt.Checked)
+                    lambda state, i=index: self._toggle_change(i, bool(state))
                 )
                 body_layout.addWidget(checkbox)
                 self.checkboxes.append((checkbox, index))
