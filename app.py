@@ -48,7 +48,7 @@ from PySide6.QtWidgets import (
 )
 
 APP_NAME = "Metalbox"
-APP_VERSION = "0.1.0"
+APP_VERSION = "0.1.1"
 LOCAL_DATA_ROOT = Path(
     os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
 ) / "Metalbox"
@@ -1214,24 +1214,26 @@ class OrderDetailPage(PageBase):
         stage_layout.addWidget(
             section_heading(
                 "Postęp po działach",
-                "Agregacja etapów zostanie podłączona w kolejnym rzucie logiki.",
+                "Agregacja ilości z tabeli operation_progress.",
             )
         )
-        self.stage_rows: list[tuple[QLabel, QProgressBar]] = []
+        self.stage_rows: dict[str, QProgressBar] = {}
         for name in ("Laser", "Giętarki", "Zgrzewarki", "Malarnia", "Pakownia"):
             row = QHBoxLayout()
             label = QLabel(name)
             label.setFixedWidth(sp(130))
             row.addWidget(label)
+
             bar = QProgressBar()
-            bar.setRange(0, 100)
+            bar.setRange(0, 1)
             bar.setValue(0)
-            bar.setFormat("—")
+            bar.setFormat("Brak danych")
             bar.setFixedWidth(sp(900))
             row.addWidget(bar)
             row.addStretch(1)
+
             stage_layout.addLayout(row)
-            self.stage_rows.append((label, bar))
+            self.stage_rows[name] = bar
         self.root.addWidget(stages, alignment=Qt.AlignLeft)
 
         self.positions_table = compact_table(
@@ -1328,6 +1330,31 @@ class OrderDetailPage(PageBase):
                     column_index,
                     QTableWidgetItem(str(value)),
                 )
+
+        stage_data = {
+            row["department"]: row
+            for row in self.store.get_order_stage_progress(code)
+        }
+
+        for department, bar in self.stage_rows.items():
+            row = stage_data.get(department)
+            if row is None:
+                bar.setRange(0, 1)
+                bar.setValue(0)
+                bar.setFormat("Brak danych")
+                continue
+
+            planned = max(0, int(row["planned_qty"]))
+            good = max(0, int(row["good_qty"]))
+            rejects = max(0, int(row["reject_qty"]))
+            rework = max(0, int(row["rework_qty"]))
+            status = str(row["status"])
+
+            bar.setRange(0, max(planned, 1))
+            bar.setValue(min(good, max(planned, 1)))
+            bar.setFormat(
+                f"{good} / {planned} szt. • braki {rejects} • poprawki {rework} • {status}"
+            )
 
         self.store.add_audit_event(
             actor="development-user",
@@ -2656,9 +2683,11 @@ def main() -> int:
     DEV_DATA_DIR.mkdir(parents=True, exist_ok=True)
     store = MetalboxStore(DEV_DB_FILE)
     seeded = store.seed_development_data()
+    progress_seeded = store.ensure_development_progress_seeded()
     app_log(
         f"Baza Development gotowa: {DEV_DB_FILE} • "
-        f"seed={'tak' if seeded else 'nie'}"
+        f"seed={'tak' if seeded else 'nie'} • "
+        f"postęp_seed={'tak' if progress_seeded else 'nie'}"
     )
 
     window = MainWindow(config, store)
