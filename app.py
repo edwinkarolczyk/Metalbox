@@ -20,6 +20,7 @@ from PySide6.QtCore import QEvent, Qt, QTimer
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
+    QCheckBox,
     QComboBox,
     QDialog,
     QFormLayout,
@@ -44,7 +45,7 @@ from PySide6.QtWidgets import (
 )
 
 APP_NAME = "Metalbox"
-APP_VERSION = "0.0.8"
+APP_VERSION = "0.0.9"
 LOCAL_DATA_ROOT = Path(
     os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
 ) / "Metalbox"
@@ -55,6 +56,8 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 CONFIG_FILE = CONFIG_DIR / "metalbox_client.json"
 ACCESS_FILE = CONFIG_DIR / "access.json"
 APP_LOG_FILE = LOG_DIR / "metalbox.log"
+DEV_ROOT = LOCAL_DATA_ROOT / "dev"
+DEV_UPDATE_STATE_FILE = DEV_ROOT / "update_state.json"
 
 # Tylko na czas developmentu. Ustaw False przed wersją produkcyjną,
 # aby całkowicie ukryć przycisk szybkiego zamykania aplikacji.
@@ -212,6 +215,132 @@ def export_diagnostics(parent, config: "ClientConfig") -> Path | None:
             f"Nie udało się zapisać paczki diagnostycznej:\n{exc}",
         )
         return None
+
+
+def load_dev_update_state() -> dict:
+    try:
+        data = json.loads(DEV_UPDATE_STATE_FILE.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError, TypeError):
+        return {}
+
+
+def save_dev_update_state(data: dict) -> None:
+    DEV_ROOT.mkdir(parents=True, exist_ok=True)
+    tmp = DEV_UPDATE_STATE_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, DEV_UPDATE_STATE_FILE)
+
+
+class UpdateChecklistDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Metalbox — zmiany po aktualizacji")
+        self.setModal(True)
+        self.setMinimumWidth(sp(720))
+        self.state = load_dev_update_state()
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(sp(20), sp(18), sp(20), sp(18))
+        root.setSpacing(sp(12))
+
+        old_version = str(self.state.get("old_version", "—"))
+        new_version = str(self.state.get("new_version", APP_VERSION))
+        old_commit = str(self.state.get("old_commit", "—"))[:12]
+        new_commit = str(self.state.get("new_commit", "—"))[:12]
+
+        title = QLabel(f"Zmiany: {old_version}  →  {new_version}")
+        title.setObjectName("detailTitle")
+        root.addWidget(title)
+
+        meta = QLabel(f"{old_commit}  →  {new_commit}")
+        meta.setObjectName("hint")
+        root.addWidget(meta)
+
+        info = QLabel(
+            "Kliknij pozycję, aby zaznaczyć ją jako sprawdzoną. "
+            "Kliknij ponownie, aby odznaczyć. Przy następnej aktualizacji lista zostanie zastąpiona nową."
+        )
+        info.setWordWrap(True)
+        info.setObjectName("hint")
+        root.addWidget(info)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        body = QWidget()
+        body_layout = QVBoxLayout(body)
+        body_layout.setContentsMargins(0, 0, 0, 0)
+        body_layout.setSpacing(sp(8))
+
+        changes = self.state.get("changes", [])
+        if not isinstance(changes, list):
+            changes = []
+
+        self.checkboxes: list[tuple[QCheckBox, int]] = []
+        if not changes:
+            empty = QLabel("Brak opisanych zmian dla tej aktualizacji.")
+            empty.setObjectName("hint")
+            body_layout.addWidget(empty)
+        else:
+            for index, item in enumerate(changes):
+                text = str(item.get("text", "")).strip() or "Zmiana bez opisu"
+                sha = str(item.get("sha", ""))[:12]
+                checkbox = QCheckBox(f"{text}   [{sha}]")
+                checkbox.setChecked(bool(item.get("checked", False)))
+                checkbox.stateChanged.connect(
+                    lambda state, i=index: self._toggle_change(i, state == Qt.Checked)
+                )
+                body_layout.addWidget(checkbox)
+                self.checkboxes.append((checkbox, index))
+
+        body_layout.addStretch(1)
+        scroll.setWidget(body)
+        root.addWidget(scroll, 1)
+
+        footer = QHBoxLayout()
+        progress = self._progress_text()
+        self.progress_label = QLabel(progress)
+        self.progress_label.setObjectName("hint")
+        footer.addWidget(self.progress_label)
+        footer.addStretch(1)
+
+        reset = QPushButton("Odznacz wszystko")
+        reset.clicked.connect(self._reset_all)
+        footer.addWidget(reset)
+
+        close = QPushButton("Zamknij")
+        close.setObjectName("primary")
+        close.clicked.connect(self.accept)
+        footer.addWidget(close)
+        root.addLayout(footer)
+
+    def _progress_text(self) -> str:
+        changes = self.state.get("changes", [])
+        if not isinstance(changes, list) or not changes:
+            return "0 / 0 sprawdzone"
+        checked = sum(1 for item in changes if bool(item.get("checked", False)))
+        return f"{checked} / {len(changes)} sprawdzone"
+
+    def _toggle_change(self, index: int, checked: bool) -> None:
+        changes = self.state.get("changes", [])
+        if isinstance(changes, list) and 0 <= index < len(changes):
+            changes[index]["checked"] = checked
+            save_dev_update_state(self.state)
+            self.progress_label.setText(self._progress_text())
+
+    def _reset_all(self) -> None:
+        changes = self.state.get("changes", [])
+        if not isinstance(changes, list):
+            return
+        for item in changes:
+            item["checked"] = False
+        save_dev_update_state(self.state)
+        for checkbox, _index in self.checkboxes:
+            checkbox.blockSignals(True)
+            checkbox.setChecked(False)
+            checkbox.blockSignals(False)
+        self.progress_label.setText(self._progress_text())
 
 
 def _derive_password_hash(password: str, salt: bytes, iterations: int = 240_000) -> bytes:
@@ -477,7 +606,7 @@ def mock_message(parent, title: str = "Wydmuszka") -> None:
         parent,
         title,
         "To jest element docelowego interfejsu.\n"
-        "W wersji 0.0.8 nie zapisuje jeszcze danych produkcyjnych.",
+        "W wersji 0.0.9 nie zapisuje jeszcze danych produkcyjnych.",
     )
 
 
@@ -598,7 +727,7 @@ class ConnectionDialog(QDialog):
                 self,
                 "Test połączenia",
                 "Konfiguracja wygląda poprawnie.\n\n"
-                "W wersji 0.0.8 prawdziwy Metalbox Server nie jest jeszcze podłączony.",
+                "W wersji 0.0.9 prawdziwy Metalbox Server nie jest jeszcze podłączony.",
             )
 
     def _accept_test_mode(self) -> None:
@@ -1728,6 +1857,37 @@ class MainWindow(QMainWindow):
         self.product_detail_page.set_product(symbol)
         self.open_page(self.product_detail_page)
 
+    def _open_update_checklist(self) -> None:
+        dialog = UpdateChecklistDialog(self)
+        dialog.exec()
+        self._refresh_update_banner()
+
+    def _refresh_update_banner(self) -> None:
+        if not hasattr(self, "update_status_label"):
+            return
+        state = load_dev_update_state()
+        if not state:
+            self.update_status_label.setText(f"✓ AKTUALNA WERSJA  •  {APP_VERSION}")
+            self.update_details_button.setText("Brak nowych zmian")
+            self.update_details_button.setEnabled(False)
+            return
+
+        old_version = str(state.get("old_version", "—"))
+        new_version = str(state.get("new_version", APP_VERSION))
+        changes = state.get("changes", [])
+        if not isinstance(changes, list):
+            changes = []
+        checked = sum(1 for item in changes if bool(item.get("checked", False)))
+        total = len(changes)
+
+        self.update_status_label.setText(
+            f"✓ ZAKTUALIZOWANO  •  {old_version}  →  {new_version}"
+        )
+        self.update_details_button.setText(
+            f"Sprawdź zmiany  {checked}/{total}"
+        )
+        self.update_details_button.setEnabled(True)
+
     def _build_home(self) -> QWidget:
         page = QWidget()
         outer = QVBoxLayout(page)
@@ -1755,6 +1915,29 @@ class MainWindow(QMainWindow):
         profile_btn.clicked.connect(lambda: self.open_page(self.user_profile_page))
         top.addWidget(profile_btn)
         outer.addLayout(top)
+
+        update_bar = QFrame()
+        update_bar.setObjectName("updateBar")
+        update_layout = QHBoxLayout(update_bar)
+        update_layout.setContentsMargins(sp(12), sp(8), sp(12), sp(8))
+        update_layout.setSpacing(sp(10))
+
+        update_icon = QLabel("↻")
+        update_icon.setObjectName("updateIcon")
+        update_layout.addWidget(update_icon)
+
+        self.update_status_label = QLabel()
+        self.update_status_label.setObjectName("updateStatus")
+        update_layout.addWidget(self.update_status_label)
+        update_layout.addStretch(1)
+
+        self.update_details_button = QPushButton("Sprawdź zmiany")
+        self.update_details_button.setObjectName("ghostGreen")
+        self.update_details_button.clicked.connect(self._open_update_checklist)
+        update_layout.addWidget(self.update_details_button)
+
+        outer.addWidget(update_bar)
+        QTimer.singleShot(0, self._refresh_update_banner)
 
         management = QHBoxLayout()
         management.setSpacing(sp(8))
@@ -1909,6 +2092,20 @@ QLabel#connection {
 }
 QLabel#connectionWarning {
     color: #d9b560;
+    font-weight: 800;
+}
+QFrame#updateBar {
+    background: #111815;
+    border: 1px solid #285f3c;
+    border-radius: 8px;
+}
+QLabel#updateIcon {
+    color: #65dc8d;
+    font-size: 18px;
+    font-weight: 900;
+}
+QLabel#updateStatus {
+    color: #dce7df;
     font-weight: 800;
 }
 QLabel#pageTitle {
