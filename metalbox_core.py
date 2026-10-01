@@ -908,26 +908,55 @@ class MetalboxStore:
 
         return result
 
-    def dashboard_alert_count(self) -> int:
-        affected_orders: set[str] = {
-            str(row["code"])
-            for row in self.list_orders(filter_key="Opóźnione")
-        }
+    def list_alerts(self) -> list[dict]:
+        alerts: list[dict] = []
+
+        for order in self.list_orders(filter_key="Opóźnione"):
+            alerts.append(
+                {
+                    "severity": "WYSOKI",
+                    "code": order["code"],
+                    "area": "Termin",
+                    "message": (
+                        f"Termin {order['deadline']} minął, "
+                        f"gotowość {order['ready_percent']}%."
+                    ),
+                    "owner": "Kierownik",
+                    "kind": "deadline",
+                }
+            )
 
         with self._connect() as db:
             rows = db.execute(
                 """
-                SELECT DISTINCT o.code
+                SELECT DISTINCT
+                    o.code,
+                    op.department
                 FROM operation_progress op
                 JOIN order_items oi ON oi.id = op.order_item_id
                 JOIN orders o ON o.id = oi.order_id
                 WHERE op.status = 'WSTRZYMANE'
                   AND o.status NOT IN ('ZAKOŃCZONE', 'ANULOWANE')
+                ORDER BY o.code, op.department
                 """
             ).fetchall()
 
-        affected_orders.update(str(row["code"]) for row in rows)
-        return len(affected_orders)
+        for row in rows:
+            alerts.append(
+                {
+                    "severity": "WYSOKI",
+                    "code": row["code"],
+                    "area": row["department"],
+                    "message": "Etap produkcji jest wstrzymany.",
+                    "owner": "Brygadzista",
+                    "kind": "paused",
+                }
+            )
+
+        return alerts
+
+    def dashboard_alert_count(self) -> int:
+        return len(self.list_alerts())
 
     def add_audit_event(
         self,
