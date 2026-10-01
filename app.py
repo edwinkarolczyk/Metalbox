@@ -48,7 +48,7 @@ from PySide6.QtWidgets import (
 )
 
 APP_NAME = "Metalbox"
-APP_VERSION = "0.1.4"
+APP_VERSION = "0.1.5"
 LOCAL_DATA_ROOT = Path(
     os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
 ) / "Metalbox"
@@ -2307,8 +2307,57 @@ class MainWindow(QMainWindow):
             self.inactivity_timer.start(self.config.inactivity_seconds * 1000)
 
     def go_home(self) -> None:
+        self.refresh_home()
         self.stack.setCurrentWidget(self.home)
         self.inactivity_timer.stop()
+
+    def refresh_home(self) -> None:
+        if not hasattr(self, "home_live_layout"):
+            return
+
+        while self.home_live_layout.count():
+            item = self.home_live_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+
+        rows = self.store.dashboard_live_orders(limit=4)
+        if not rows:
+            empty = QFrame()
+            empty.setObjectName("panel")
+            layout = QVBoxLayout(empty)
+            layout.setContentsMargins(sp(16), sp(12), sp(16), sp(12))
+            layout.addWidget(section_heading("Brak aktywnej produkcji"))
+            note = QLabel("Brak aktywnych ZL w bazie Development.")
+            note.setObjectName("hint")
+            layout.addWidget(note)
+            self.home_live_layout.addWidget(empty)
+        else:
+            for row in rows:
+                self.home_live_layout.addWidget(
+                    self._progress_card(
+                        str(row["code"]),
+                        str(row["department"]),
+                        str(row["product"]),
+                        int(row["planned_qty"]),
+                        int(row["good_qty"]),
+                        str(row["status"]),
+                    )
+                )
+        self.home_live_layout.addStretch(1)
+
+        alert_count = self.store.dashboard_alert_count()
+        self.home_alerts_button.setText(
+            f"{alert_count} ALERT" if alert_count == 1 else f"{alert_count} ALERTÓW"
+        )
+        self.home_alerts_button.setEnabled(alert_count > 0)
+
+        for department, button in self.department_buttons.items():
+            summary = self.store.department_summary(department)
+            button.setText(
+                f"{department}\n"
+                f"A:{summary['active']}  O:{summary['waiting']}  W:{summary['paused']}"
+            )
 
     def open_page(self, page: QWidget) -> None:
         self.stack.setCurrentWidget(page)
@@ -2415,12 +2464,14 @@ class MainWindow(QMainWindow):
         screen_width = screen.availableGeometry().width() if screen is not None else 1536
         department_columns = 5 if screen_width >= 1450 else 4
 
+        self.department_buttons: dict[str, QPushButton] = {}
         for idx, department in enumerate(DEPARTMENTS):
             btn = QPushButton(department)
             btn.setObjectName("departmentButton")
             btn.setFixedSize(sp(270), sp(76))
             btn.clicked.connect(lambda checked=False, d=department: self.open_department(d))
             grid.addWidget(btn, idx // department_columns, idx % department_columns)
+            self.department_buttons[department] = btn
 
         grid.setColumnStretch(department_columns, 1)
         outer.addWidget(grid_wrap, alignment=Qt.AlignLeft)
@@ -2430,10 +2481,10 @@ class MainWindow(QMainWindow):
         title.setObjectName("sectionTitle")
         line.addWidget(title)
         line.addStretch(1)
-        alerts = QPushButton("2 ALERTY")
-        alerts.setObjectName("dangerGhost")
-        alerts.clicked.connect(lambda: self.open_page(self.alerts_page))
-        line.addWidget(alerts)
+        self.home_alerts_button = QPushButton("0 ALERTÓW")
+        self.home_alerts_button.setObjectName("dangerGhost")
+        self.home_alerts_button.clicked.connect(lambda: self.open_page(self.alerts_page))
+        line.addWidget(self.home_alerts_button)
         outer.addLayout(line)
 
         live_scroll = QScrollArea()
@@ -2444,15 +2495,13 @@ class MainWindow(QMainWindow):
         live_scroll.setFixedHeight(sp(142))
 
         live_body = QWidget()
-        live = QHBoxLayout(live_body)
-        live.setContentsMargins(0, 0, 0, 0)
-        live.setSpacing(sp(10))
-        for idx, (code, product, total, done, status) in enumerate(DEPARTMENT_ORDER_PROGRESS):
-            department = ["Zgrzewarki", "Malarnia", "Pakownia", "Giętarki"][idx]
-            live.addWidget(self._progress_card(code, department, product, total, done, status))
-        live.addStretch(1)
+        self.home_live_layout = QHBoxLayout(live_body)
+        self.home_live_layout.setContentsMargins(0, 0, 0, 0)
+        self.home_live_layout.setSpacing(sp(10))
         live_scroll.setWidget(live_body)
         outer.addWidget(live_scroll)
+
+        QTimer.singleShot(0, self.refresh_home)
 
         footer = QLabel("Stworzone przez Edwina Karolczyka dla Metalbox sp. z o.o.")
         footer.setObjectName("footer")
