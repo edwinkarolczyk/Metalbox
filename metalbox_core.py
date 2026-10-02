@@ -2450,59 +2450,6 @@ class MetalboxStore:
                 raise ValueError(f"Nie znaleziono zlecenia {code}.")
             order_id = int(order["id"])
 
-            reporter_name = actor
-            if reporter_employee_id is not None:
-                reporter = db.execute(
-                    """
-                    SELECT id, name, status
-                    FROM employees
-                    WHERE id = ?
-                    """,
-                    (int(reporter_employee_id),),
-                ).fetchone()
-                if reporter is None:
-                    raise ValueError("Nie znaleziono wybranego pracownika zgłaszającego.")
-                if str(reporter["status"]) != "AKTYWNY":
-                    raise ValueError("Wybrany pracownik zgłaszający ma nieaktywny profil.")
-                reporter_name = str(reporter["name"])
-                actor = reporter_name
-
-                if session_id is not None:
-                    membership = db.execute(
-                        """
-                        SELECT 1
-                        FROM session_workers sw
-                        JOIN production_sessions s ON s.id = sw.session_id
-                        WHERE s.id = ?
-                          AND s.order_id = ?
-                          AND s.department = ?
-                          AND (? IS NULL OR s.order_item_id = ?)
-                          AND s.status IN ('AKTYWNA', 'WSTRZYMANA')
-                          AND sw.left_at IS NULL
-                          AND (
-                              sw.employee_id = ?
-                              OR (
-                                  sw.employee_id IS NULL
-                                  AND lower(sw.worker_name) = lower(?)
-                              )
-                          )
-                        LIMIT 1
-                        """,
-                        (
-                            int(session_id),
-                            order_id,
-                            department,
-                            order_item_id,
-                            order_item_id,
-                            int(reporter_employee_id),
-                            reporter_name,
-                        ),
-                    ).fetchone()
-                    if membership is None:
-                        raise ValueError(
-                            "Zgłaszający nie należy do aktualnej obsady tej sesji."
-                        )
-
             rows = self._department_operation_rows(
                 db,
                 order_id=order_id,
@@ -2645,6 +2592,59 @@ class MetalboxStore:
             if order is None:
                 raise ValueError(f"Nie znaleziono zlecenia {code}.")
             order_id = int(order["id"])
+
+            reporter_name = actor
+            if reporter_employee_id is not None:
+                reporter = db.execute(
+                    """
+                    SELECT id, name, status
+                    FROM employees
+                    WHERE id = ?
+                    """,
+                    (int(reporter_employee_id),),
+                ).fetchone()
+                if reporter is None:
+                    raise ValueError("Nie znaleziono wybranego pracownika zgłaszającego.")
+                if str(reporter["status"]) != "AKTYWNY":
+                    raise ValueError("Wybrany pracownik zgłaszający ma nieaktywny profil.")
+                reporter_name = str(reporter["name"])
+                actor = reporter_name
+
+                if session_id is not None:
+                    membership = db.execute(
+                        """
+                        SELECT 1
+                        FROM session_workers sw
+                        JOIN production_sessions s ON s.id = sw.session_id
+                        WHERE s.id = ?
+                          AND s.order_id = ?
+                          AND s.department = ?
+                          AND (? IS NULL OR s.order_item_id = ?)
+                          AND s.status IN ('AKTYWNA', 'WSTRZYMANA')
+                          AND sw.left_at IS NULL
+                          AND (
+                              sw.employee_id = ?
+                              OR (
+                                  sw.employee_id IS NULL
+                                  AND lower(sw.worker_name) = lower(?)
+                              )
+                          )
+                        LIMIT 1
+                        """,
+                        (
+                            int(session_id),
+                            order_id,
+                            department,
+                            order_item_id,
+                            order_item_id,
+                            int(reporter_employee_id),
+                            reporter_name,
+                        ),
+                    ).fetchone()
+                    if membership is None:
+                        raise ValueError(
+                            "Zgłaszający nie należy do aktualnej obsady tej sesji."
+                        )
 
             rows = self._department_operation_rows(
                 db,
