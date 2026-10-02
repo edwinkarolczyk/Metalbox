@@ -94,6 +94,10 @@ class UiSmokeTest(unittest.TestCase):
                 department="Zgrzewarki",
             )
             self.assertEqual(dialog.order_combo.currentText(), "ZL-740")
+            self.assertGreater(dialog.item_combo.count(), 1)
+            dialog.item_combo.setCurrentIndex(1)
+            self.qt_app.processEvents()
+            self.assertIsNotNone(dialog._selected_item_id())
             self.assertEqual(dialog.department_combo.currentText(), "Zgrzewarki")
             self.assertTrue(dialog.quantity_spin.isEnabled())
             dialog.close()
@@ -222,6 +226,12 @@ class UiSmokeTest(unittest.TestCase):
                 code="ZL-740",
                 department="Zgrzewarki",
             )
+            self.assertGreater(dialog.item_combo.count(), 1)
+            dialog.item_combo.setCurrentIndex(1)
+            self.qt_app.processEvents()
+            self.assertIsNotNone(dialog._selected_item_id())
+            self.assertEqual(dialog.department_combo.currentText(), "Zgrzewarki")
+
             dialog.kind_combo.setCurrentText("POPRAWKA")
             dialog._refresh_context()
             self.assertFalse(dialog.rework_target_combo.isHidden())
