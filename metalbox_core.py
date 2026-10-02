@@ -2240,6 +2240,46 @@ class MetalboxStore:
             "scrap": values.get("ZŁOM", 0),
         }
 
+    def get_item_department_capacity(
+        self,
+        code: str,
+        order_item_id: int,
+        department: str,
+    ) -> dict:
+        with self._connect() as db:
+            order = db.execute(
+                "SELECT id FROM orders WHERE code = ?",
+                (code,),
+            ).fetchone()
+            if order is None:
+                raise ValueError(f"Nie znaleziono zlecenia {code}.")
+
+            rows = self._department_operation_rows(
+                db,
+                order_id=int(order["id"]),
+                department=department,
+            )
+            rows = [
+                row
+                for row in rows
+                if int(row["order_item_id"]) == int(order_item_id)
+            ]
+            if not rows:
+                raise ValueError(
+                    "Wybrana pozycja nie ma tej operacji."
+                )
+
+        return {
+            "remaining": sum(
+                max(0, int(row["planned_qty"]) - int(row["good_qty"]))
+                for row in rows
+            ),
+            "available_now": sum(
+                self._row_available_to_process(row)
+                for row in rows
+            ),
+        }
+
     def get_department_order_capacity(
         self,
         code: str,
