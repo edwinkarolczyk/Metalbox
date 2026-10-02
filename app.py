@@ -3571,6 +3571,8 @@ class MainWindow(QMainWindow):
             mark_update_check("page:orders")
         elif page is self.alerts_page:
             mark_update_check("alerts:open")
+        elif page is self.quality_page:
+            mark_update_check("quality:open")
         app_log(f"Otwarty ekran: {page.__class__.__name__}")
         self._restart_inactivity_timer()
 
