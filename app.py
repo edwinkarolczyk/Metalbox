@@ -48,7 +48,7 @@ from PySide6.QtWidgets import (
 )
 
 APP_NAME = "Metalbox"
-APP_VERSION = "0.1.18.1"
+APP_VERSION = "0.1.19"
 LOCAL_DATA_ROOT = Path(
     os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
 ) / "Metalbox"
@@ -1993,18 +1993,31 @@ class SessionWorkersDialog(QDialog):
                 self.table.setItem(row_index, column_index, item)
 
     def _add_worker(self) -> None:
-        name, ok = QInputDialog.getText(
+        employees = self.store.list_employees(active_only=True)
+        names = [str(employee["name"]) for employee in employees]
+        if not names:
+            QMessageBox.warning(
+                self,
+                "Dodaj pracownika",
+                "Brak aktywnych profili pracowników.",
+            )
+            return
+
+        name, ok = QInputDialog.getItem(
             self,
             "Dodaj pracownika",
-            "Pracownik:",
+            "Wybierz pracownika:",
+            names,
+            0,
+            False,
         )
-        if not ok:
+        if not ok or not str(name).strip():
             return
         try:
             self.store.add_session_worker(
                 self.code,
                 self.department,
-                name,
+                str(name),
                 actor="development-user",
                 order_item_id=self.order_item_id,
             )
@@ -2405,27 +2418,29 @@ class DepartmentPage(PageBase):
         order_item_id: int,
         product: str,
     ) -> None:
-        workers_text, ok = QInputDialog.getText(
-            self,
-            "Rozpocznij sesję",
-            f"{code} • {product} • {self.department}\n\n"
-            "Podaj obsadę. Kilka osób rozdziel przecinkiem:",
-        )
-        if not ok:
-            return
-
-        workers = [
-            worker.strip()
-            for worker in re.split(r"[,;]", workers_text)
-            if worker.strip()
-        ]
-        if not workers:
+        employees = self.store.list_employees(active_only=True)
+        names = [str(employee["name"]) for employee in employees]
+        if not names:
             QMessageBox.warning(
                 self,
                 "Rozpocznij sesję",
-                "Podaj co najmniej jedną osobę.",
+                "Brak aktywnych profili pracowników. Dodaj pracownika w module PRACOWNICY.",
             )
             return
+
+        worker, ok = QInputDialog.getItem(
+            self,
+            "Rozpocznij sesję",
+            f"{code} • {product} • {self.department}\n\n"
+            "Wybierz pierwszą osobę z obsady:",
+            names,
+            0,
+            False,
+        )
+        if not ok or not str(worker).strip():
+            return
+
+        workers = [str(worker).strip()]
 
         try:
             session = self.store.start_production_session(
@@ -3841,37 +3856,221 @@ class DiagnosticsPage(PageBase):
 
 
 class EmployeesPage(PageBase):
-    def __init__(self, go_home: Callable):
+    def __init__(self, go_home: Callable, store: MetalboxStore):
         super().__init__(
-            "Pracownicy i uprawnienia",
+            "Pracownicy i obsada",
             go_home,
-            "Profile, kompetencje, rangi, identyfikatory oraz opcjonalne e-maile kierownictwa.",
+            "Profile pracowników, bieżące przypisania do sesji i historia czasu pracy.",
         )
+        self.store = store
+        self.employee_rows: list[dict] = []
+
         controls = QHBoxLayout()
-        for text in ("Dodaj pracownika", "Rangi", "Uprawnienia", "RFID / QR / PIN", "Profile kierownictwa"):
-            btn = QPushButton(text)
-            if text == "Dodaj pracownika":
-                btn.setObjectName("primary")
-            btn.clicked.connect(lambda checked=False, t=text: mock_message(self, t))
-            controls.addWidget(btn)
+
+        add = QPushButton("Dodaj pracownika")
+        add.setObjectName("primary")
+        add.clicked.connect(self._add_employee)
+        controls.addWidget(add)
+
+        refresh = QPushButton("Odśwież")
+        refresh.setObjectName("secondary")
+        refresh.clicked.connect(self.refresh_data)
+        controls.addWidget(refresh)
+
         controls.addStretch(1)
         self.root.addLayout(controls)
 
-        table = compact_table(
-            ["Pracownik", "Dział", "Kompetencja", "Ranga", "E-mail", "Status"],
-            [list(row) for row in EMPLOYEES],
-            [190, 170, 150, 140, 260, 100],
-            280,
+        self.table = compact_table(
+            [
+                "Pracownik",
+                "Dział",
+                "Kompetencja",
+                "Ranga",
+                "Bieżąca sesja",
+                "Status",
+            ],
+            [],
+            [200, 160, 170, 130, 310, 110],
+            260,
         )
-        self.root.addWidget(table, alignment=Qt.AlignLeft)
+        self.root.addWidget(self.table, alignment=Qt.AlignLeft)
 
-        lower = QHBoxLayout()
-        lower.addWidget(card("Aktywni", "48", "pracownicy", 210))
-        lower.addWidget(card("Brygadziści", "6", "uprawnienia działowe", 210))
-        lower.addWidget(card("Kierownictwo", "4", "profil + e-mail opcjonalny", 240))
-        lower.addStretch(1)
-        self.root.addLayout(lower)
+        self.stats = QHBoxLayout()
+        self.active_card = card("Aktywni", "0", "profile", 210)
+        self.assigned_card = card("W sesji", "0", "pracownicy", 210)
+        self.history_card = card("Wpisy pracy", "0", "rejestr", 210)
+        self.stats.addWidget(self.active_card)
+        self.stats.addWidget(self.assigned_card)
+        self.stats.addWidget(self.history_card)
+        self.stats.addStretch(1)
+        self.root.addLayout(self.stats)
+
+        self.root.addWidget(
+            section_heading(
+                "Historia pracy",
+                "Każde wejście i wyjście z obsady jest przypisane do sesji, ZL i pozycji.",
+            )
+        )
+
+        self.history_table = compact_table(
+            [
+                "Pracownik",
+                "ZL",
+                "Pozycja / produkt",
+                "Dział",
+                "Dołączył",
+                "Wyszedł",
+                "Czas",
+            ],
+            [],
+            [180, 100, 290, 130, 160, 160, 105],
+            270,
+        )
+        self.root.addWidget(self.history_table, alignment=Qt.AlignLeft)
         self.root.addStretch(1)
+
+        self.refresh_data()
+
+    @staticmethod
+    def _set_card_value(frame: QFrame, value: int) -> None:
+        label = frame.findChild(QLabel, "cardValue")
+        if label is not None:
+            label.setText(str(value))
+
+    @staticmethod
+    def _display_datetime(value: str | None) -> str:
+        if not value:
+            return "—"
+        try:
+            return datetime.fromisoformat(str(value)).strftime("%d.%m.%Y %H:%M:%S")
+        except ValueError:
+            return str(value)
+
+    @staticmethod
+    def _duration_text(seconds: int) -> str:
+        seconds = max(0, int(seconds))
+        hours, rem = divmod(seconds, 3600)
+        minutes = rem // 60
+        if hours:
+            return f"{hours} h {minutes:02d} min"
+        return f"{minutes} min"
+
+    def _add_employee(self) -> None:
+        name, ok = QInputDialog.getText(
+            self,
+            "Dodaj pracownika",
+            "Imię i nazwisko / nazwa:",
+        )
+        if not ok or not name.strip():
+            return
+
+        department, ok = QInputDialog.getItem(
+            self,
+            "Dział pracownika",
+            "Dział:",
+            list(DEPARTMENTS),
+            0,
+            False,
+        )
+        if not ok:
+            return
+
+        competency, ok = QInputDialog.getText(
+            self,
+            "Kompetencja",
+            "Stanowisko / kompetencja:",
+        )
+        if not ok:
+            return
+
+        role, ok = QInputDialog.getItem(
+            self,
+            "Ranga",
+            "Ranga:",
+            ["PRACOWNIK", "BRYGADZISTA", "KIEROWNIK", "ADMIN"],
+            0,
+            False,
+        )
+        if not ok:
+            return
+
+        try:
+            self.store.create_employee(
+                name=name,
+                department=str(department),
+                competency=competency,
+                role=str(role),
+                actor="development-user",
+            )
+            mark_update_check("employee:create")
+            self.refresh_data()
+        except ValueError as exc:
+            QMessageBox.warning(self, "Nie można dodać pracownika", str(exc))
+
+    def refresh_data(self) -> None:
+        self.employee_rows = self.store.list_employees()
+        self.table.setRowCount(len(self.employee_rows))
+
+        assigned = 0
+        active = 0
+        for row_index, employee in enumerate(self.employee_rows):
+            assignment = str(employee.get("current_assignment") or "—")
+            if assignment != "—":
+                assigned += 1
+            if str(employee.get("status")) == "AKTYWNY":
+                active += 1
+
+            values = [
+                employee.get("name", "—"),
+                employee.get("department", "—"),
+                employee.get("competency", "—"),
+                employee.get("role", "—"),
+                assignment,
+                employee.get("status", "—"),
+            ]
+            self.table.setRowHeight(row_index, sp(38))
+            for column_index, value in enumerate(values):
+                item = QTableWidgetItem(str(value))
+                if column_index == 5:
+                    item.setForeground(
+                        QColor("#67dc8e")
+                        if str(value) == "AKTYWNY"
+                        else QColor("#727a74")
+                    )
+                self.table.setItem(row_index, column_index, item)
+
+        history = self.store.list_worker_work_log(limit=300)
+        self.history_table.setRowCount(len(history))
+        for row_index, entry in enumerate(history):
+            product = "—"
+            if entry.get("order_item_id") is not None:
+                product = (
+                    f'{entry.get("position_no", "—")}. '
+                    f'{entry.get("symbol", "—")} • '
+                    f'{entry.get("product_name", "—")}'
+                )
+            values = [
+                entry.get("worker_name", "—"),
+                entry.get("code", "—"),
+                product,
+                entry.get("department", "—"),
+                self._display_datetime(entry.get("joined_at")),
+                self._display_datetime(entry.get("left_at")),
+                self._duration_text(int(entry.get("duration_seconds", 0))),
+            ]
+            self.history_table.setRowHeight(row_index, sp(38))
+            for column_index, value in enumerate(values):
+                self.history_table.setItem(
+                    row_index,
+                    column_index,
+                    QTableWidgetItem(str(value)),
+                )
+
+        self._set_card_value(self.active_card, active)
+        self._set_card_value(self.assigned_card, assigned)
+        self._set_card_value(self.history_card, len(history))
+        mark_update_check("employees:view")
+
 
 
 class QualityPage(PageBase):
@@ -4352,7 +4551,7 @@ class MainWindow(QMainWindow):
             self.apply_dev_view_state,
         )
         self.diagnostics_page = DiagnosticsPage(self.go_home, self.config)
-        self.employees_page = EmployeesPage(self.go_home)
+        self.employees_page = EmployeesPage(self.go_home, self.store)
         self.quality_page = QualityPage(self.go_home, self.store)
         self.shipping_page = ShippingPage(self.go_home)
         self.reports_page = ReportsPage(self.go_home)
@@ -5269,10 +5468,12 @@ def main() -> int:
     store = MetalboxStore(DEV_DB_FILE)
     seeded = store.seed_development_data()
     progress_seeded = store.ensure_development_progress_seeded()
+    employees_seeded = store.ensure_development_employees_seeded()
     app_log(
         f"Baza Development gotowa: {DEV_DB_FILE} • "
         f"seed={'tak' if seeded else 'nie'} • "
-        f"postęp_seed={'tak' if progress_seeded else 'nie'}"
+        f"postęp_seed={'tak' if progress_seeded else 'nie'} • "
+        f"pracownicy_seed={'tak' if employees_seeded else 'nie'}"
     )
 
     window = MainWindow(config, store)
