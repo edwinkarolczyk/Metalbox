@@ -48,7 +48,7 @@ from PySide6.QtWidgets import (
 )
 
 APP_NAME = "Metalbox"
-APP_VERSION = "0.1.19.1"
+APP_VERSION = "0.1.19.2"
 LOCAL_DATA_ROOT = Path(
     os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
 ) / "Metalbox"
@@ -4854,11 +4854,35 @@ class MainWindow(QMainWindow):
             self.department_section_title.setText(
                 "Działy"
                 if manager
-                else f"Mój dział • {self.view_state.department}"
+                else f"Działy • Twój dział: {self.view_state.department}"
             )
 
         for department, button in getattr(self, "department_buttons", {}).items():
-            button.setVisible(manager or department == self.view_state.department)
+            # Układ działów jest zawsze taki sam. Pracownik widzi całą strukturę
+            # zakładu, ale może wejść wyłącznie do swojego przypisanego działu.
+            button.setVisible(True)
+            if manager:
+                button.setEnabled(True)
+                button.setObjectName("departmentButton")
+                button.setToolTip(f"Otwórz dział: {department}")
+            elif department == self.view_state.department:
+                button.setEnabled(True)
+                button.setObjectName("departmentButtonAssigned")
+                button.setToolTip("Twój przypisany dział — kliknij, aby otworzyć.")
+            else:
+                button.setEnabled(False)
+                button.setObjectName("departmentButtonLocked")
+                button.setToolTip(
+                    f"Brak dostępu. Twój przypisany dział: {self.view_state.department}."
+                )
+
+            style = button.style()
+            style.unpolish(button)
+            style.polish(button)
+            button.update()
+
+        if not manager:
+            mark_update_check("view:all_departments_visible")
 
         self.refresh_home()
 
@@ -5262,6 +5286,35 @@ QPushButton#departmentButton {
 QPushButton#departmentButton:hover {
     background: #1a211d;
     border-color: #45d477;
+}
+QPushButton#departmentButtonAssigned {
+    background: #173a25;
+    color: #ffffff;
+    border: 2px solid #45d477;
+    border-left: 5px solid #67dc8e;
+    font-size: 15px;
+    font-weight: 900;
+    text-align: left;
+    padding: 14px 16px;
+}
+QPushButton#departmentButtonAssigned:hover {
+    background: #1d4a2f;
+    border-color: #72e79a;
+}
+QPushButton#departmentButtonLocked {
+    background: #101214;
+    color: #5f6662;
+    border: 1px solid #222724;
+    border-left: 3px solid #303633;
+    font-size: 15px;
+    font-weight: 750;
+    text-align: left;
+    padding: 14px 16px;
+}
+QPushButton#departmentButtonLocked:disabled {
+    background: #101214;
+    color: #5f6662;
+    border-color: #222724;
 }
 QPushButton#managementButton {
     background: #101315;
