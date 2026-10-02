@@ -610,6 +610,133 @@ class MetalboxStoreTests(unittest.TestCase):
             before["available_now"] - 1,
         )
 
+    def test_production_isolated_per_order_item(self) -> None:
+        created = self.store.create_order(
+            code="ZL-917",
+            client="Test pozycji",
+            deadline="2026-11-20",
+            priority="NORMALNY",
+            status="NOWE",
+            items=[
+                {"symbol": "P-1", "name": "Produkt pierwszy", "quantity": 10},
+                {"symbol": "P-2", "name": "Produkt drugi", "quantity": 8},
+            ],
+            actor="test-user",
+        )
+        item_1 = int(created["items"][0]["id"])
+        item_2 = int(created["items"][1]["id"])
+
+        queue = [
+            row
+            for row in self.store.list_department_queue("Laser")
+            if row["code"] == "ZL-917"
+        ]
+        self.assertEqual(len(queue), 2)
+        self.assertEqual(
+            {int(row["order_item_id"]) for row in queue},
+            {item_1, item_2},
+        )
+
+        session_1 = self.store.start_production_session(
+            "ZL-917",
+            "Laser",
+            ["Dawid"],
+            order_item_id=item_1,
+            actor="test-user",
+        )
+        session_2 = self.store.start_production_session(
+            "ZL-917",
+            "Laser",
+            ["Marek"],
+            order_item_id=item_2,
+            actor="test-user",
+        )
+        self.assertNotEqual(session_1["id"], session_2["id"])
+        self.assertEqual(int(session_1["order_item_id"]), item_1)
+        self.assertEqual(int(session_2["order_item_id"]), item_2)
+
+        self.store.add_department_good_qty(
+            "ZL-917",
+            "Laser",
+            3,
+            order_item_id=item_1,
+            session_id=int(session_1["id"]),
+            actor="test-user",
+        )
+
+        queue = [
+            row
+            for row in self.store.list_department_queue("Laser")
+            if row["code"] == "ZL-917"
+        ]
+        first = next(row for row in queue if int(row["order_item_id"]) == item_1)
+        second = next(row for row in queue if int(row["order_item_id"]) == item_2)
+        self.assertEqual(int(first["good_qty"]), 3)
+        self.assertEqual(int(second["good_qty"]), 0)
+
+        self.store.pause_production_session(
+            "ZL-917",
+            "Laser",
+            order_item_id=item_1,
+            actor="test-user",
+        )
+        paused = self.store.get_department_session(
+            "ZL-917",
+            "Laser",
+            item_1,
+        )
+        still_active = self.store.get_department_session(
+            "ZL-917",
+            "Laser",
+            item_2,
+        )
+        self.assertEqual(paused["status"], "WSTRZYMANA")
+        self.assertEqual(still_active["status"], "AKTYWNA")
+
+    def test_item_session_audit_contains_order_item_id(self) -> None:
+        created = self.store.create_order(
+            code="ZL-918",
+            client="Audit pozycji",
+            deadline="2026-11-21",
+            priority="NORMALNY",
+            status="NOWE",
+            items=[
+                {"symbol": "AUD-1", "name": "Pozycja audytowa", "quantity": 4},
+            ],
+            actor="test-user",
+        )
+        item_id = int(created["items"][0]["id"])
+        session = self.store.start_production_session(
+            "ZL-918",
+            "Laser",
+            ["Dawid"],
+            order_item_id=item_id,
+            actor="test-user",
+        )
+        self.store.add_department_good_qty(
+            "ZL-918",
+            "Laser",
+            1,
+            order_item_id=item_id,
+            session_id=int(session["id"]),
+            actor="test-user",
+        )
+
+        events = self.store.list_audit_events(
+            entity_type="order",
+            entity_id="ZL-918",
+            limit=100,
+        )
+        matching = [
+            event
+            for event in events
+            if event["action"] in {"session_started", "good_quantity_added"}
+        ]
+        self.assertTrue(matching)
+        for event in matching:
+            payload = json.loads(event["payload_json"])
+            self.assertEqual(int(payload["order_item_id"]), item_id)
+
     def test_status_change_is_audited(self) -> None:
         self.store.set_department_order_status(
             "ZL-740",
