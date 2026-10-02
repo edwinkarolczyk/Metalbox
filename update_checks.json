@@ -1,43 +1,18 @@
 {
   "schema": 1,
-  "version": "0.1.19",
-  "title": "Pracownicy, obsada i rejestracja pracy",
-  "description": "Sprawdź profile pracowników, przypisanie do konkretnej sesji, blokadę podwójnej obsady oraz historię wejścia i wyjścia z pracy.",
+  "version": "0.1.19.1",
+  "title": "Czytelny start MetalboxDev + raport z logami",
+  "description": "Sprawdź dwie rzeczy: czy po kliknięciu MetalboxDev.exe od razu widać, co program robi, oraz czy raport testu kopiuje się razem z logami.",
   "checks": [
     {
-      "id": "employees-view",
-      "text": "1. Otwórz PRACOWNICY i sprawdź listę profili oraz bieżące przypisania.",
-      "trigger": "employees:view"
+      "id": "runner-status",
+      "text": "1. Zamknij Metalbox. Uruchom ponownie MetalboxDev.exe. Od razu ma pojawić się małe okno z komunikatem, np. „Sprawdzam aktualizacje…”, „Pobieram…” albo „Brak aktualizacji — uruchamiam obecną wersję…”. Jeśli nie ma już długiej ciszy po kliknięciu EXE, zaznacz punkt jako OK.",
+      "trigger": ""
     },
     {
-      "id": "employee-create",
-      "text": "2. Dodaj testowego pracownika i sprawdź, że pojawia się na liście.",
-      "trigger": "employee:create"
-    },
-    {
-      "id": "session-start",
-      "text": "3. Otwórz dział i rozpocznij sesję konkretnej pozycji, wybierając pracownika z listy.",
-      "trigger": "production:item_session_start"
-    },
-    {
-      "id": "worker-join",
-      "text": "4. Otwórz Obsada i dodaj drugiego pracownika z listy.",
-      "trigger": "session:worker_join"
-    },
-    {
-      "id": "worker-conflict",
-      "text": "5. Spróbuj przypisać tę samą osobę do innej otwartej sesji. Program ma zablokować konflikt.",
-      "trigger": "session:worker_conflict"
-    },
-    {
-      "id": "worker-leave",
-      "text": "6. W Obsada zakończ udział jednej osoby.",
-      "trigger": "session:worker_leave"
-    },
-    {
-      "id": "history",
-      "text": "7. Wróć do PRACOWNICY i sprawdź historię pracy: ZL, pozycja, dział, wejście, wyjście i czas.",
-      "trigger": "employees:history_visible"
+      "id": "copy-report-logs",
+      "text": "2. W panelu testu kliknij „Kopiuj raport + logi”. Wklej zawartość np. do Notatnika. Pod raportem ma być sekcja „DIAGNOSTYKA DO RAPORTU” oraz końcówka metalbox.log i dev-runner.log. Jeśli są widoczne, punkt zaliczy się automatycznie.",
+      "trigger": "update_panel:copy_report_logs"
     }
   ]
 }
