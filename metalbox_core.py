@@ -2217,6 +2217,10 @@ class MetalboxStore:
                 SELECT
                     q.id,
                     o.code,
+                    q.order_item_id,
+                    oi.position_no,
+                    oi.symbol,
+                    oi.name,
                     q.department,
                     q.kind,
                     q.quantity,
@@ -2227,6 +2231,7 @@ class MetalboxStore:
                     q.actor
                 FROM quality_events q
                 JOIN orders o ON o.id = q.order_id
+                LEFT JOIN order_items oi ON oi.id = q.order_item_id
                 {where_sql}
                 ORDER BY q.id DESC
                 LIMIT ?
