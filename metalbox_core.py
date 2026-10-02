@@ -1779,6 +1779,7 @@ class MetalboxStore:
         *,
         actor: str = "development-user",
         session_id: int | None = None,
+        order_item_id: int | None = None,
     ) -> dict:
         quantity = int(quantity)
         if quantity <= 0:
@@ -1799,6 +1800,12 @@ class MetalboxStore:
                 order_id=order_id,
                 department=department,
             )
+            if order_item_id is not None:
+                rows = [
+                    row
+                    for row in rows
+                    if int(row["order_item_id"]) == int(order_item_id)
+                ]
 
             if not rows:
                 raise ValueError(f"Brak operacji {department} dla {code}.")
@@ -1855,6 +1862,7 @@ class MetalboxStore:
                 entity_id=code,
                 payload={
                     "department": department,
+                    "order_item_id": order_item_id,
                     "quantity": quantity,
                     "rows": touched,
                     "session_id": session_id,
@@ -1872,9 +1880,11 @@ class MetalboxStore:
 
         return {
             "added": quantity,
+            "order_item_id": order_item_id,
             "progress": int(progress_row["progress"]),
             "ready_percent": int(progress_row["ready_percent"]),
         }
+
 
     def report_quality_quantity(
         self,
