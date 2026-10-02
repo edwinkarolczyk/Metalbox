@@ -1747,6 +1747,7 @@ class MetalboxStore:
         actor: str = "development-user",
         session_id: int | None = None,
         rework_target_department: str | None = None,
+        order_item_id: int | None = None,
     ) -> dict:
         kind = kind.strip().upper()
         aliases = {
