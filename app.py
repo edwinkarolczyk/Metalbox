@@ -48,7 +48,7 @@ from PySide6.QtWidgets import (
 )
 
 APP_NAME = "Metalbox"
-APP_VERSION = "0.1.19"
+APP_VERSION = "0.1.19.1"
 LOCAL_DATA_ROOT = Path(
     os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
 ) / "Metalbox"
@@ -212,6 +212,37 @@ def _functional_update_changes(state: dict) -> list[dict]:
         for item in changes
         if isinstance(item, dict) and not _is_update_control_item(item)
     ]
+
+
+def _tail_log_text(path: Path, *, max_lines: int = 120, max_chars: int = 24000) -> str:
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return "(brak pliku logu)"
+    text = "\n".join(lines[-max(1, int(max_lines)):])
+    if len(text) > max_chars:
+        text = "…[początek logu pominięty]…\n" + text[-max_chars:]
+    return text or "(log jest pusty)"
+
+
+def format_update_report_with_logs(state: dict) -> str:
+    source_state = _safe_json(DEV_SOURCE_STATE_FILE)
+    launcher_log = LOG_DIR / "dev-runner.log"
+    parts = [
+        format_update_test_report(state).rstrip(),
+        "",
+        "=== DIAGNOSTYKA DO RAPORTU ===",
+        f"Wersja aplikacji: {APP_VERSION}",
+        f"Commit: {source_state.get('commit', 'brak danych')}",
+        f"Schemat bazy: {SCHEMA_VERSION}",
+        "",
+        "--- Ostatnie wpisy metalbox.log ---",
+        _tail_log_text(APP_LOG_FILE),
+        "",
+        "--- Ostatnie wpisy dev-runner.log ---",
+        _tail_log_text(launcher_log),
+    ]
+    return "\n".join(parts) + "\n"
 
 
 def format_update_test_report(state: dict) -> str:
@@ -446,7 +477,7 @@ class UpdateChecklistPanel(QWidget):
         self.pending_only.stateChanged.connect(self.refresh_from_disk)
         header.addWidget(self.pending_only)
 
-        copy_btn = QPushButton("Kopiuj raport")
+        copy_btn = QPushButton("Kopiuj raport + logi")
         copy_btn.setObjectName("secondary")
         copy_btn.clicked.connect(self._copy_report)
         header.addWidget(copy_btn)
@@ -682,11 +713,12 @@ class UpdateChecklistPanel(QWidget):
     def _copy_report(self) -> None:
         self.flush_notes()
         state = load_dev_update_state()
-        QApplication.clipboard().setText(format_update_test_report(state))
+        QApplication.clipboard().setText(format_update_report_with_logs(state))
         QMessageBox.information(
             self,
-            "Raport skopiowany",
-            "Raport testu jest w schowku. Możesz wkleić go bezpośrednio do czatu.",
+            "Raport i logi skopiowane",
+            "Raport testu wraz z końcówką logów Metalbox i MetalboxDev jest w schowku. "
+            "Możesz wkleić całość bezpośrednio do czatu.",
         )
 
     def _finish_cycle(self) -> None:
@@ -742,7 +774,7 @@ class UpdateChecklistPanel(QWidget):
         state["completed_with_pending"] = pending
         save_dev_update_state(state)
 
-        final_report = format_update_test_report(state)
+        final_report = format_update_report_with_logs(state)
         QApplication.clipboard().setText(final_report)
 
         app_log(
