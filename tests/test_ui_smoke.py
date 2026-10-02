@@ -303,6 +303,53 @@ class UiSmokeTest(unittest.TestCase):
             finally:
                 metalbox_app.DEV_UPDATE_STATE_FILE = original
 
+    def test_department_page_shows_separate_order_items(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            db_path = Path(temp) / "department-items.sqlite3"
+            store = MetalboxStore(db_path)
+            created = store.create_order(
+                code="ZL-UI-17",
+                client="UI",
+                deadline="2026-11-30",
+                priority="NORMALNY",
+                status="NOWE",
+                items=[
+                    {"symbol": "UI-A", "name": "Pierwszy produkt", "quantity": 5},
+                    {"symbol": "UI-B", "name": "Drugi produkt", "quantity": 7},
+                ],
+            )
+            item_ids = {int(item["id"]) for item in created["items"]}
+
+            page = metalbox_app.DepartmentPage(
+                "Laser",
+                lambda: None,
+                store,
+            )
+            page.refresh_data()
+
+            rows = [
+                row
+                for row in page.queue_rows
+                if row["code"] == "ZL-UI-17"
+            ]
+            self.assertEqual(len(rows), 2)
+            self.assertEqual(
+                {int(row["order_item_id"]) for row in rows},
+                item_ids,
+            )
+
+            labels = {
+                label.text()
+                for label in page.findChildren(metalbox_app.QLabel)
+            }
+            self.assertTrue(
+                any("UI-A" in text and "Pierwszy produkt" in text for text in labels)
+            )
+            self.assertTrue(
+                any("UI-B" in text and "Drugi produkt" in text for text in labels)
+            )
+            page.close()
+
     def test_update_checklist_panel_constructs_and_persists(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             original = metalbox_app.DEV_UPDATE_STATE_FILE
