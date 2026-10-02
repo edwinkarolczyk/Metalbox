@@ -3343,41 +3343,120 @@ class SemiProductsPage(PageBase):
 
 
 class UserProfilePage(PageBase):
-    def __init__(self, go_home: Callable):
+    def __init__(
+        self,
+        go_home: Callable,
+        get_view_state: Callable[[], DevViewState],
+        apply_view_state: Callable[[str, str], None],
+    ):
         super().__init__(
             "Profil / identyfikacja",
             go_home,
-            "Odczyt programu może być otwarty; operacje zapisu wymagają identyfikacji użytkownika.",
+            "Development: przełącz rolę i dział, aby sprawdzić widok kierownika oraz pracownika.",
         )
-        summary = QHBoxLayout()
-        summary.addWidget(card("Użytkownik", "Nie zalogowano", "tryb stanowiskowy", 260))
-        summary.addWidget(card("Stanowisko", "TEST", "Development", 220))
-        summary.addWidget(card("Uprawnienia", "Podgląd", "bez zapisu", 220))
-        summary.addStretch(1)
-        self.root.addLayout(summary)
+        self.get_view_state = get_view_state
+        self.apply_view_state = apply_view_state
+
+        self.summary = QHBoxLayout()
+        self.user_card = card("Użytkownik", "Development", "profil testowy", 260)
+        self.role_card = card("Rola", "—", "widok aplikacji", 220)
+        self.department_card = card("Dział", "—", "przypisanie operacyjne", 260)
+        self.summary.addWidget(self.user_card)
+        self.summary.addWidget(self.role_card)
+        self.summary.addWidget(self.department_card)
+        self.summary.addStretch(1)
+        self.root.addLayout(self.summary)
 
         panel = QFrame()
         panel.setObjectName("panel")
-        panel.setMaximumWidth(sp(950))
+        panel.setMaximumWidth(sp(960))
         pl = QVBoxLayout(panel)
-        pl.addWidget(section_heading("Identyfikacja do operacji zapisu"))
+        pl.addWidget(
+            section_heading(
+                "Widok Development",
+                "Docelowo rola będzie wynikać z zalogowanego pracownika. "
+                "Na razie możesz ręcznie sprawdzić oba widoki.",
+            )
+        )
+
+        form = QFormLayout()
+        form.setHorizontalSpacing(sp(16))
+        form.setVerticalSpacing(sp(10))
+
+        self.role_combo = QComboBox()
+        self.role_combo.addItems(
+            ["PRACOWNIK", "BRYGADZISTA", "KIEROWNIK", "ADMIN"]
+        )
+        form.addRow("Rola:", self.role_combo)
+
+        self.department_combo = QComboBox()
+        self.department_combo.addItems(list(DEPARTMENTS))
+        form.addRow("Dział:", self.department_combo)
+        pl.addLayout(form)
+
+        note = QLabel(
+            "PRACOWNIK / BRYGADZISTA: tylko własny dział i funkcje operacyjne.\n"
+            "KIEROWNIK / ADMIN: pełny pasek zarządzania, wszystkie działy i moduły."
+        )
+        note.setObjectName("hint")
+        note.setWordWrap(True)
+        pl.addWidget(note)
+
         buttons = QHBoxLayout()
-        for text in ("Login + PIN", "Zeskanuj RFID", "Zeskanuj QR", "Wyloguj"):
-            btn = QPushButton(text)
-            if text == "Login + PIN":
-                btn.setObjectName("primary")
-            btn.clicked.connect(lambda checked=False, t=text: mock_message(self, t))
-            buttons.addWidget(btn)
+        worker = QPushButton("Pokaż widok pracownika")
+        worker.setObjectName("secondary")
+        worker.clicked.connect(lambda: self._quick_apply("PRACOWNIK"))
+        buttons.addWidget(worker)
+
+        manager = QPushButton("Pokaż widok kierownika")
+        manager.setObjectName("primary")
+        manager.clicked.connect(lambda: self._quick_apply("KIEROWNIK"))
+        buttons.addWidget(manager)
+
+        apply_btn = QPushButton("Zastosuj wybraną rolę")
+        apply_btn.setObjectName("ghostGreen")
+        apply_btn.clicked.connect(self._apply)
+        buttons.addWidget(apply_btn)
+
         buttons.addStretch(1)
         pl.addLayout(buttons)
-        pl.addSpacing(sp(10))
-        pl.addWidget(section_heading("Profil kierownictwa — opcjonalny"))
-        profile = QLabel("Imię i nazwisko • stanowisko • e-mail służbowy • ranga • zakres odpowiedzialności")
-        profile.setObjectName("hint")
-        profile.setWordWrap(True)
-        pl.addWidget(profile)
+
+        pl.addSpacing(sp(12))
+        pl.addWidget(section_heading("Identyfikacja docelowa"))
+        identity = QLabel(
+            "Login + PIN • RFID • QR • wylogowanie. "
+            "W kolejnych etapach ta identyfikacja będzie ustalała rolę i dział automatycznie."
+        )
+        identity.setObjectName("hint")
+        identity.setWordWrap(True)
+        pl.addWidget(identity)
+
         self.root.addWidget(panel, alignment=Qt.AlignLeft)
         self.root.addStretch(1)
+        self.refresh_data()
+
+    @staticmethod
+    def _set_card_value(frame: QFrame, value: str) -> None:
+        label = frame.findChild(QLabel, "cardValue")
+        if label is not None:
+            label.setText(value)
+
+    def refresh_data(self) -> None:
+        state = self.get_view_state()
+        self.role_combo.setCurrentText(state.role)
+        self.department_combo.setCurrentText(state.department)
+        self._set_card_value(self.role_card, state.role)
+        self._set_card_value(self.department_card, state.department)
+
+    def _quick_apply(self, role: str) -> None:
+        self.role_combo.setCurrentText(role)
+        self._apply()
+
+    def _apply(self) -> None:
+        role = self.role_combo.currentText().strip().upper()
+        department = self.department_combo.currentText().strip()
+        self.apply_view_state(role, department)
+        self.refresh_data()
 
 
 class DiagnosticsPage(PageBase):
