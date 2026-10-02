@@ -1793,12 +1793,14 @@ class SessionWorkersDialog(QDialog):
         store: MetalboxStore,
         code: str,
         department: str,
+        order_item_id: int | None = None,
         parent=None,
     ):
         super().__init__(parent)
         self.store = store
         self.code = code
         self.department = department
+        self.order_item_id = order_item_id
 
         self.setWindowTitle(f"Obsada sesji — {code} • {department}")
         self.setModal(True)
@@ -1861,6 +1863,7 @@ class SessionWorkersDialog(QDialog):
         session = self.store.get_department_session(
             self.code,
             self.department,
+            self.order_item_id,
         )
         if session is None:
             self.session_label.setText("Brak otwartej sesji.")
@@ -1905,6 +1908,7 @@ class SessionWorkersDialog(QDialog):
                 self.department,
                 name,
                 actor="development-user",
+                order_item_id=self.order_item_id,
             )
             mark_update_check("session:worker_join")
             self.refresh_data()
@@ -1940,6 +1944,7 @@ class SessionWorkersDialog(QDialog):
                 self.department,
                 worker_name,
                 actor="development-user",
+                order_item_id=self.order_item_id,
             )
             mark_update_check("session:worker_leave")
             self.refresh_data()
