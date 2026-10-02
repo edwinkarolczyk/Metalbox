@@ -3698,9 +3698,19 @@ class QualityPage(PageBase):
         self.root.addWidget(section_heading("Zdarzenia jakościowe"))
 
         self.table = compact_table(
-            ["Data", "ZL", "Dział", "Typ", "Ilość", "Przyczyna", "Sesja", "Zgłosił"],
+            [
+                "Data",
+                "ZL",
+                "Pozycja / produkt",
+                "Dział",
+                "Typ",
+                "Ilość",
+                "Przyczyna",
+                "Sesja",
+                "Zgłosił",
+            ],
             [],
-            [155, 100, 140, 110, 80, 280, 90, 150],
+            [155, 100, 280, 140, 110, 80, 260, 90, 150],
             250,
         )
         self.root.addWidget(self.table, alignment=Qt.AlignLeft)
@@ -3825,9 +3835,17 @@ class QualityPage(PageBase):
             except ValueError:
                 pass
 
+            product = "—"
+            if event.get("order_item_id") is not None:
+                product = (
+                    f'{event.get("position_no", "—")}. '
+                    f'{event.get("symbol", "—")} • {event.get("name", "—")}'
+                )
+
             values = [
                 occurred_at,
                 event.get("code", "—"),
+                product,
                 event.get("department", "—"),
                 event.get("kind", "—"),
                 event.get("quantity", 0),
@@ -3839,7 +3857,7 @@ class QualityPage(PageBase):
             self.table.setRowHeight(row_index, sp(38))
             for column_index, value in enumerate(values):
                 item = QTableWidgetItem(str(value))
-                if column_index == 3:
+                if column_index == 4:
                     kind = str(value)
                     if kind == "ZŁOM":
                         item.setForeground(QColor("#eb7373"))
