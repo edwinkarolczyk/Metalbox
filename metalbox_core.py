@@ -435,6 +435,292 @@ class MetalboxStore:
                 )
         return True
 
+    def ensure_development_employees_seeded(self) -> bool:
+        """Dodaje minimalne profile Development bez nadpisywania istniejących danych."""
+        now = datetime.now(timezone.utc).isoformat()
+        defaults = [
+            ("Dawid", "Zgrzewarki", "Produkcja", "PRACOWNIK", ""),
+            ("Marek", "Zgrzewarki", "Produkcja", "PRACOWNIK", ""),
+            ("Sebastian", "Laser", "Produkcja", "PRACOWNIK", ""),
+        ]
+        inserted = 0
+        with self._connect() as db:
+            for name, department, competency, role, email in defaults:
+                cursor = db.execute(
+                    """
+                    INSERT OR IGNORE INTO employees(
+                        name, department, competency, role, email,
+                        status, created_at, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, 'AKTYWNY', ?, ?)
+                    """,
+                    (
+                        name,
+                        department,
+                        competency,
+                        role,
+                        email,
+                        now,
+                        now,
+                    ),
+                )
+                inserted += int(cursor.rowcount or 0)
+        return inserted > 0
+
+    def create_employee(
+        self,
+        *,
+        name: str,
+        department: str = "",
+        competency: str = "",
+        role: str = "PRACOWNIK",
+        email: str = "",
+        actor: str = "development-user",
+    ) -> dict:
+        name = name.strip()
+        department = department.strip()
+        competency = competency.strip()
+        role = role.strip().upper() or "PRACOWNIK"
+        email = email.strip()
+
+        if not name:
+            raise ValueError("Imię i nazwisko / nazwa pracownika są wymagane.")
+        if role not in {"PRACOWNIK", "BRYGADZISTA", "KIEROWNIK", "ADMIN"}:
+            raise ValueError("Nieprawidłowa ranga pracownika.")
+
+        now = datetime.now(timezone.utc).isoformat()
+        with self._connect() as db:
+            try:
+                cursor = db.execute(
+                    """
+                    INSERT INTO employees(
+                        name, department, competency, role, email,
+                        status, created_at, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, 'AKTYWNY', ?, ?)
+                    """,
+                    (
+                        name,
+                        department,
+                        competency,
+                        role,
+                        email,
+                        now,
+                        now,
+                    ),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise ValueError(f"Pracownik {name} już istnieje.") from exc
+            employee_id = int(cursor.lastrowid)
+
+            self._audit_in_connection(
+                db,
+                actor=actor,
+                action="employee_created",
+                entity_type="employee",
+                entity_id=str(employee_id),
+                payload={
+                    "name": name,
+                    "department": department,
+                    "competency": competency,
+                    "role": role,
+                    "email": email,
+                },
+            )
+
+        employee = self.get_employee(employee_id)
+        if employee is None:
+            raise RuntimeError("Pracownik został zapisany, ale nie można go odczytać.")
+        return employee
+
+    def get_employee(self, employee_id: int) -> dict | None:
+        with self._connect() as db:
+            row = db.execute(
+                """
+                SELECT
+                    id, name, department, competency, role, email, status,
+                    created_at, updated_at
+                FROM employees
+                WHERE id = ?
+                """,
+                (int(employee_id),),
+            ).fetchone()
+        return dict(row) if row is not None else None
+
+    def list_employees(self, *, active_only: bool = False) -> list[dict]:
+        where = "WHERE e.status = 'AKTYWNY'" if active_only else ""
+        with self._connect() as db:
+            rows = db.execute(
+                f"""
+                SELECT
+                    e.id,
+                    e.name,
+                    e.department,
+                    e.competency,
+                    e.role,
+                    e.email,
+                    e.status,
+                    (
+                        SELECT
+                            o.code || ' • ' || s.department ||
+                            CASE
+                                WHEN oi.position_no IS NOT NULL
+                                    THEN ' • poz. ' || oi.position_no
+                                ELSE ''
+                            END
+                        FROM session_workers sw
+                        JOIN production_sessions s ON s.id = sw.session_id
+                        JOIN orders o ON o.id = s.order_id
+                        LEFT JOIN order_items oi ON oi.id = s.order_item_id
+                        WHERE sw.left_at IS NULL
+                          AND s.status IN ('AKTYWNA', 'WSTRZYMANA')
+                          AND (
+                              sw.employee_id = e.id
+                              OR lower(sw.worker_name) = lower(e.name)
+                          )
+                        ORDER BY sw.id DESC
+                        LIMIT 1
+                    ) AS current_assignment
+                FROM employees e
+                {where}
+                ORDER BY e.name COLLATE NOCASE
+                """
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def list_worker_work_log(
+        self,
+        *,
+        employee_id: int | None = None,
+        limit: int = 500,
+    ) -> list[dict]:
+        params: list[object] = []
+        where = ""
+        if employee_id is not None:
+            where = """
+                WHERE (
+                    sw.employee_id = ?
+                    OR (
+                        sw.employee_id IS NULL
+                        AND lower(sw.worker_name) = lower(
+                            (SELECT name FROM employees WHERE id = ?)
+                        )
+                    )
+                )
+            """
+            params.extend([int(employee_id), int(employee_id)])
+        params.append(max(1, int(limit)))
+
+        with self._connect() as db:
+            rows = db.execute(
+                f"""
+                SELECT
+                    sw.id,
+                    sw.employee_id,
+                    sw.worker_name,
+                    sw.joined_at,
+                    sw.left_at,
+                    s.id AS session_id,
+                    s.status AS session_status,
+                    s.department,
+                    o.code,
+                    s.order_item_id,
+                    oi.position_no,
+                    oi.symbol,
+                    oi.name AS product_name
+                FROM session_workers sw
+                JOIN production_sessions s ON s.id = sw.session_id
+                JOIN orders o ON o.id = s.order_id
+                LEFT JOIN order_items oi ON oi.id = s.order_item_id
+                {where}
+                ORDER BY sw.joined_at DESC, sw.id DESC
+                LIMIT ?
+                """,
+                params,
+            ).fetchall()
+
+        now = datetime.now(timezone.utc)
+        result: list[dict] = []
+        for row in rows:
+            item = dict(row)
+            try:
+                joined = datetime.fromisoformat(str(item["joined_at"]))
+                left_value = item.get("left_at")
+                left = (
+                    datetime.fromisoformat(str(left_value))
+                    if left_value
+                    else now
+                )
+                item["duration_seconds"] = max(
+                    0,
+                    int((left - joined).total_seconds()),
+                )
+            except (TypeError, ValueError):
+                item["duration_seconds"] = 0
+            result.append(item)
+        return result
+
+    @staticmethod
+    def _resolve_employee_for_worker(
+        db: sqlite3.Connection,
+        worker_name: str,
+    ) -> sqlite3.Row | None:
+        return db.execute(
+            """
+            SELECT id, name, status
+            FROM employees
+            WHERE lower(name) = lower(?)
+            LIMIT 1
+            """,
+            (worker_name.strip(),),
+        ).fetchone()
+
+    @staticmethod
+    def _assert_worker_available(
+        db: sqlite3.Connection,
+        worker_name: str,
+        *,
+        exclude_session_id: int | None = None,
+    ) -> None:
+        params: list[object] = [worker_name.strip()]
+        extra = ""
+        if exclude_session_id is not None:
+            extra = "AND s.id <> ?"
+            params.append(int(exclude_session_id))
+
+        conflict = db.execute(
+            f"""
+            SELECT
+                s.id AS session_id,
+                o.code,
+                s.department,
+                oi.position_no
+            FROM session_workers sw
+            JOIN production_sessions s ON s.id = sw.session_id
+            JOIN orders o ON o.id = s.order_id
+            LEFT JOIN order_items oi ON oi.id = s.order_item_id
+            WHERE lower(sw.worker_name) = lower(?)
+              AND sw.left_at IS NULL
+              AND s.status IN ('AKTYWNA', 'WSTRZYMANA')
+              {extra}
+            ORDER BY sw.id DESC
+            LIMIT 1
+            """,
+            params,
+        ).fetchone()
+        if conflict is not None:
+            position = (
+                f" • poz. {int(conflict['position_no'])}"
+                if conflict["position_no"] is not None
+                else ""
+            )
+            raise ValueError(
+                f"{worker_name} jest już przypisany do otwartej sesji "
+                f"#{int(conflict['session_id'])}: {conflict['code']} • "
+                f"{conflict['department']}{position}. "
+                "Najpierw zakończ jego udział w poprzedniej sesji."
+            )
+
     def ensure_development_progress_seeded(self) -> bool:
         """Uzupełnia postęp etapów dla istniejącej bazy Development po migracji 1 → 2."""
         departments = ["Laser", "Giętarki", "Zgrzewarki", "Malarnia", "Pakownia"]
