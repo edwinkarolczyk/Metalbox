@@ -4095,7 +4095,14 @@ class MainWindow(QMainWindow):
             if widget is not None:
                 widget.deleteLater()
 
-        rows = self.store.dashboard_live_orders(limit=4)
+        rows = self.store.dashboard_live_orders(limit=12)
+        if not self.view_state.management:
+            rows = [
+                row
+                for row in rows
+                if str(row["department"]) == self.view_state.department
+            ]
+        rows = rows[:4]
         if not rows:
             empty = QFrame()
             empty.setObjectName("panel")
@@ -4328,10 +4335,12 @@ class MainWindow(QMainWindow):
         titles = QVBoxLayout()
         brand = QLabel("METALBOX")
         brand.setObjectName("brand")
-        subtitle = QLabel(f"Pulpit produkcyjny • Development {APP_VERSION}")
-        subtitle.setObjectName("subtitle")
+        self.home_subtitle = QLabel(
+            f"Pulpit produkcyjny • Development {APP_VERSION}"
+        )
+        self.home_subtitle.setObjectName("subtitle")
         titles.addWidget(brand)
-        titles.addWidget(subtitle)
+        titles.addWidget(self.home_subtitle)
 
         mode = "TRYB TESTOWY" if self.config.test_mode else "STANOWISKO"
         connection = QLabel(f"● {mode} • {self.config.server_ip or 'SERWER'} • {self.config.station_name}")
@@ -4340,16 +4349,18 @@ class MainWindow(QMainWindow):
         top.addLayout(titles)
         top.addStretch(1)
         top.addWidget(connection)
-        profile_btn = QPushButton("PROFIL / LOGOWANIE")
-        profile_btn.setObjectName("ghostGreen")
-        profile_btn.clicked.connect(lambda: self.open_page(self.user_profile_page))
-        top.addWidget(profile_btn)
+        self.home_profile_button = QPushButton("PROFIL / LOGOWANIE")
+        self.home_profile_button.setObjectName("ghostGreen")
+        self.home_profile_button.clicked.connect(
+            lambda: self.open_page(self.user_profile_page)
+        )
+        top.addWidget(self.home_profile_button)
         outer.addLayout(top)
 
-        management_frame = QFrame()
-        management_frame.setObjectName("managementBar")
-        management_frame.setFixedHeight(sp(56))
-        management = QHBoxLayout(management_frame)
+        self.management_frame = QFrame()
+        self.management_frame.setObjectName("managementBar")
+        self.management_frame.setFixedHeight(sp(56))
+        management = QHBoxLayout(self.management_frame)
         management.setContentsMargins(sp(8), sp(8), sp(8), sp(8))
         management.setSpacing(sp(7))
 
@@ -4373,12 +4384,16 @@ class MainWindow(QMainWindow):
             btn.clicked.connect(callback)
             management.addWidget(btn)
         management.addStretch(1)
-        outer.addWidget(management_frame)
+        outer.addWidget(self.management_frame)
 
-        grid_wrap = QFrame()
-        grid_wrap.setObjectName("gridWrap")
-        grid_wrap.setMaximumWidth(sp(1680))
-        grid = QGridLayout(grid_wrap)
+        self.department_section_title = QLabel("Działy")
+        self.department_section_title.setObjectName("sectionTitle")
+        outer.addWidget(self.department_section_title)
+
+        self.grid_wrap = QFrame()
+        self.grid_wrap.setObjectName("gridWrap")
+        self.grid_wrap.setMaximumWidth(sp(1680))
+        grid = QGridLayout(self.grid_wrap)
         grid.setContentsMargins(sp(14), sp(14), sp(14), sp(14))
         grid.setHorizontalSpacing(sp(11))
         grid.setVerticalSpacing(sp(11))
@@ -4397,7 +4412,7 @@ class MainWindow(QMainWindow):
             self.department_buttons[department] = btn
 
         grid.setColumnStretch(department_columns, 1)
-        outer.addWidget(grid_wrap, alignment=Qt.AlignLeft)
+        outer.addWidget(self.grid_wrap, alignment=Qt.AlignLeft)
 
         line = QHBoxLayout()
         title = QLabel("Produkcja na bieżąco")
