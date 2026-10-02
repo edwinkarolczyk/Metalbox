@@ -8,8 +8,19 @@ from pathlib import Path
 from typing import Iterator
 
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 DEFAULT_ROUTE = ("Laser", "Giętarki", "Zgrzewarki", "Malarnia", "Pakownia")
+QUALITY_REASON_CODES = (
+    "NIEZGODNY_WYMIAR",
+    "USZKODZENIE_POWIERZCHNI",
+    "BLAD_ZGRZEWU",
+    "BLAD_SPAWANIA",
+    "BLAD_GIECIA",
+    "BLAD_CIECIA",
+    "BLAD_MALOWANIA",
+    "USZKODZENIE_MECHANICZNE",
+    "INNE",
+)
 
 
 class MetalboxStore:
@@ -161,6 +172,7 @@ class MetalboxStore:
                     reason TEXT NOT NULL DEFAULT '',
                     note TEXT NOT NULL DEFAULT '',
                     session_id INTEGER REFERENCES production_sessions(id) ON DELETE SET NULL,
+                    reporter_employee_id INTEGER REFERENCES employees(id) ON DELETE SET NULL,
                     occurred_at TEXT NOT NULL,
                     actor TEXT NOT NULL DEFAULT 'system'
                 );
@@ -232,6 +244,12 @@ class MetalboxStore:
                 "quality_events",
                 "order_item_id",
                 "INTEGER REFERENCES order_items(id) ON DELETE SET NULL",
+            )
+            self._ensure_column(
+                db,
+                "quality_events",
+                "reporter_employee_id",
+                "INTEGER REFERENCES employees(id) ON DELETE SET NULL",
             )
             self._ensure_column(
                 db,
@@ -2432,6 +2450,59 @@ class MetalboxStore:
                 raise ValueError(f"Nie znaleziono zlecenia {code}.")
             order_id = int(order["id"])
 
+            reporter_name = actor
+            if reporter_employee_id is not None:
+                reporter = db.execute(
+                    """
+                    SELECT id, name, status
+                    FROM employees
+                    WHERE id = ?
+                    """,
+                    (int(reporter_employee_id),),
+                ).fetchone()
+                if reporter is None:
+                    raise ValueError("Nie znaleziono wybranego pracownika zgłaszającego.")
+                if str(reporter["status"]) != "AKTYWNY":
+                    raise ValueError("Wybrany pracownik zgłaszający ma nieaktywny profil.")
+                reporter_name = str(reporter["name"])
+                actor = reporter_name
+
+                if session_id is not None:
+                    membership = db.execute(
+                        """
+                        SELECT 1
+                        FROM session_workers sw
+                        JOIN production_sessions s ON s.id = sw.session_id
+                        WHERE s.id = ?
+                          AND s.order_id = ?
+                          AND s.department = ?
+                          AND (? IS NULL OR s.order_item_id = ?)
+                          AND s.status IN ('AKTYWNA', 'WSTRZYMANA')
+                          AND sw.left_at IS NULL
+                          AND (
+                              sw.employee_id = ?
+                              OR (
+                                  sw.employee_id IS NULL
+                                  AND lower(sw.worker_name) = lower(?)
+                              )
+                          )
+                        LIMIT 1
+                        """,
+                        (
+                            int(session_id),
+                            order_id,
+                            department,
+                            order_item_id,
+                            order_item_id,
+                            int(reporter_employee_id),
+                            reporter_name,
+                        ),
+                    ).fetchone()
+                    if membership is None:
+                        raise ValueError(
+                            "Zgłaszający nie należy do aktualnej obsady tej sesji."
+                        )
+
             rows = self._department_operation_rows(
                 db,
                 order_id=order_id,
@@ -2536,6 +2607,7 @@ class MetalboxStore:
         session_id: int | None = None,
         rework_target_department: str | None = None,
         order_item_id: int | None = None,
+        reporter_employee_id: int | None = None,
     ) -> dict:
         kind = kind.strip().upper()
         aliases = {
@@ -2699,9 +2771,9 @@ class MetalboxStore:
                 """
                 INSERT INTO quality_events(
                     order_id, order_item_id, department, kind, quantity, reason, note,
-                    session_id, occurred_at, actor
+                    session_id, reporter_employee_id, occurred_at, actor
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     order_id,
@@ -2712,6 +2784,7 @@ class MetalboxStore:
                     reason,
                     note.strip(),
                     session_id,
+                    reporter_employee_id,
                     now,
                     actor,
                 ),
@@ -2733,6 +2806,8 @@ class MetalboxStore:
                     "reason": reason,
                     "note": note.strip(),
                     "session_id": session_id,
+                    "reporter_employee_id": reporter_employee_id,
+                    "reporter": reporter_name,
                     "rework_target_department": rework_target_department,
                     "rows": touched,
                 },
@@ -2744,6 +2819,8 @@ class MetalboxStore:
             "remaining_capacity": max(0, available_total - quantity),
             "rework_target_department": rework_target_department,
             "order_item_id": order_item_id,
+            "reporter_employee_id": reporter_employee_id,
+            "reporter": reporter_name,
         }
 
     def get_rework_target_departments(
@@ -3015,11 +3092,14 @@ class MetalboxStore:
                     q.reason,
                     q.note,
                     q.session_id,
+                    q.reporter_employee_id,
+                    COALESCE(e.name, q.actor) AS reporter_name,
                     q.occurred_at,
                     q.actor
                 FROM quality_events q
                 JOIN orders o ON o.id = q.order_id
                 LEFT JOIN order_items oi ON oi.id = q.order_item_id
+                LEFT JOIN employees e ON e.id = q.reporter_employee_id
                 {where_sql}
                 ORDER BY q.id DESC
                 LIMIT ?
