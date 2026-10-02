@@ -1491,6 +1491,8 @@ class QualityReportDialog(QDialog):
             )
             self.saved = True
             mark_update_check("quality:report")
+            if result["kind"] == "POPRAWKA":
+                mark_update_check("rework:create")
             app_log(
                 f"Jakość: {code} • {department} • "
                 f"{result['kind']} {result['quantity']} szt. • sesja={session_id}"
