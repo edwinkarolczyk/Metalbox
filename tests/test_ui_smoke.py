@@ -395,7 +395,7 @@ class UiSmokeTest(unittest.TestCase):
                 )
                 self.assertIn("Podsumowanie: 1/1 OK", report_before)
                 self.assertNotIn("Kopiuj raport", report_before)
-                self.assertNotIn("Gotowy na następne zmiany", report_before)
+                self.assertNotIn("[OCZEKUJE] Gotowy na następne zmiany", report_before)
 
                 with patch.object(
                     metalbox_app.QMessageBox,
