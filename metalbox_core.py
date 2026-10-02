@@ -1962,6 +1962,7 @@ class MetalboxStore:
         self,
         code: str,
         department: str,
+        order_item_id: int | None = None,
     ) -> list[str]:
         with self._connect() as db:
             rows = db.execute(
@@ -1978,9 +1979,10 @@ class MetalboxStore:
                    AND target.sequence_no < source.sequence_no
                 WHERE o.code = ?
                   AND source.department = ?
+                  AND (? IS NULL OR source.order_item_id = ?)
                 ORDER BY target.sequence_no DESC
                 """,
-                (code, department),
+                (code, department, order_item_id, order_item_id),
             ).fetchall()
 
         seen: set[str] = set()
