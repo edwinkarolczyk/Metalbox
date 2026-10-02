@@ -1,18 +1,18 @@
 {
   "schema": 1,
-  "version": "0.1.19.1",
-  "title": "Czytelny start MetalboxDev + raport z logami",
-  "description": "Sprawdź dwie rzeczy: czy po kliknięciu MetalboxDev.exe od razu widać, co program robi, oraz czy raport testu kopiuje się razem z logami.",
+  "version": "0.1.19.2",
+  "title": "Stały widok wszystkich działów",
+  "description": "Sprawdź, czy pracownik zawsze widzi całą siatkę działów, ale dostęp ma tylko do swojego działu.",
   "checks": [
     {
-      "id": "runner-status",
-      "text": "1. Zamknij Metalbox. Uruchom ponownie MetalboxDev.exe. Od razu ma pojawić się małe okno z komunikatem, np. „Sprawdzam aktualizacje…”, „Pobieram…” albo „Brak aktualizacji — uruchamiam obecną wersję…”. Jeśli nie ma już długiej ciszy po kliknięciu EXE, zaznacz punkt jako OK.",
+      "id": "worker-departments-visible",
+      "text": "1. Wejdź w PROFIL → ustaw rolę PRACOWNIK → wybierz np. Zgrzewarki → kliknij „Zastosuj wybraną rolę”. Na pulpicie mają być widoczne WSZYSTKIE działy. Zgrzewarki mają być wyraźnie podświetlone i klikalne, a pozostałe działy wyszarzone i nieklikalne. Jeśli dokładnie tak jest — zaznacz OK.",
       "trigger": ""
     },
     {
-      "id": "copy-report-logs",
-      "text": "2. W panelu testu kliknij „Kopiuj raport + logi”. Wklej zawartość np. do Notatnika. Pod raportem ma być sekcja „DIAGNOSTYKA DO RAPORTU” oraz końcówka metalbox.log i dev-runner.log. Jeśli są widoczne, punkt zaliczy się automatycznie.",
-      "trigger": "update_panel:copy_report_logs"
+      "id": "manager-departments-active",
+      "text": "2. Wejdź w PROFIL → wybierz KIEROWNIK → kliknij „Zastosuj wybraną rolę”. Wszystkie działy mają nadal być widoczne i wszystkie mają być aktywne/klikalne. Jeśli tak jest — punkt zaliczy się automatycznie.",
+      "trigger": "view:manager"
     }
   ]
 }
