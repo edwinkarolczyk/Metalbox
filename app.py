@@ -4193,6 +4193,75 @@ class MainWindow(QMainWindow):
         self.product_detail_page.set_product(symbol)
         self.open_page(self.product_detail_page)
 
+    def _management_pages(self) -> set[QWidget]:
+        return {
+            self.orders_page,
+            self.planner_page,
+            self.products_page,
+            self.product_detail_page,
+            self.semiproducts_page,
+            self.employees_page,
+            self.quality_page,
+            self.shipping_page,
+            self.reports_page,
+            self.tv_page,
+            self.settings_page,
+            self.diagnostics_page,
+        }
+
+    def apply_dev_view_state(self, role: str, department: str) -> None:
+        role = role.strip().upper()
+        if role not in {"PRACOWNIK", "BRYGADZISTA", "KIEROWNIK", "ADMIN"}:
+            role = "PRACOWNIK"
+        if department not in DEPARTMENTS:
+            department = "Zgrzewarki"
+
+        self.view_state = DevViewState(role=role, department=department)
+        self.view_state.save()
+        self._apply_role_view()
+        self.go_home()
+
+        mark_update_check(
+            "view:manager" if self.view_state.management else "view:worker"
+        )
+        app_log(
+            f"Zmieniono widok Development: rola={role}, dział={department}"
+        )
+
+    def _apply_role_view(self) -> None:
+        if not hasattr(self, "management_frame"):
+            return
+
+        manager = self.view_state.management
+        self.management_frame.setVisible(manager)
+
+        if hasattr(self, "home_subtitle"):
+            self.home_subtitle.setText(
+                (
+                    f"Pulpit kierownika • Development {APP_VERSION}"
+                    if manager
+                    else f"Pulpit pracownika • {self.view_state.department} • "
+                         f"Development {APP_VERSION}"
+                )
+            )
+
+        if hasattr(self, "home_profile_button"):
+            self.home_profile_button.setText(
+                f"{self.view_state.role} • PROFIL"
+            )
+
+        if hasattr(self, "department_section_title"):
+            self.department_section_title.setText(
+                "Działy"
+                if manager
+                else f"Mój dział • {self.view_state.department}"
+            )
+
+        for department, button in getattr(self, "department_buttons", {}).items():
+            button.setVisible(manager or department == self.view_state.department)
+
+        self.refresh_home()
+
     def _setup_update_test_panel(self) -> None:
         state = load_dev_update_state()
         if not state:
