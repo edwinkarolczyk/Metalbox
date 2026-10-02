@@ -983,21 +983,17 @@ class MetalboxStore:
                 SELECT
                     o.code,
                     o.client,
-                    GROUP_CONCAT(DISTINCT oi.symbol || ' ' || oi.name) AS products,
-                    SUM(op.planned_qty) AS planned_qty,
-                    SUM(op.good_qty) AS good_qty,
-                    SUM(op.reject_qty) AS reject_qty,
-                    SUM(op.rework_qty) AS rework_qty,
-                    CASE
-                        WHEN SUM(CASE WHEN op.status = 'WSTRZYMANE' THEN 1 ELSE 0 END) > 0
-                            THEN 'WSTRZYMANE'
-                        WHEN SUM(op.planned_qty) > 0
-                             AND SUM(op.good_qty) >= SUM(op.planned_qty)
-                            THEN 'GOTOWE'
-                        WHEN SUM(op.good_qty) > 0
-                            THEN 'AKTYWNE'
-                        ELSE 'OCZEKUJE'
-                    END AS status,
+                    oi.id AS order_item_id,
+                    oi.position_no,
+                    oi.symbol,
+                    oi.name,
+                    oi.quantity AS order_item_quantity,
+                    op.planned_qty,
+                    op.good_qty,
+                    op.reject_qty,
+                    op.rework_qty,
+                    op.scrap_qty,
+                    op.status,
                     o.deadline,
                     o.priority
                 FROM operation_progress op
@@ -1005,19 +1001,20 @@ class MetalboxStore:
                 JOIN orders o ON o.id = oi.order_id
                 WHERE op.department = ?
                   AND o.status NOT IN ('ANULOWANE')
-                GROUP BY o.id, o.code, o.client, o.deadline, o.priority
                 ORDER BY
                     CASE
                         WHEN o.priority = 'WYSOKI' THEN 0
                         ELSE 1
                     END,
                     o.deadline ASC,
-                    o.code ASC
+                    o.code ASC,
+                    oi.position_no ASC
                 """,
                 (department,),
             ).fetchall()
 
         return [dict(row) for row in rows]
+
 
     def department_summary(self, department: str) -> dict:
         queue = self.list_department_queue(department)
