@@ -1,48 +1,43 @@
 {
   "schema": 1,
-  "version": "0.1.10",
-  "title": "Sesje produkcyjne i obsada",
-  "description": "Sprawdź cykl pracy na karcie działu. Punkty zaznaczają się automatycznie.",
+  "version": "0.1.11",
+  "title": "Obsada sesji na żywo",
+  "description": "Sprawdź dodawanie i wychodzenie pracowników podczas trwającej sesji. Punkty zaznaczają się automatycznie.",
   "checks": [
     {
       "id": "department-open",
-      "text": "Wejdź do dowolnego działu produkcyjnego",
+      "text": "Wejdź do działu produkcyjnego",
       "trigger": "department:open"
     },
     {
       "id": "session-start",
-      "text": "Rozpocznij sesję i podaj obsadę",
+      "text": "Rozpocznij sesję z co najmniej jedną osobą",
       "trigger": "session:start"
     },
     {
-      "id": "session-pause",
-      "text": "Wstrzymaj aktywną sesję",
-      "trigger": "session:pause"
+      "id": "worker-join",
+      "text": "Dodaj kolejną osobę przez przycisk Obsada",
+      "trigger": "session:worker_join"
     },
     {
-      "id": "session-resume",
-      "text": "Wznów wstrzymaną sesję",
-      "trigger": "session:resume"
+      "id": "worker-leave",
+      "text": "Zakończ udział jednej z osób w sesji",
+      "trigger": "session:worker_leave"
     },
     {
       "id": "operation-quantity",
-      "text": "Dodaj wykonaną ilość podczas aktywnej sesji",
+      "text": "Dodaj wykonaną ilość w aktywnej sesji",
       "trigger": "operation:quantity"
     },
     {
       "id": "session-finish",
-      "text": "Zakończ sesję produkcyjną",
+      "text": "Zakończ sesję",
       "trigger": "session:finish"
     },
     {
       "id": "order-history",
-      "text": "Otwórz historię ZL i sprawdź wpisy sesji",
+      "text": "Sprawdź historię ZL z wejściem/wyjściem pracowników",
       "trigger": "order:history"
-    },
-    {
-      "id": "logs-export",
-      "text": "Pobierz paczkę diagnostyczną z Ustawień",
-      "trigger": "logs:export"
     }
   ]
 }
