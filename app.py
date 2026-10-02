@@ -1386,9 +1386,15 @@ class QualityReportDialog(QDialog):
 
         self.order_combo = QComboBox()
         orders = self.store.list_orders()
-        self.order_combo.addItems([str(order["code"]) for order in orders])
+        if not code:
+            self.order_combo.addItem("— wybierz ZL —", "")
+        for order in orders:
+            order_code = str(order["code"])
+            self.order_combo.addItem(order_code, order_code)
         if code:
-            self.order_combo.setCurrentText(code)
+            index = self.order_combo.findData(code)
+            if index >= 0:
+                self.order_combo.setCurrentIndex(index)
             self.order_combo.setEnabled(False)
         form.addRow("1. Zlecenie:", self.order_combo)
 
@@ -1469,13 +1475,13 @@ class QualityReportDialog(QDialog):
 
     def _context(self) -> tuple[str, str]:
         return (
-            self.order_combo.currentText().strip(),
-            self.department_combo.currentText().strip(),
+            str(self.order_combo.currentData() or "").strip(),
+            str(self.department_combo.currentData() or "").strip(),
         )
 
     def _refresh_departments_for_order(self) -> None:
-        code = self.order_combo.currentText().strip()
-        current = self.department_combo.currentText().strip()
+        code = str(self.order_combo.currentData() or "").strip()
+        current = str(self.department_combo.currentData() or "").strip()
         departments: list[str] = []
 
         if code:
@@ -1486,22 +1492,27 @@ class QualityReportDialog(QDialog):
 
         self.department_combo.blockSignals(True)
         self.department_combo.clear()
-        self.department_combo.addItems(departments)
+        if not self.fixed_department:
+            self.department_combo.addItem("— wybierz dział —", "")
+        for name in departments:
+            self.department_combo.addItem(name, name)
 
         preferred = self.fixed_department or current
         if preferred in departments:
-            self.department_combo.setCurrentText(preferred)
+            index = self.department_combo.findData(preferred)
+            if index >= 0:
+                self.department_combo.setCurrentIndex(index)
         self.department_combo.blockSignals(False)
 
-    def _on_order_changed(self, code: str) -> None:
+    def _on_order_changed(self, _text: str) -> None:
         self._refresh_departments_for_order()
         self._refresh_context()
-        if code.strip():
+        if str(self.order_combo.currentData() or "").strip():
             mark_update_check("quality:order_selected")
 
-    def _on_department_changed(self, department: str) -> None:
+    def _on_department_changed(self, _text: str) -> None:
         self._refresh_context()
-        if department.strip():
+        if str(self.department_combo.currentData() or "").strip():
             mark_update_check("quality:department_selected")
 
     def _on_kind_changed(self, kind: str) -> None:
@@ -1511,7 +1522,10 @@ class QualityReportDialog(QDialog):
 
     def _on_rework_target_changed(self, target: str) -> None:
         self._refresh_rework_help()
-        if target.strip() and self.kind_combo.currentText() == "POPRAWKA":
+        if (
+            str(self.rework_target_combo.currentData() or "").strip()
+            and self.kind_combo.currentText() == "POPRAWKA"
+        ):
             mark_update_check("quality:target_selected")
 
     def _refresh_rework_help(self) -> None:
@@ -1520,7 +1534,7 @@ class QualityReportDialog(QDialog):
             self.rework_help_label.clear()
             return
 
-        target = self.rework_target_combo.currentText().strip()
+        target = str(self.rework_target_combo.currentData() or "").strip()
         if target:
             self.rework_help_label.setObjectName("checkOk")
             self.rework_help_label.setText(
@@ -1577,9 +1591,13 @@ class QualityReportDialog(QDialog):
                 code,
                 department,
             )
-            self.rework_target_combo.addItems(targets)
+            self.rework_target_combo.addItem("— wybierz wcześniejszy etap —", "")
+            for target in targets:
+                self.rework_target_combo.addItem(target, target)
             if current_target in targets:
-                self.rework_target_combo.setCurrentText(current_target)
+                index = self.rework_target_combo.findData(current_target)
+                if index >= 0:
+                    self.rework_target_combo.setCurrentIndex(index)
 
         self.rework_target_combo.setEnabled(bool(targets))
         self.rework_target_combo.blockSignals(False)
@@ -1594,7 +1612,10 @@ class QualityReportDialog(QDialog):
 
         self.save_button.setEnabled(
             available > 0
-            and (not is_rework or bool(self.rework_target_combo.currentText().strip()))
+            and (
+                not is_rework
+                or bool(str(self.rework_target_combo.currentData() or "").strip())
+            )
         )
         self._refresh_rework_help()
 
@@ -1610,7 +1631,7 @@ class QualityReportDialog(QDialog):
 
         if (
             self.kind_combo.currentText() == "POPRAWKA"
-            and not self.rework_target_combo.currentText().strip()
+            and not str(self.rework_target_combo.currentData() or "").strip()
         ):
             QMessageBox.warning(
                 self,
@@ -1634,7 +1655,7 @@ class QualityReportDialog(QDialog):
                 actor="development-user",
                 session_id=session_id,
                 rework_target_department=(
-                    self.rework_target_combo.currentText().strip()
+                    str(self.rework_target_combo.currentData() or "").strip()
                     if self.kind_combo.currentText() == "POPRAWKA"
                     else None
                 ),
