@@ -1,7 +1,7 @@
 {
   "schema": 1,
-  "version": "0.1.17.1",
-  "title": "Produkcja per konkretna pozycja ZL",
+  "version": "0.1.17.2",
+  "title": "Produkcja per konkretna pozycja ZL + czas aktualizacji",
   "description": "Sprawdź, że każda karta działu oznacza jeden produkt i że sesja, ilość, obsada oraz jakość dotyczą tylko tej pozycji. Punkty zaliczają się automatycznie.",
   "checks": [
     {
@@ -65,8 +65,13 @@
       "trigger": "update_panel:copy_report"
     },
     {
+      "id": "version-age",
+      "text": "13. Sprawdź przy numerze wersji czas od ostatniej aktualizacji, np. „18 s temu”, „1 min temu” lub „4 godz. temu”.",
+      "trigger": "version:update_age_visible"
+    },
+    {
       "id": "ready-next",
-      "text": "13. Jeśli wszystko jest OK, kliknij „Gotowy na następne zmiany”.",
+      "text": "14. Jeśli wszystko jest OK, kliknij „Gotowy na następne zmiany”.",
       "trigger": "update_panel:ready"
     }
   ]
