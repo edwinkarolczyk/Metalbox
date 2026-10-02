@@ -595,6 +595,8 @@ class UpdateChecklistPanel(QWidget):
             f"Zapisano uwagę testową dla punktu {item.get('id', index)}: "
             f"{'tak' if note else 'usunięto'}"
         )
+        if note:
+            mark_update_check("update_panel:note")
         self.refresh_from_disk()
 
     def flush_notes(self) -> None:
