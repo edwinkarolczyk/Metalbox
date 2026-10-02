@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "version": "0.1.17",
+  "version": "0.1.17.1",
   "title": "Produkcja per konkretna pozycja ZL",
   "description": "Sprawdź, że każda karta działu oznacza jeden produkt i że sesja, ilość, obsada oraz jakość dotyczą tylko tej pozycji. Punkty zaliczają się automatycznie.",
   "checks": [
@@ -16,7 +16,7 @@
     },
     {
       "id": "department-open",
-      "text": "3. Na pulpicie kliknij dział Laser.",
+      "text": "3. Na pulpicie kliknij dział Zgrzewarki.",
       "trigger": "department:open"
     },
     {
@@ -26,7 +26,7 @@
     },
     {
       "id": "session-start",
-      "text": "5. Na jednej konkretnej karcie produktu kliknij „Rozpocznij” i wpisz obsadę, np. Dawid.",
+      "text": "5. Na jednej konkretnej karcie ZL-740 w Zgrzewarkach kliknij „Rozpocznij” i wpisz obsadę, np. Dawid.",
       "trigger": "production:item_session_start"
     },
     {
