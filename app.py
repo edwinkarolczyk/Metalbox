@@ -4304,6 +4304,7 @@ class MainWindow(QMainWindow):
         self.version_age_timer = QTimer(self)
         self.version_age_timer.timeout.connect(self._refresh_version_age)
         self.version_age_timer.start(1000)
+        mark_update_check("version:update_age_visible")
 
         self.dev_exit_button: QPushButton | None = None
         if SHOW_DEV_EXIT_BUTTON:
