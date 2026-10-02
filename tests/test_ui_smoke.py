@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -337,6 +338,86 @@ class UiSmokeTest(unittest.TestCase):
                 state = metalbox_app.load_dev_update_state()
                 self.assertTrue(state["changes"][0]["checked"])
                 self.assertIsNotNone(state["changes"][0]["checked_at"])
+            finally:
+                metalbox_app.DEV_UPDATE_STATE_FILE = original
+
+    def test_finish_cycle_copies_final_report_and_ignores_control_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            original = metalbox_app.DEV_UPDATE_STATE_FILE
+            try:
+                metalbox_app.DEV_UPDATE_STATE_FILE = Path(temp) / "update_state.json"
+                metalbox_app.save_dev_update_state(
+                    {
+                        "schema": 2,
+                        "status": "updated",
+                        "old_version": "0.1.18",
+                        "new_version": metalbox_app.APP_VERSION,
+                        "title": "Hotfix raportu",
+                        "description": "Test końcowego raportu.",
+                        "ready_for_next": False,
+                        "changes": [
+                            {
+                                "id": "real",
+                                "text": "Prawdziwy test funkcji",
+                                "trigger": "test:real",
+                                "checked": True,
+                                "checked_at": "2026-10-02T11:00:00",
+                                "note": "",
+                                "problem": False,
+                            },
+                            {
+                                "id": "copy",
+                                "text": "Kopiuj raport",
+                                "trigger": "update_panel:copy_report",
+                                "checked": True,
+                                "checked_at": "2026-10-02T11:01:00",
+                                "note": "",
+                                "problem": False,
+                            },
+                            {
+                                "id": "ready",
+                                "text": "Gotowy na następne zmiany",
+                                "trigger": "update_panel:ready",
+                                "checked": False,
+                                "checked_at": None,
+                                "note": "",
+                                "problem": False,
+                            },
+                        ],
+                    }
+                )
+
+                panel = metalbox_app.UpdateChecklistPanel()
+                self.assertEqual(panel._progress_text(), "OK 1/1 • oczekuje 0 • uwagi 0")
+
+                report_before = metalbox_app.format_update_test_report(
+                    metalbox_app.load_dev_update_state()
+                )
+                self.assertIn("Podsumowanie: 1/1 OK", report_before)
+                self.assertNotIn("Kopiuj raport", report_before)
+                self.assertNotIn("Gotowy na następne zmiany", report_before)
+
+                with patch.object(
+                    metalbox_app.QMessageBox,
+                    "question",
+                    return_value=metalbox_app.QMessageBox.Yes,
+                ), patch.object(
+                    metalbox_app.QMessageBox,
+                    "information",
+                    return_value=metalbox_app.QMessageBox.Ok,
+                ):
+                    panel._finish_cycle()
+
+                state = metalbox_app.load_dev_update_state()
+                self.assertTrue(state["ready_for_next"])
+                self.assertIsNotNone(state["completed_at"])
+                self.assertEqual(state["completed_with_pending"], 0)
+
+                final_report = metalbox_app.QApplication.clipboard().text()
+                self.assertIn("Gotowy na następne zmiany: TAK", final_report)
+                self.assertIn("Podsumowanie: 1/1 OK", final_report)
+                self.assertNotIn("Kopiuj raport", final_report)
+                panel.close()
             finally:
                 metalbox_app.DEV_UPDATE_STATE_FILE = original
 
