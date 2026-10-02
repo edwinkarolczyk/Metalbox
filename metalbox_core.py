@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Iterator
 
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 DEFAULT_ROUTE = ("Laser", "Giętarki", "Zgrzewarki", "Malarnia", "Pakownia")
 
 
@@ -121,9 +121,25 @@ class MetalboxStore:
                     note TEXT NOT NULL DEFAULT ''
                 );
 
+                CREATE TABLE IF NOT EXISTS employees (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                    department TEXT NOT NULL DEFAULT '',
+                    competency TEXT NOT NULL DEFAULT '',
+                    role TEXT NOT NULL DEFAULT 'PRACOWNIK',
+                    email TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL DEFAULT 'AKTYWNY',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_employees_status_name
+                    ON employees(status, name);
+
                 CREATE TABLE IF NOT EXISTS session_workers (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     session_id INTEGER NOT NULL REFERENCES production_sessions(id) ON DELETE CASCADE,
+                    employee_id INTEGER REFERENCES employees(id) ON DELETE SET NULL,
                     worker_name TEXT NOT NULL,
                     joined_at TEXT NOT NULL,
                     left_at TEXT
@@ -134,6 +150,9 @@ class MetalboxStore:
 
                 CREATE INDEX IF NOT EXISTS idx_session_workers_session
                     ON session_workers(session_id, left_at);
+
+                CREATE INDEX IF NOT EXISTS idx_session_workers_employee
+                    ON session_workers(employee_id, left_at);
 
                 CREATE TABLE IF NOT EXISTS quality_events (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -222,6 +241,17 @@ class MetalboxStore:
                 "production_sessions",
                 "order_item_id",
                 "INTEGER REFERENCES order_items(id) ON DELETE CASCADE",
+            )
+            self._ensure_column(
+                db,
+                "session_workers",
+                "employee_id",
+                "INTEGER REFERENCES employees(id) ON DELETE SET NULL",
+            )
+
+            db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_session_workers_employee "
+                "ON session_workers(employee_id, left_at)"
             )
 
             db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
