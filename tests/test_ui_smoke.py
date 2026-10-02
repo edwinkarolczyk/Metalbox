@@ -218,11 +218,24 @@ class UiSmokeTest(unittest.TestCase):
                 self.qt_app.processEvents()
 
                 self.assertFalse(window.management_frame.isVisible())
-                self.assertTrue(
-                    window.department_buttons["Zgrzewarki"].isVisible()
+
+                # Pracownik widzi wszystkie działy w stałym układzie.
+                for department in metalbox_app.DEPARTMENTS:
+                    self.assertTrue(
+                        window.department_buttons[department].isVisible()
+                    )
+
+                assigned = window.department_buttons["Zgrzewarki"]
+                locked = window.department_buttons["Malarnia"]
+                self.assertTrue(assigned.isEnabled())
+                self.assertEqual(
+                    assigned.objectName(),
+                    "departmentButtonAssigned",
                 )
-                self.assertFalse(
-                    window.department_buttons["Malarnia"].isVisible()
+                self.assertFalse(locked.isEnabled())
+                self.assertEqual(
+                    locked.objectName(),
+                    "departmentButtonLocked",
                 )
 
                 window.apply_dev_view_state("KIEROWNIK", "Zgrzewarki")
@@ -231,6 +244,18 @@ class UiSmokeTest(unittest.TestCase):
                 self.assertTrue(window.management_frame.isVisible())
                 self.assertTrue(
                     window.department_buttons["Malarnia"].isVisible()
+                )
+                self.assertTrue(
+                    all(
+                        button.isEnabled()
+                        for button in window.department_buttons.values()
+                    )
+                )
+                self.assertTrue(
+                    all(
+                        button.objectName() == "departmentButton"
+                        for button in window.department_buttons.values()
+                    )
                 )
                 window.close()
             finally:
