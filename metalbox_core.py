@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Iterator
 
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 DEFAULT_ROUTE = ("Laser", "Giętarki", "Zgrzewarki", "Malarnia", "Pakownia")
 
 
@@ -90,6 +90,7 @@ class MetalboxStore:
                     good_qty INTEGER NOT NULL DEFAULT 0 CHECK(good_qty >= 0),
                     reject_qty INTEGER NOT NULL DEFAULT 0 CHECK(reject_qty >= 0),
                     rework_qty INTEGER NOT NULL DEFAULT 0 CHECK(rework_qty >= 0),
+                    scrap_qty INTEGER NOT NULL DEFAULT 0 CHECK(scrap_qty >= 0),
                     status TEXT NOT NULL DEFAULT 'OCZEKUJE',
                     updated_at TEXT NOT NULL,
                     UNIQUE(order_item_id, department)
@@ -132,6 +133,25 @@ class MetalboxStore:
 
                 CREATE INDEX IF NOT EXISTS idx_session_workers_session
                     ON session_workers(session_id, left_at);
+
+                CREATE TABLE IF NOT EXISTS quality_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+                    department TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    quantity INTEGER NOT NULL CHECK(quantity > 0),
+                    reason TEXT NOT NULL DEFAULT '',
+                    note TEXT NOT NULL DEFAULT '',
+                    session_id INTEGER REFERENCES production_sessions(id) ON DELETE SET NULL,
+                    occurred_at TEXT NOT NULL,
+                    actor TEXT NOT NULL DEFAULT 'system'
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_quality_order
+                    ON quality_events(order_id, occurred_at);
+
+                CREATE INDEX IF NOT EXISTS idx_quality_department
+                    ON quality_events(department, kind, occurred_at);
                 """
             )
 
@@ -158,6 +178,12 @@ class MetalboxStore:
                 "orders",
                 "updated_at",
                 "TEXT NOT NULL DEFAULT ''",
+            )
+            self._ensure_column(
+                db,
+                "operation_progress",
+                "scrap_qty",
+                "INTEGER NOT NULL DEFAULT 0",
             )
 
             db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
@@ -438,6 +464,7 @@ class MetalboxStore:
                     SUM(op.good_qty) AS good_qty,
                     SUM(op.reject_qty) AS reject_qty,
                     SUM(op.rework_qty) AS rework_qty,
+                    SUM(op.scrap_qty) AS scrap_qty,
                     CASE
                         WHEN SUM(CASE WHEN op.status = 'WSTRZYMANE' THEN 1 ELSE 0 END) > 0
                             THEN 'WSTRZYMANE'
@@ -1677,6 +1704,207 @@ class MetalboxStore:
             "ready_percent": int(progress_row["ready_percent"]),
         }
 
+    def report_quality_quantity(
+        self,
+        code: str,
+        department: str,
+        kind: str,
+        quantity: int,
+        *,
+        reason: str = "",
+        note: str = "",
+        actor: str = "development-user",
+        session_id: int | None = None,
+    ) -> dict:
+        kind = kind.strip().upper()
+        aliases = {
+            "BRAK": "BRAK",
+            "REJECT": "BRAK",
+            "POPRAWKA": "POPRAWKA",
+            "REWORK": "POPRAWKA",
+            "ZŁOM": "ZŁOM",
+            "ZLOM": "ZŁOM",
+            "SCRAP": "ZŁOM",
+        }
+        kind = aliases.get(kind, kind)
+        if kind not in {"BRAK", "POPRAWKA", "ZŁOM"}:
+            raise ValueError("Nieprawidłowy typ zgłoszenia jakości.")
+
+        quantity = int(quantity)
+        if quantity <= 0:
+            raise ValueError("Ilość musi być większa od zera.")
+
+        reason = reason.strip()
+        if not reason:
+            raise ValueError("Podaj przyczynę zgłoszenia jakości.")
+
+        now = datetime.now(timezone.utc).isoformat()
+        with self._connect() as db:
+            order = db.execute(
+                "SELECT id FROM orders WHERE code = ?",
+                (code,),
+            ).fetchone()
+            if order is None:
+                raise ValueError(f"Nie znaleziono zlecenia {code}.")
+            order_id = int(order["id"])
+
+            rows = self._department_operation_rows(
+                db,
+                order_id=order_id,
+                department=department,
+            )
+            if not rows:
+                raise ValueError(f"Brak operacji {department} dla {code}.")
+
+            available_total = sum(
+                self._row_available_to_process(row)
+                for row in rows
+            )
+            if quantity > available_total:
+                raise ValueError(
+                    f"Można zgłosić maksymalnie {available_total} szt. "
+                    "Tyle sztuk jest jeszcze dostępnych do rozliczenia w tym etapie."
+                )
+
+            target_column = {
+                "BRAK": "reject_qty",
+                "POPRAWKA": "rework_qty",
+                "ZŁOM": "scrap_qty",
+            }[kind]
+
+            left = quantity
+            touched = 0
+            for row in rows:
+                if left <= 0:
+                    break
+                available = self._row_available_to_process(row)
+                if available <= 0:
+                    continue
+
+                add = min(left, available)
+                db.execute(
+                    f"""
+                    UPDATE operation_progress
+                    SET {target_column} = {target_column} + ?,
+                        status = CASE
+                            WHEN status = 'OCZEKUJE' THEN 'AKTYWNE'
+                            ELSE status
+                        END,
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (add, now, int(row["id"])),
+                )
+                left -= add
+                touched += 1
+
+            db.execute(
+                """
+                INSERT INTO quality_events(
+                    order_id, department, kind, quantity, reason, note,
+                    session_id, occurred_at, actor
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    order_id,
+                    department,
+                    kind,
+                    quantity,
+                    reason,
+                    note.strip(),
+                    session_id,
+                    now,
+                    actor,
+                ),
+            )
+
+            self._recalculate_order_percentages(db, order_id)
+
+            self._audit_in_connection(
+                db,
+                actor=actor,
+                action="quality_reported",
+                entity_type="order",
+                entity_id=code,
+                payload={
+                    "department": department,
+                    "kind": kind,
+                    "quantity": quantity,
+                    "reason": reason,
+                    "note": note.strip(),
+                    "session_id": session_id,
+                    "rows": touched,
+                },
+            )
+
+        return {
+            "kind": kind,
+            "quantity": quantity,
+            "remaining_capacity": max(0, available_total - quantity),
+        }
+
+    def list_quality_events(
+        self,
+        *,
+        code: str | None = None,
+        department: str | None = None,
+        limit: int = 500,
+    ) -> list[dict]:
+        where: list[str] = []
+        params: list[object] = []
+
+        if code:
+            where.append("o.code = ?")
+            params.append(code)
+        if department:
+            where.append("q.department = ?")
+            params.append(department)
+
+        where_sql = (" WHERE " + " AND ".join(where)) if where else ""
+        params.append(max(1, min(int(limit), 2000)))
+
+        with self._connect() as db:
+            rows = db.execute(
+                f"""
+                SELECT
+                    q.id,
+                    o.code,
+                    q.department,
+                    q.kind,
+                    q.quantity,
+                    q.reason,
+                    q.note,
+                    q.session_id,
+                    q.occurred_at,
+                    q.actor
+                FROM quality_events q
+                JOIN orders o ON o.id = q.order_id
+                {where_sql}
+                ORDER BY q.id DESC
+                LIMIT ?
+                """,
+                params,
+            ).fetchall()
+
+        return [dict(row) for row in rows]
+
+    def quality_summary(self) -> dict:
+        with self._connect() as db:
+            rows = db.execute(
+                """
+                SELECT kind, COALESCE(SUM(quantity), 0) AS quantity
+                FROM quality_events
+                GROUP BY kind
+                """
+            ).fetchall()
+        values = {str(row["kind"]): int(row["quantity"]) for row in rows}
+        return {
+            "reject": values.get("BRAK", 0),
+            "rework": values.get("POPRAWKA", 0),
+            "scrap": values.get("ZŁOM", 0),
+        }
+
     def get_department_order_capacity(
         self,
         code: str,
@@ -1721,6 +1949,9 @@ class MetalboxStore:
                 op.sequence_no,
                 op.planned_qty,
                 op.good_qty,
+                op.reject_qty,
+                op.rework_qty,
+                op.scrap_qty,
                 op.status,
                 oi.position_no,
                 CASE
@@ -1743,9 +1974,13 @@ class MetalboxStore:
     def _row_available_to_process(row: sqlite3.Row) -> int:
         planned = max(0, int(row["planned_qty"]))
         good = max(0, int(row["good_qty"]))
+        reject = max(0, int(row["reject_qty"]))
+        rework = max(0, int(row["rework_qty"]))
+        scrap = max(0, int(row["scrap_qty"]))
         upstream_good = max(0, int(row["upstream_good_qty"]))
         allowed_total = min(planned, upstream_good)
-        return max(0, allowed_total - good)
+        processed = good + reject + rework + scrap
+        return max(0, allowed_total - processed)
 
     @staticmethod
     def _recalculate_order_percentages(
