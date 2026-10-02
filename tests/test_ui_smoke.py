@@ -303,6 +303,27 @@ class UiSmokeTest(unittest.TestCase):
             finally:
                 metalbox_app.DEV_UPDATE_STATE_FILE = original
 
+    def test_update_age_formats_seconds_minutes_and_hours(self) -> None:
+        now = metalbox_app.datetime.fromisoformat("2026-10-02T10:00:00+00:00")
+        self.assertEqual(
+            metalbox_app._format_elapsed_update_age(
+                "2026-10-02T09:59:42+00:00", now=now
+            ),
+            "18 s temu",
+        )
+        self.assertEqual(
+            metalbox_app._format_elapsed_update_age(
+                "2026-10-02T09:58:30+00:00", now=now
+            ),
+            "1 min temu",
+        )
+        self.assertEqual(
+            metalbox_app._format_elapsed_update_age(
+                "2026-10-02T06:00:00+00:00", now=now
+            ),
+            "4 godz. temu",
+        )
+
     def test_department_page_shows_separate_order_items(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             db_path = Path(temp) / "department-items.sqlite3"
