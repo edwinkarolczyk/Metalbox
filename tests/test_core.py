@@ -158,8 +158,8 @@ class MetalboxStoreTests(unittest.TestCase):
         )
         self.assertTrue(any(event["action"] == "order_created" for event in events))
 
-    def test_update_order_before_production_can_change_items(self) -> None:
-        self.store.create_order(
+    def test_update_order_preserves_item_id_and_audits_diff(self) -> None:
+        created = self.store.create_order(
             code="ZL-901",
             client="Klient",
             deadline="2026-11-05",
@@ -167,6 +167,7 @@ class MetalboxStoreTests(unittest.TestCase):
             status="NOWE",
             items=[{"symbol": "A", "name": "Produkt", "quantity": 10}],
         )
+        first_id = int(created["items"][0]["id"])
 
         updated = self.store.update_order(
             "ZL-901",
@@ -176,39 +177,252 @@ class MetalboxStoreTests(unittest.TestCase):
             priority="WYSOKI",
             status="NOWE",
             items=[
-                {"symbol": "A", "name": "Produkt", "quantity": 15},
+                {
+                    "id": first_id,
+                    "symbol": "A",
+                    "name": "Produkt",
+                    "quantity": 15,
+                },
                 {"symbol": "B", "name": "Drugi", "quantity": 5},
             ],
+            actor="test-user",
         )
+
         self.assertEqual(updated["client"], "Nowy klient")
         self.assertEqual(len(updated["items"]), 2)
-        self.assertEqual(updated["items"][0]["quantity"], 15)
+        self.assertEqual(int(updated["items"][0]["id"]), first_id)
+        self.assertEqual(int(updated["items"][0]["quantity"]), 15)
+        self.assertNotEqual(int(updated["items"][1]["id"]), first_id)
 
-    def test_update_order_after_production_blocks_structural_change(self) -> None:
-        capacity = self.store.get_department_order_capacity("ZL-740", "Zgrzewarki")
-        self.assertGreater(capacity["available_now"], 0)
-        self.store.add_department_good_qty("ZL-740", "Zgrzewarki", 1)
+        events = self.store.list_audit_events(
+            entity_type="order",
+            entity_id="ZL-901",
+            limit=20,
+        )
+        event = next(
+            event
+            for event in events
+            if event["action"] == "order_updated"
+        )
+        payload = event["payload"]
+        self.assertEqual(
+            payload["header_changes"]["client"],
+            {"old": "Klient", "new": "Nowy klient"},
+        )
+        updated_change = next(
+            change
+            for change in payload["item_changes"]
+            if change["action"] == "updated"
+        )
+        self.assertEqual(int(updated_change["order_item_id"]), first_id)
+        self.assertEqual(int(updated_change["old"]["quantity"]), 10)
+        self.assertEqual(int(updated_change["new"]["quantity"]), 15)
+        self.assertTrue(
+            any(
+                change["action"] == "added"
+                for change in payload["item_changes"]
+            )
+        )
 
-        order = self.store.get_order("ZL-740")
-        self.assertIsNotNone(order)
-        changed_items = [
-            {
-                "symbol": item["symbol"],
-                "name": item["name"],
-                "quantity": int(item["quantity"]) + (1 if index == 0 else 0),
-            }
-            for index, item in enumerate(order["items"])
-        ]
+    def test_started_item_does_not_lock_unstarted_sibling(self) -> None:
+        created = self.store.create_order(
+            code="ZL-902",
+            client="Klient",
+            deadline="2026-11-05",
+            priority="NORMALNY",
+            status="NOWE",
+            items=[
+                {"symbol": "A", "name": "Pierwszy", "quantity": 10},
+                {"symbol": "B", "name": "Drugi", "quantity": 8},
+            ],
+        )
+        first_id = int(created["items"][0]["id"])
+        second_id = int(created["items"][1]["id"])
+
+        self.store.start_production_session(
+            "ZL-902",
+            "Laser",
+            ["Dawid"],
+            order_item_id=first_id,
+        )
+
+        updated = self.store.update_order(
+            "ZL-902",
+            code="ZL-902",
+            client="Klient",
+            deadline="2026-11-05",
+            priority="NORMALNY",
+            status="NOWE",
+            items=[
+                {
+                    "id": first_id,
+                    "symbol": "A",
+                    "name": "Pierwszy",
+                    "quantity": 10,
+                },
+                {
+                    "id": second_id,
+                    "symbol": "B2",
+                    "name": "Drugi po zmianie",
+                    "quantity": 12,
+                },
+            ],
+        )
+        self.assertEqual(int(updated["items"][0]["id"]), first_id)
+        self.assertEqual(int(updated["items"][1]["id"]), second_id)
+        self.assertEqual(updated["items"][1]["symbol"], "B2")
+        self.assertEqual(int(updated["items"][1]["quantity"]), 12)
+
+        reduced = self.store.update_order(
+            "ZL-902",
+            code="ZL-902",
+            client="Klient",
+            deadline="2026-11-05",
+            priority="NORMALNY",
+            status="NOWE",
+            items=[
+                {
+                    "id": first_id,
+                    "symbol": "A",
+                    "name": "Pierwszy",
+                    "quantity": 10,
+                }
+            ],
+        )
+        self.assertEqual(
+            [int(item["id"]) for item in reduced["items"]],
+            [first_id],
+        )
+
+    def test_started_item_blocks_symbol_name_and_delete(self) -> None:
+        created = self.store.create_order(
+            code="ZL-903",
+            client="Klient",
+            deadline="2026-11-05",
+            priority="NORMALNY",
+            status="NOWE",
+            items=[
+                {"symbol": "A", "name": "Pierwszy", "quantity": 10},
+                {"symbol": "B", "name": "Drugi", "quantity": 8},
+            ],
+        )
+        first_id = int(created["items"][0]["id"])
+        second_id = int(created["items"][1]["id"])
+
+        self.store.start_production_session(
+            "ZL-903",
+            "Laser",
+            ["Dawid"],
+            order_item_id=first_id,
+        )
 
         with self.assertRaises(ValueError):
             self.store.update_order(
-                "ZL-740",
-                code="ZL-740",
-                client=order["client"],
-                deadline=order["deadline"],
-                priority=order["priority"],
-                status=order["status"],
-                items=changed_items,
+                "ZL-903",
+                code="ZL-903",
+                client="Klient",
+                deadline="2026-11-05",
+                priority="NORMALNY",
+                status="NOWE",
+                items=[
+                    {
+                        "id": first_id,
+                        "symbol": "A-ZMIANA",
+                        "name": "Pierwszy",
+                        "quantity": 10,
+                    },
+                    {
+                        "id": second_id,
+                        "symbol": "B",
+                        "name": "Drugi",
+                        "quantity": 8,
+                    },
+                ],
+            )
+
+        with self.assertRaises(ValueError):
+            self.store.update_order(
+                "ZL-903",
+                code="ZL-903",
+                client="Klient",
+                deadline="2026-11-05",
+                priority="NORMALNY",
+                status="NOWE",
+                items=[
+                    {
+                        "id": second_id,
+                        "symbol": "B",
+                        "name": "Drugi",
+                        "quantity": 8,
+                    }
+                ],
+            )
+
+    def test_started_item_quantity_can_increase_but_not_below_processed(self) -> None:
+        created = self.store.create_order(
+            code="ZL-904",
+            client="Klient",
+            deadline="2026-11-05",
+            priority="NORMALNY",
+            status="NOWE",
+            items=[{"symbol": "A", "name": "Produkt", "quantity": 10}],
+        )
+        item_id = int(created["items"][0]["id"])
+        session = self.store.start_production_session(
+            "ZL-904",
+            "Laser",
+            ["Dawid"],
+            order_item_id=item_id,
+        )
+        self.store.add_department_good_qty(
+            "ZL-904",
+            "Laser",
+            3,
+            order_item_id=item_id,
+            session_id=int(session["id"]),
+        )
+
+        increased = self.store.update_order(
+            "ZL-904",
+            code="ZL-904",
+            client="Klient",
+            deadline="2026-11-05",
+            priority="NORMALNY",
+            status="NOWE",
+            items=[
+                {
+                    "id": item_id,
+                    "symbol": "A",
+                    "name": "Produkt",
+                    "quantity": 12,
+                }
+            ],
+        )
+        self.assertEqual(int(increased["items"][0]["id"]), item_id)
+        self.assertEqual(int(increased["items"][0]["quantity"]), 12)
+        capacity = self.store.get_item_department_capacity(
+            "ZL-904",
+            item_id,
+            "Laser",
+        )
+        self.assertEqual(int(capacity["planned_qty"]), 12)
+
+        with self.assertRaises(ValueError):
+            self.store.update_order(
+                "ZL-904",
+                code="ZL-904",
+                client="Klient",
+                deadline="2026-11-05",
+                priority="NORMALNY",
+                status="NOWE",
+                items=[
+                    {
+                        "id": item_id,
+                        "symbol": "A",
+                        "name": "Produkt",
+                        "quantity": 2,
+                    }
+                ],
             )
 
     def test_production_session_lifecycle(self) -> None:
