@@ -1,37 +1,42 @@
 {
   "schema": 1,
-  "version": "0.1.9",
-  "title": "Tworzenie i edycja zleceń",
-  "description": "Sprawdź nowy kreator ZL. Punkty zaznaczają się automatycznie po wykonaniu czynności.",
+  "version": "0.1.10",
+  "title": "Sesje produkcyjne i obsada",
+  "description": "Sprawdź cykl pracy na karcie działu. Punkty zaznaczają się automatycznie.",
   "checks": [
     {
-      "id": "orders-open",
-      "text": "Otwórz ekran Zlecenia",
-      "trigger": "page:orders"
+      "id": "department-open",
+      "text": "Wejdź do dowolnego działu produkcyjnego",
+      "trigger": "department:open"
     },
     {
-      "id": "order-create",
-      "text": "Utwórz nowe ZL z co najmniej jedną pozycją",
-      "trigger": "order:create"
+      "id": "session-start",
+      "text": "Rozpocznij sesję i podaj obsadę",
+      "trigger": "session:start"
     },
     {
-      "id": "order-update",
-      "text": "Edytuj istniejące ZL i zapisz zmianę",
-      "trigger": "order:update"
+      "id": "session-pause",
+      "text": "Wstrzymaj aktywną sesję",
+      "trigger": "session:pause"
     },
     {
-      "id": "order-open",
-      "text": "Otwórz szczegóły zapisanego ZL",
-      "trigger": "order:open"
+      "id": "session-resume",
+      "text": "Wznów wstrzymaną sesję",
+      "trigger": "session:resume"
     },
     {
-      "id": "orders-search",
-      "text": "Wyszukaj utworzone ZL po numerze lub produkcie",
-      "trigger": "orders:search"
+      "id": "operation-quantity",
+      "text": "Dodaj wykonaną ilość podczas aktywnej sesji",
+      "trigger": "operation:quantity"
+    },
+    {
+      "id": "session-finish",
+      "text": "Zakończ sesję produkcyjną",
+      "trigger": "session:finish"
     },
     {
       "id": "order-history",
-      "text": "Otwórz historię ZL i sprawdź wpis utworzenia/edycji",
+      "text": "Otwórz historię ZL i sprawdź wpisy sesji",
       "trigger": "order:history"
     },
     {
