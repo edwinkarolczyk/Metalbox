@@ -68,7 +68,15 @@ class MetalboxStoreTests(unittest.TestCase):
             db.executescript(
                 """
                 CREATE TABLE production_sessions (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    order_id INTEGER NOT NULL DEFAULT 1,
+                    department TEXT NOT NULL DEFAULT 'Laser',
+                    status TEXT NOT NULL DEFAULT 'AKTYWNA',
+                    started_at TEXT NOT NULL DEFAULT '',
+                    paused_at TEXT,
+                    ended_at TEXT,
+                    created_by TEXT NOT NULL DEFAULT 'system',
+                    note TEXT NOT NULL DEFAULT ''
                 );
 
                 CREATE TABLE session_workers (
