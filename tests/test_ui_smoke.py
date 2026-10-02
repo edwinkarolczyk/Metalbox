@@ -167,6 +167,7 @@ class UiSmokeTest(unittest.TestCase):
             store = MetalboxStore(db_path)
             store.seed_development_data()
             store.ensure_development_progress_seeded()
+            store.ensure_development_employees_seeded()
             store.start_production_session(
                 "ZL-740",
                 "Zgrzewarki",
@@ -185,6 +186,52 @@ class UiSmokeTest(unittest.TestCase):
             self.assertIsNotNone(dialog._selected_item_id())
             self.assertEqual(dialog.department_combo.currentText(), "Zgrzewarki")
             self.assertTrue(dialog.quantity_spin.isEnabled())
+            dialog.close()
+
+    def test_quality_dialog_limits_reporter_to_current_session_crew(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            db_path = Path(temp) / "quality-reporter-ui.sqlite3"
+            store = MetalboxStore(db_path)
+            store.seed_development_data()
+            store.ensure_development_progress_seeded()
+            store.ensure_development_employees_seeded()
+
+            order = store.get_order("ZL-740")
+            self.assertIsNotNone(order)
+            selected = next(
+                item
+                for item in order["items"]
+                if store.get_item_department_capacity(
+                    "ZL-740",
+                    int(item["id"]),
+                    "Zgrzewarki",
+                )["available_now"] > 0
+            )
+            item_id = int(selected["id"])
+            store.start_production_session(
+                "ZL-740",
+                "Zgrzewarki",
+                ["Dawid", "Marek"],
+                order_item_id=item_id,
+            )
+
+            dialog = metalbox_app.QualityReportDialog(
+                store,
+                code="ZL-740",
+                department="Zgrzewarki",
+                order_item_id=item_id,
+            )
+            self.qt_app.processEvents()
+
+            reporters = [
+                dialog.reporter_combo.itemText(index)
+                for index in range(1, dialog.reporter_combo.count())
+            ]
+            self.assertEqual(set(reporters), {"Dawid", "Marek"})
+            self.assertIn("obsada: Dawid, Marek", dialog.session_label.text())
+            self.assertNotIn("Sebastian", reporters)
+            self.assertGreater(dialog.reason_combo.count(), 1)
+            self.assertTrue(dialog.save_button.isEnabled())
             dialog.close()
 
     def test_worker_and_manager_views_are_separated(self) -> None:
@@ -325,6 +372,7 @@ class UiSmokeTest(unittest.TestCase):
             store = MetalboxStore(db_path)
             store.seed_development_data()
             store.ensure_development_progress_seeded()
+            store.ensure_development_employees_seeded()
             session = store.start_production_session(
                 "ZL-740",
                 "Zgrzewarki",
