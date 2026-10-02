@@ -48,7 +48,7 @@ from PySide6.QtWidgets import (
 )
 
 APP_NAME = "Metalbox"
-APP_VERSION = "0.1.13.2"
+APP_VERSION = "0.1.14"
 LOCAL_DATA_ROOT = Path(
     os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
 ) / "Metalbox"
@@ -958,6 +958,7 @@ class OrderHistoryDialog(QDialog):
             "session_worker_joined": "Pracownik dołączył do sesji",
             "session_worker_left": "Pracownik zakończył udział w sesji",
             "quality_reported": "Zgłoszono zdarzenie jakościowe",
+            "rework_status_changed": "Zmieniono status poprawki",
         }
 
         for event in events:
@@ -1360,6 +1361,10 @@ class QualityReportDialog(QDialog):
         self.kind_combo.addItems(["BRAK", "POPRAWKA", "ZŁOM"])
         form.addRow("Typ:", self.kind_combo)
 
+        self.rework_target_label = QLabel("Cofnij do etapu:")
+        self.rework_target_combo = QComboBox()
+        form.addRow(self.rework_target_label, self.rework_target_combo)
+
         self.quantity_spin = QSpinBox()
         self.quantity_spin.setRange(1, 1_000_000)
         self.quantity_spin.setSuffix(" szt.")
@@ -1398,6 +1403,7 @@ class QualityReportDialog(QDialog):
 
         self.order_combo.currentTextChanged.connect(self._refresh_context)
         self.department_combo.currentTextChanged.connect(self._refresh_context)
+        self.kind_combo.currentTextChanged.connect(self._refresh_context)
         self._refresh_context()
 
     def _context(self) -> tuple[str, str]:
@@ -1408,9 +1414,16 @@ class QualityReportDialog(QDialog):
 
     def _refresh_context(self) -> None:
         code, department = self._context()
+        kind = self.kind_combo.currentText().strip().upper()
+
+        is_rework = kind == "POPRAWKA"
+        self.rework_target_label.setVisible(is_rework)
+        self.rework_target_combo.setVisible(is_rework)
+
         if not code or not department:
             self.capacity_label.setText("—")
             self.session_label.setText("—")
+            self.rework_target_combo.clear()
             return
 
         try:
@@ -1425,6 +1438,19 @@ class QualityReportDialog(QDialog):
         self.capacity_label.setText(f"{available} szt. do rozliczenia jakościowego")
         self.quantity_spin.setMaximum(max(1, available))
         self.quantity_spin.setEnabled(available > 0)
+
+        self.rework_target_combo.blockSignals(True)
+        current_target = self.rework_target_combo.currentText()
+        self.rework_target_combo.clear()
+        if is_rework:
+            targets = self.store.get_rework_target_departments(
+                code,
+                department,
+            )
+            self.rework_target_combo.addItems(targets)
+            if current_target in targets:
+                self.rework_target_combo.setCurrentText(current_target)
+        self.rework_target_combo.blockSignals(False)
 
         session = self.store.get_department_session(code, department)
         if session:
@@ -1457,6 +1483,11 @@ class QualityReportDialog(QDialog):
                 note=self.note_edit.text(),
                 actor="development-user",
                 session_id=session_id,
+                rework_target_department=(
+                    self.rework_target_combo.currentText().strip()
+                    if self.kind_combo.currentText() == "POPRAWKA"
+                    else None
+                ),
             )
             self.saved = True
             mark_update_check("quality:report")
@@ -3283,9 +3314,10 @@ class QualityPage(PageBase):
         super().__init__(
             "Jakość / braki / poprawki",
             go_home,
-            "Zgłoszenia jakościowe z bazy Development. Tylko dobre sztuki przechodzą dalej.",
+            "Zgłoszenia jakościowe oraz aktywny obieg poprawek.",
         )
         self.store = store
+        self.rework_rows: list[dict] = []
 
         controls = QHBoxLayout()
 
@@ -3302,11 +3334,13 @@ class QualityPage(PageBase):
         controls.addStretch(1)
         self.root.addLayout(controls)
 
+        self.root.addWidget(section_heading("Zdarzenia jakościowe"))
+
         self.table = compact_table(
             ["Data", "ZL", "Dział", "Typ", "Ilość", "Przyczyna", "Sesja", "Zgłosił"],
             [],
             [155, 100, 140, 110, 80, 280, 90, 150],
-            300,
+            250,
         )
         self.root.addWidget(self.table, alignment=Qt.AlignLeft)
 
@@ -3319,6 +3353,51 @@ class QualityPage(PageBase):
         stats.addWidget(self.scrap_card)
         stats.addStretch(1)
         self.root.addLayout(stats)
+
+        self.root.addWidget(
+            section_heading(
+                "Poprawki w obiegu",
+                "DO NAPRAWY → W NAPRAWIE → DO KONTROLI → ZAMKNIĘTA",
+            )
+        )
+
+        self.rework_table = compact_table(
+            [
+                "ID",
+                "ZL",
+                "Produkt",
+                "Źródło",
+                "Naprawa w",
+                "Ilość",
+                "Status",
+                "Przyczyna",
+            ],
+            [],
+            [70, 95, 260, 130, 130, 80, 130, 260],
+            230,
+        )
+        self.root.addWidget(self.rework_table, alignment=Qt.AlignLeft)
+
+        actions = QHBoxLayout()
+        for text, action in (
+            ("Rozpocznij naprawę", "START"),
+            ("Oznacz naprawione", "NAPRAWIONE"),
+            ("Zaakceptuj poprawkę", "AKCEPTUJ"),
+            ("Złom", "ZŁOM"),
+        ):
+            btn = QPushButton(text)
+            if action == "AKCEPTUJ":
+                btn.setObjectName("primary")
+            elif action == "ZŁOM":
+                btn.setObjectName("dangerGhost")
+            else:
+                btn.setObjectName("secondary")
+            btn.clicked.connect(
+                lambda checked=False, a=action: self._rework_action(a)
+            )
+            actions.addWidget(btn)
+        actions.addStretch(1)
+        self.root.addLayout(actions)
         self.root.addStretch(1)
 
         self.refresh_data()
@@ -3335,6 +3414,42 @@ class QualityPage(PageBase):
         )
         if dialog.exec() == QDialog.Accepted and dialog.saved:
             self.refresh_data()
+
+    def _selected_rework(self) -> dict | None:
+        row = self.rework_table.currentRow()
+        if not (0 <= row < len(self.rework_rows)):
+            QMessageBox.information(
+                self,
+                "Poprawki",
+                "Najpierw zaznacz poprawkę na liście.",
+            )
+            return None
+        return self.rework_rows[row]
+
+    def _rework_action(self, action: str) -> None:
+        item = self._selected_rework()
+        if item is None:
+            return
+
+        try:
+            updated = self.store.transition_rework_job(
+                int(item["id"]),
+                action,
+                actor="development-user",
+            )
+            trigger = {
+                "START": "rework:start",
+                "NAPRAWIONE": "rework:repaired",
+                "AKCEPTUJ": "rework:accept",
+                "ZŁOM": "rework:scrap",
+            }[action]
+            mark_update_check(trigger)
+            app_log(
+                f"Poprawka #{updated['id']}: {action} -> {updated['status']}"
+            )
+            self.refresh_data()
+        except ValueError as exc:
+            QMessageBox.warning(self, "Nie można zmienić poprawki", str(exc))
 
     def refresh_data(self) -> None:
         rows = self.store.list_quality_events(limit=500)
@@ -3377,6 +3492,34 @@ class QualityPage(PageBase):
         self._set_card_value(self.reject_card, int(summary["reject"]))
         self._set_card_value(self.rework_card, int(summary["rework"]))
         self._set_card_value(self.scrap_card, int(summary["scrap"]))
+
+        self.rework_rows = self.store.list_rework_jobs(limit=500)
+        self.rework_table.setRowCount(len(self.rework_rows))
+
+        for row_index, item in enumerate(self.rework_rows):
+            product = f'{item["symbol"]} {item["name"]}'.strip()
+            values = [
+                item["id"],
+                item["code"],
+                product,
+                item["source_department"],
+                item["target_department"],
+                item["quantity"],
+                item["status"],
+                item["reason"],
+            ]
+            self.rework_table.setRowHeight(row_index, sp(38))
+            for column_index, value in enumerate(values):
+                cell = QTableWidgetItem(str(value))
+                if column_index == 6:
+                    status = str(value)
+                    if status == "ZŁOM":
+                        cell.setForeground(QColor("#eb7373"))
+                    elif status in {"DO_NAPRAWY", "W_NAPRAWIE", "DO_KONTROLI"}:
+                        cell.setForeground(QColor("#e4bd68"))
+                    elif status == "ZAMKNIĘTA":
+                        cell.setForeground(QColor("#67dc8e"))
+                self.rework_table.setItem(row_index, column_index, cell)
 
 
 class ShippingPage(PageBase):
