@@ -1119,6 +1119,161 @@ class MetalboxStore:
             raise RuntimeError("Sesja została utworzona, ale nie można jej odczytać.")
         return session
 
+    def add_session_worker(
+        self,
+        code: str,
+        department: str,
+        worker_name: str,
+        *,
+        actor: str = "development-user",
+    ) -> dict:
+        worker_name = worker_name.strip()
+        if not worker_name:
+            raise ValueError("Podaj nazwę pracownika.")
+
+        now = datetime.now(timezone.utc).isoformat()
+        with self._connect() as db:
+            session = db.execute(
+                """
+                SELECT s.id
+                FROM production_sessions s
+                JOIN orders o ON o.id = s.order_id
+                WHERE o.code = ?
+                  AND s.department = ?
+                  AND s.status IN ('AKTYWNA', 'WSTRZYMANA')
+                ORDER BY s.id DESC
+                LIMIT 1
+                """,
+                (code, department),
+            ).fetchone()
+            if session is None:
+                raise ValueError("Brak otwartej sesji.")
+
+            session_id = int(session["id"])
+            exists = db.execute(
+                """
+                SELECT 1
+                FROM session_workers
+                WHERE session_id = ?
+                  AND lower(worker_name) = lower(?)
+                  AND left_at IS NULL
+                """,
+                (session_id, worker_name),
+            ).fetchone()
+            if exists is not None:
+                raise ValueError(f"{worker_name} jest już w obsadzie tej sesji.")
+
+            db.execute(
+                """
+                INSERT INTO session_workers(
+                    session_id, worker_name, joined_at
+                )
+                VALUES (?, ?, ?)
+                """,
+                (session_id, worker_name, now),
+            )
+
+            self._audit_in_connection(
+                db,
+                actor=actor,
+                action="session_worker_joined",
+                entity_type="order",
+                entity_id=code,
+                payload={
+                    "session_id": session_id,
+                    "department": department,
+                    "worker": worker_name,
+                },
+            )
+
+        result = self.get_department_session(code, department)
+        if result is None:
+            raise RuntimeError("Nie można odczytać sesji po zmianie obsady.")
+        return result
+
+    def remove_session_worker(
+        self,
+        code: str,
+        department: str,
+        worker_name: str,
+        *,
+        actor: str = "development-user",
+    ) -> dict:
+        worker_name = worker_name.strip()
+        now = datetime.now(timezone.utc).isoformat()
+
+        with self._connect() as db:
+            session = db.execute(
+                """
+                SELECT s.id
+                FROM production_sessions s
+                JOIN orders o ON o.id = s.order_id
+                WHERE o.code = ?
+                  AND s.department = ?
+                  AND s.status IN ('AKTYWNA', 'WSTRZYMANA')
+                ORDER BY s.id DESC
+                LIMIT 1
+                """,
+                (code, department),
+            ).fetchone()
+            if session is None:
+                raise ValueError("Brak otwartej sesji.")
+
+            session_id = int(session["id"])
+            active_workers = db.execute(
+                """
+                SELECT id, worker_name
+                FROM session_workers
+                WHERE session_id = ?
+                  AND left_at IS NULL
+                ORDER BY id
+                """,
+                (session_id,),
+            ).fetchall()
+
+            target = next(
+                (
+                    row
+                    for row in active_workers
+                    if str(row["worker_name"]).casefold() == worker_name.casefold()
+                ),
+                None,
+            )
+            if target is None:
+                raise ValueError(f"{worker_name} nie jest aktywnie w tej sesji.")
+            if len(active_workers) <= 1:
+                raise ValueError(
+                    "Nie można usunąć ostatniej osoby z otwartej sesji. "
+                    "Najpierw dodaj inną osobę albo zakończ sesję."
+                )
+
+            db.execute(
+                """
+                UPDATE session_workers
+                SET left_at = ?
+                WHERE id = ?
+                """,
+                (now, int(target["id"])),
+            )
+
+            self._audit_in_connection(
+                db,
+                actor=actor,
+                action="session_worker_left",
+                entity_type="order",
+                entity_id=code,
+                payload={
+                    "session_id": session_id,
+                    "department": department,
+                    "worker": worker_name,
+                },
+            )
+
+        result = self.get_department_session(code, department)
+        if result is None:
+            raise RuntimeError("Nie można odczytać sesji po zmianie obsady.")
+        return result
+
     def pause_production_session(
         self,
         code: str,
