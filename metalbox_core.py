@@ -1033,27 +1033,34 @@ class MetalboxStore:
         self,
         code: str,
         department: str,
+        order_item_id: int | None = None,
     ) -> dict | None:
         with self._connect() as db:
             row = db.execute(
                 """
                 SELECT
                     s.id,
+                    s.order_item_id,
                     s.status,
                     s.started_at,
                     s.paused_at,
                     s.ended_at,
                     s.created_by,
-                    s.note
+                    s.note,
+                    oi.position_no,
+                    oi.symbol,
+                    oi.name
                 FROM production_sessions s
                 JOIN orders o ON o.id = s.order_id
+                LEFT JOIN order_items oi ON oi.id = s.order_item_id
                 WHERE o.code = ?
                   AND s.department = ?
+                  AND (? IS NULL OR s.order_item_id = ?)
                   AND s.status IN ('AKTYWNA', 'WSTRZYMANA')
                 ORDER BY s.id DESC
                 LIMIT 1
                 """,
-                (code, department),
+                (code, department, order_item_id, order_item_id),
             ).fetchone()
             if row is None:
                 return None
@@ -1071,6 +1078,7 @@ class MetalboxStore:
         result = dict(row)
         result["workers"] = [dict(worker) for worker in workers]
         return result
+
 
     def start_production_session(
         self,
