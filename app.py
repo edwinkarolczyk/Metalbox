@@ -2803,6 +2803,7 @@ class OrderEditorDialog(QDialog):
             "id": item_id,
             "started": started,
             "minimum_quantity": minimum_quantity,
+            "original_quantity": int(quantity),
             "frame": frame,
             "position": position,
             "symbol": symbol_edit,
@@ -2868,6 +2869,12 @@ class OrderEditorDialog(QDialog):
 
     def _save(self) -> None:
         try:
+            started_quantity_changed = any(
+                bool(row.get("started"))
+                and row["quantity"].value()
+                    != int(row.get("original_quantity", row["quantity"].value()))
+                for row in self.item_rows
+            )
             kwargs = {
                 "code": self.code_edit.text(),
                 "client": self.client_edit.text(),
@@ -2884,6 +2891,8 @@ class OrderEditorDialog(QDialog):
                     **kwargs,
                 )
                 mark_update_check("order:update")
+                if started_quantity_changed:
+                    mark_update_check("order:started_quantity_changed")
                 action_text = "Zlecenie zostało zaktualizowane."
             else:
                 result = self.store.create_order(**kwargs)
