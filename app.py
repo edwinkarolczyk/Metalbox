@@ -1365,7 +1365,7 @@ class QualityReportDialog(QDialog):
 
         self.setWindowTitle("Zgłoszenie jakości")
         self.setModal(True)
-        self.setMinimumSize(sp(700), sp(520))
+        self.setMinimumSize(sp(760), sp(610))
 
         root = QVBoxLayout(self)
         root.setContentsMargins(sp(20), sp(18), sp(20), sp(18))
@@ -1390,35 +1390,36 @@ class QualityReportDialog(QDialog):
         if code:
             self.order_combo.setCurrentText(code)
             self.order_combo.setEnabled(False)
-        form.addRow("Zlecenie:", self.order_combo)
+        form.addRow("1. Zlecenie:", self.order_combo)
 
         self.department_combo = QComboBox()
-        self.department_combo.addItems(list(DEPARTMENTS))
-        if department:
-            self.department_combo.setCurrentText(department)
-            self.department_combo.setEnabled(False)
-        form.addRow("Dział:", self.department_combo)
+        form.addRow("2. Dział zgłoszenia:", self.department_combo)
 
         self.kind_combo = QComboBox()
         self.kind_combo.addItems(["BRAK", "POPRAWKA", "ZŁOM"])
-        form.addRow("Typ:", self.kind_combo)
+        form.addRow("3. Typ:", self.kind_combo)
 
-        self.rework_target_label = QLabel("Cofnij do etapu:")
+        self.rework_target_label = QLabel("4. Cofnij do etapu:")
         self.rework_target_combo = QComboBox()
         form.addRow(self.rework_target_label, self.rework_target_combo)
+
+        self.rework_help_label = QLabel()
+        self.rework_help_label.setWordWrap(True)
+        self.rework_help_label.setObjectName("hint")
+        form.addRow("", self.rework_help_label)
 
         self.quantity_spin = QSpinBox()
         self.quantity_spin.setRange(1, 1_000_000)
         self.quantity_spin.setSuffix(" szt.")
-        form.addRow("Ilość:", self.quantity_spin)
+        form.addRow("5. Ilość:", self.quantity_spin)
 
         self.reason_edit = QLineEdit()
         self.reason_edit.setPlaceholderText("np. nieprawidłowy zgrzew, rysa, wymiar")
-        form.addRow("Przyczyna:", self.reason_edit)
+        form.addRow("6. Przyczyna:", self.reason_edit)
 
         self.note_edit = QLineEdit()
         self.note_edit.setPlaceholderText("Opcjonalna uwaga")
-        form.addRow("Uwagi:", self.note_edit)
+        form.addRow("7. Uwagi:", self.note_edit)
 
         self.capacity_label = QLabel()
         self.capacity_label.setObjectName("hint")
@@ -1430,6 +1431,14 @@ class QualityReportDialog(QDialog):
 
         root.addWidget(form_frame)
 
+        instruction = QLabel(
+            "Dla POPRAWKI wybierasz wcześniejszy etap, na którym element ma zostać naprawiony. "
+            "Przykład testowy: ZL-740 → Zgrzewarki → POPRAWKA → Giętarki."
+        )
+        instruction.setObjectName("hint")
+        instruction.setWordWrap(True)
+        root.addWidget(instruction)
+
         footer = QHBoxLayout()
         footer.addStretch(1)
 
@@ -1437,22 +1446,96 @@ class QualityReportDialog(QDialog):
         cancel.clicked.connect(self.reject)
         footer.addWidget(cancel)
 
-        save = QPushButton("Zapisz zgłoszenie")
-        save.setObjectName("primary")
-        save.clicked.connect(self._save)
-        footer.addWidget(save)
+        self.save_button = QPushButton("Zapisz zgłoszenie")
+        self.save_button.setObjectName("primary")
+        self.save_button.clicked.connect(self._save)
+        footer.addWidget(self.save_button)
         root.addLayout(footer)
 
-        self.order_combo.currentTextChanged.connect(self._refresh_context)
-        self.department_combo.currentTextChanged.connect(self._refresh_context)
-        self.kind_combo.currentTextChanged.connect(self._refresh_context)
+        self._refresh_departments_for_order()
+        if department:
+            self.department_combo.setCurrentText(department)
+            self.department_combo.setEnabled(False)
+
+        self.order_combo.currentTextChanged.connect(self._on_order_changed)
+        self.department_combo.currentTextChanged.connect(self._on_department_changed)
+        self.kind_combo.currentTextChanged.connect(self._on_kind_changed)
+        self.rework_target_combo.currentTextChanged.connect(
+            self._on_rework_target_changed
+        )
+
         self._refresh_context()
+        mark_update_check("quality:dialog_open")
 
     def _context(self) -> tuple[str, str]:
         return (
             self.order_combo.currentText().strip(),
             self.department_combo.currentText().strip(),
         )
+
+    def _refresh_departments_for_order(self) -> None:
+        code = self.order_combo.currentText().strip()
+        current = self.department_combo.currentText().strip()
+        departments: list[str] = []
+
+        if code:
+            for row in self.store.get_order_stage_progress(code):
+                name = str(row.get("department", "")).strip()
+                if name and name not in departments:
+                    departments.append(name)
+
+        self.department_combo.blockSignals(True)
+        self.department_combo.clear()
+        self.department_combo.addItems(departments)
+
+        preferred = self.fixed_department or current
+        if preferred in departments:
+            self.department_combo.setCurrentText(preferred)
+        self.department_combo.blockSignals(False)
+
+    def _on_order_changed(self, code: str) -> None:
+        self._refresh_departments_for_order()
+        self._refresh_context()
+        if code.strip():
+            mark_update_check("quality:order_selected")
+
+    def _on_department_changed(self, department: str) -> None:
+        self._refresh_context()
+        if department.strip():
+            mark_update_check("quality:department_selected")
+
+    def _on_kind_changed(self, kind: str) -> None:
+        self._refresh_context()
+        if kind.strip().upper() == "POPRAWKA":
+            mark_update_check("quality:kind_rework")
+
+    def _on_rework_target_changed(self, target: str) -> None:
+        self._refresh_rework_help()
+        if target.strip() and self.kind_combo.currentText() == "POPRAWKA":
+            mark_update_check("quality:target_selected")
+
+    def _refresh_rework_help(self) -> None:
+        code, department = self._context()
+        if self.kind_combo.currentText() != "POPRAWKA":
+            self.rework_help_label.clear()
+            return
+
+        target = self.rework_target_combo.currentText().strip()
+        if target:
+            self.rework_help_label.setObjectName("checkOk")
+            self.rework_help_label.setText(
+                f"Element wróci: {department} → {target} → naprawa → kontrola → "
+                f"ponowne dopuszczenie do {department}."
+            )
+        else:
+            self.rework_help_label.setObjectName("warningText")
+            self.rework_help_label.setText(
+                "Brak wcześniejszego etapu do wyboru. Wybierz późniejszy dział procesu. "
+                "Do testu wybierz ZL-740 i dział Zgrzewarki — wtedy pojawią się m.in. "
+                "Giętarki i Laser."
+            )
+        self.rework_help_label.style().unpolish(self.rework_help_label)
+        self.rework_help_label.style().polish(self.rework_help_label)
 
     def _refresh_context(self) -> None:
         code, department = self._context()
@@ -1461,11 +1544,14 @@ class QualityReportDialog(QDialog):
         is_rework = kind == "POPRAWKA"
         self.rework_target_label.setVisible(is_rework)
         self.rework_target_combo.setVisible(is_rework)
+        self.rework_help_label.setVisible(is_rework)
 
         if not code or not department:
             self.capacity_label.setText("—")
             self.session_label.setText("—")
             self.rework_target_combo.clear()
+            self.save_button.setEnabled(False)
+            self._refresh_rework_help()
             return
 
         try:
@@ -1482,8 +1568,10 @@ class QualityReportDialog(QDialog):
         self.quantity_spin.setEnabled(available > 0)
 
         self.rework_target_combo.blockSignals(True)
-        current_target = self.rework_target_combo.currentText()
+        current_target = self.rework_target_combo.currentText().strip()
         self.rework_target_combo.clear()
+        targets: list[str] = []
+
         if is_rework:
             targets = self.store.get_rework_target_departments(
                 code,
@@ -1492,6 +1580,8 @@ class QualityReportDialog(QDialog):
             self.rework_target_combo.addItems(targets)
             if current_target in targets:
                 self.rework_target_combo.setCurrentText(current_target)
+
+        self.rework_target_combo.setEnabled(bool(targets))
         self.rework_target_combo.blockSignals(False)
 
         session = self.store.get_department_session(code, department)
@@ -1502,6 +1592,12 @@ class QualityReportDialog(QDialog):
         else:
             self.session_label.setText("brak otwartej sesji")
 
+        self.save_button.setEnabled(
+            available > 0
+            and (not is_rework or bool(self.rework_target_combo.currentText().strip()))
+        )
+        self._refresh_rework_help()
+
     def _save(self) -> None:
         code, department = self._context()
         if not code or not department:
@@ -1509,6 +1605,18 @@ class QualityReportDialog(QDialog):
                 self,
                 "Zgłoszenie jakości",
                 "Wybierz ZL i dział.",
+            )
+            return
+
+        if (
+            self.kind_combo.currentText() == "POPRAWKA"
+            and not self.rework_target_combo.currentText().strip()
+        ):
+            QMessageBox.warning(
+                self,
+                "Brak etapu cofnięcia",
+                "Dla POPRAWKI musisz wybrać wcześniejszy etap.\n\n"
+                "Do testu: ZL-740 → Zgrzewarki → POPRAWKA → Giętarki.",
             )
             return
 
