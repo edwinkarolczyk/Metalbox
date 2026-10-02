@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Iterator
 
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 DEFAULT_ROUTE = ("Laser", "Giętarki", "Zgrzewarki", "Malarnia", "Pakownia")
 
 
@@ -152,6 +152,30 @@ class MetalboxStore:
 
                 CREATE INDEX IF NOT EXISTS idx_quality_department
                     ON quality_events(department, kind, occurred_at);
+
+                CREATE TABLE IF NOT EXISTS rework_jobs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+                    order_item_id INTEGER NOT NULL REFERENCES order_items(id) ON DELETE CASCADE,
+                    source_operation_id INTEGER NOT NULL REFERENCES operation_progress(id) ON DELETE CASCADE,
+                    target_operation_id INTEGER NOT NULL REFERENCES operation_progress(id) ON DELETE CASCADE,
+                    source_department TEXT NOT NULL,
+                    target_department TEXT NOT NULL,
+                    quantity INTEGER NOT NULL CHECK(quantity > 0),
+                    status TEXT NOT NULL DEFAULT 'DO_NAPRAWY',
+                    reason TEXT NOT NULL DEFAULT '',
+                    note TEXT NOT NULL DEFAULT '',
+                    session_id INTEGER REFERENCES production_sessions(id) ON DELETE SET NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    actor TEXT NOT NULL DEFAULT 'system'
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_rework_order
+                    ON rework_jobs(order_id, status, updated_at);
+
+                CREATE INDEX IF NOT EXISTS idx_rework_target
+                    ON rework_jobs(target_department, status, updated_at);
                 """
             )
 
@@ -1607,6 +1631,7 @@ class MetalboxStore:
         *,
         actor: str = "development-user",
         session_id: int | None = None,
+        rework_target_department: str | None = None,
     ) -> dict:
         quantity = int(quantity)
         if quantity <= 0:
@@ -1630,6 +1655,31 @@ class MetalboxStore:
 
             if not rows:
                 raise ValueError(f"Brak operacji {department} dla {code}.")
+
+            target_operations: dict[int, int] = {}
+            if kind == "POPRAWKA":
+                for row in rows:
+                    target = db.execute(
+                        """
+                        SELECT id
+                        FROM operation_progress
+                        WHERE order_item_id = ?
+                          AND department = ?
+                          AND sequence_no < ?
+                        LIMIT 1
+                        """,
+                        (
+                            int(row["order_item_id"]),
+                            rework_target_department,
+                            int(row["sequence_no"]),
+                        ),
+                    ).fetchone()
+                    if target is None:
+                        raise ValueError(
+                            f"Etap {rework_target_department} nie jest wcześniejszym "
+                            f"etapem dla {department}."
+                        )
+                    target_operations[int(row["id"])] = int(target["id"])
 
             available_total = sum(
                 self._row_available_to_process(row)
@@ -1738,6 +1788,11 @@ class MetalboxStore:
         if not reason:
             raise ValueError("Podaj przyczynę zgłoszenia jakości.")
 
+        if kind == "POPRAWKA":
+            rework_target_department = str(rework_target_department or "").strip()
+            if not rework_target_department:
+                raise ValueError("Wybierz wcześniejszy etap, do którego ma wrócić poprawka.")
+
         now = datetime.now(timezone.utc).isoformat()
         with self._connect() as db:
             order = db.execute(
@@ -1782,6 +1837,7 @@ class MetalboxStore:
                     continue
 
                 add = min(left, available)
+                source_operation_id = int(row["id"])
                 db.execute(
                     f"""
                     UPDATE operation_progress
@@ -1793,8 +1849,47 @@ class MetalboxStore:
                         updated_at = ?
                     WHERE id = ?
                     """,
-                    (add, now, int(row["id"])),
+                    (add, now, source_operation_id),
                 )
+
+                if kind == "POPRAWKA":
+                    db.execute(
+                        """
+                        INSERT INTO rework_jobs(
+                            order_id,
+                            order_item_id,
+                            source_operation_id,
+                            target_operation_id,
+                            source_department,
+                            target_department,
+                            quantity,
+                            status,
+                            reason,
+                            note,
+                            session_id,
+                            created_at,
+                            updated_at,
+                            actor
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?, 'DO_NAPRAWY', ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            order_id,
+                            int(row["order_item_id"]),
+                            source_operation_id,
+                            target_operations[source_operation_id],
+                            department,
+                            rework_target_department,
+                            add,
+                            reason,
+                            note.strip(),
+                            session_id,
+                            now,
+                            now,
+                            actor,
+                        ),
+                    )
+
                 left -= add
                 touched += 1
 
@@ -1834,6 +1929,7 @@ class MetalboxStore:
                     "reason": reason,
                     "note": note.strip(),
                     "session_id": session_id,
+                    "rework_target_department": rework_target_department,
                     "rows": touched,
                 },
             )
@@ -1842,7 +1938,239 @@ class MetalboxStore:
             "kind": kind,
             "quantity": quantity,
             "remaining_capacity": max(0, available_total - quantity),
+            "rework_target_department": rework_target_department,
         }
+
+    def get_rework_target_departments(
+        self,
+        code: str,
+        department: str,
+    ) -> list[str]:
+        with self._connect() as db:
+            rows = db.execute(
+                """
+                SELECT DISTINCT
+                    source.sequence_no AS source_sequence,
+                    target.department AS target_department,
+                    target.sequence_no AS target_sequence
+                FROM operation_progress source
+                JOIN order_items oi ON oi.id = source.order_item_id
+                JOIN orders o ON o.id = oi.order_id
+                JOIN operation_progress target
+                    ON target.order_item_id = source.order_item_id
+                   AND target.sequence_no < source.sequence_no
+                WHERE o.code = ?
+                  AND source.department = ?
+                ORDER BY target.sequence_no DESC
+                """,
+                (code, department),
+            ).fetchall()
+
+        seen: set[str] = set()
+        result: list[str] = []
+        for row in rows:
+            name = str(row["target_department"])
+            if name not in seen:
+                seen.add(name)
+                result.append(name)
+        return result
+
+    def list_rework_jobs(
+        self,
+        *,
+        code: str | None = None,
+        status: str | None = None,
+        limit: int = 500,
+    ) -> list[dict]:
+        where: list[str] = []
+        params: list[object] = []
+
+        if code:
+            where.append("o.code = ?")
+            params.append(code)
+        if status:
+            where.append("r.status = ?")
+            params.append(status)
+
+        where_sql = (" WHERE " + " AND ".join(where)) if where else ""
+        params.append(max(1, min(int(limit), 2000)))
+
+        with self._connect() as db:
+            rows = db.execute(
+                f"""
+                SELECT
+                    r.id,
+                    o.code,
+                    oi.symbol,
+                    oi.name,
+                    r.source_department,
+                    r.target_department,
+                    r.quantity,
+                    r.status,
+                    r.reason,
+                    r.note,
+                    r.session_id,
+                    r.created_at,
+                    r.updated_at,
+                    r.actor
+                FROM rework_jobs r
+                JOIN orders o ON o.id = r.order_id
+                JOIN order_items oi ON oi.id = r.order_item_id
+                {where_sql}
+                ORDER BY
+                    CASE r.status
+                        WHEN 'DO_NAPRAWY' THEN 0
+                        WHEN 'W_NAPRAWIE' THEN 1
+                        WHEN 'DO_KONTROLI' THEN 2
+                        ELSE 3
+                    END,
+                    r.id DESC
+                LIMIT ?
+                """,
+                params,
+            ).fetchall()
+
+        return [dict(row) for row in rows]
+
+    def transition_rework_job(
+        self,
+        job_id: int,
+        action: str,
+        *,
+        actor: str = "development-user",
+    ) -> dict:
+        action = action.strip().upper()
+        transitions = {
+            "START": ("DO_NAPRAWY", "W_NAPRAWIE"),
+            "NAPRAWIONE": ("W_NAPRAWIE", "DO_KONTROLI"),
+            "AKCEPTUJ": ("DO_KONTROLI", "ZAMKNIĘTA"),
+        }
+        if action not in {*transitions.keys(), "ZŁOM", "ZLOM"}:
+            raise ValueError("Nieprawidłowa akcja poprawki.")
+
+        now = datetime.now(timezone.utc).isoformat()
+        with self._connect() as db:
+            row = db.execute(
+                """
+                SELECT
+                    r.*,
+                    o.code
+                FROM rework_jobs r
+                JOIN orders o ON o.id = r.order_id
+                WHERE r.id = ?
+                """,
+                (int(job_id),),
+            ).fetchone()
+            if row is None:
+                raise ValueError("Nie znaleziono poprawki.")
+
+            current = str(row["status"])
+            quantity = int(row["quantity"])
+
+            if action in {"ZŁOM", "ZLOM"}:
+                if current not in {"DO_NAPRAWY", "W_NAPRAWIE", "DO_KONTROLI"}:
+                    raise ValueError("Tej poprawki nie można już zezłomować.")
+
+                source = db.execute(
+                    """
+                    SELECT rework_qty, scrap_qty
+                    FROM operation_progress
+                    WHERE id = ?
+                    """,
+                    (int(row["source_operation_id"]),),
+                ).fetchone()
+                if source is None or int(source["rework_qty"]) < quantity:
+                    raise RuntimeError("Niespójna ilość poprawki w operacji źródłowej.")
+
+                db.execute(
+                    """
+                    UPDATE operation_progress
+                    SET
+                        rework_qty = rework_qty - ?,
+                        scrap_qty = scrap_qty + ?,
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        quantity,
+                        quantity,
+                        now,
+                        int(row["source_operation_id"]),
+                    ),
+                )
+                new_status = "ZŁOM"
+            else:
+                expected, new_status = transitions[action]
+                if current != expected:
+                    raise ValueError(
+                        f"Akcja {action} wymaga statusu {expected}, "
+                        f"a poprawka ma status {current}."
+                    )
+
+                if action == "AKCEPTUJ":
+                    source = db.execute(
+                        """
+                        SELECT rework_qty
+                        FROM operation_progress
+                        WHERE id = ?
+                        """,
+                        (int(row["source_operation_id"]),),
+                    ).fetchone()
+                    if source is None or int(source["rework_qty"]) < quantity:
+                        raise RuntimeError("Niespójna ilość poprawki w operacji źródłowej.")
+
+                    db.execute(
+                        """
+                        UPDATE operation_progress
+                        SET
+                            rework_qty = rework_qty - ?,
+                            status = CASE
+                                WHEN good_qty >= planned_qty THEN 'GOTOWE'
+                                ELSE 'AKTYWNE'
+                            END,
+                            updated_at = ?
+                        WHERE id = ?
+                        """,
+                        (
+                            quantity,
+                            now,
+                            int(row["source_operation_id"]),
+                        ),
+                    )
+
+            db.execute(
+                """
+                UPDATE rework_jobs
+                SET status = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (new_status, now, int(job_id)),
+            )
+
+            self._recalculate_order_percentages(db, int(row["order_id"]))
+
+            self._audit_in_connection(
+                db,
+                actor=actor,
+                action="rework_status_changed",
+                entity_type="order",
+                entity_id=str(row["code"]),
+                payload={
+                    "rework_id": int(job_id),
+                    "action": action,
+                    "from": current,
+                    "to": new_status,
+                    "quantity": quantity,
+                    "source_department": row["source_department"],
+                    "target_department": row["target_department"],
+                },
+            )
+
+        jobs = self.list_rework_jobs(code=str(row["code"]), limit=1000)
+        updated = next((job for job in jobs if int(job["id"]) == int(job_id)), None)
+        if updated is None:
+            raise RuntimeError("Nie można odczytać poprawki po zmianie statusu.")
+        return updated
 
     def list_quality_events(
         self,
