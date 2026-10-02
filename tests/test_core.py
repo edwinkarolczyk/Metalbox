@@ -61,6 +61,44 @@ class MetalboxStoreTests(unittest.TestCase):
         self.assertIn("order_items", tables)
         self.assertIn("audit_events", tables)
 
+    def test_migrates_v7_session_workers_employee_id(self) -> None:
+        legacy_path = Path(self.temp_dir.name) / "legacy-v7.sqlite3"
+        db = sqlite3.connect(legacy_path)
+        try:
+            db.executescript(
+                """
+                CREATE TABLE production_sessions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT
+                );
+
+                CREATE TABLE session_workers (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id INTEGER NOT NULL,
+                    worker_name TEXT NOT NULL,
+                    joined_at TEXT NOT NULL,
+                    left_at TEXT
+                );
+
+                PRAGMA user_version = 7;
+                """
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        migrated = MetalboxStore(legacy_path)
+        with migrated._connect() as db2:
+            columns = {
+                str(row["name"])
+                for row in db2.execute(
+                    "PRAGMA table_info(session_workers)"
+                ).fetchall()
+            }
+            version = int(db2.execute("PRAGMA user_version").fetchone()[0])
+
+        self.assertIn("employee_id", columns)
+        self.assertEqual(version, SCHEMA_VERSION)
+
     def test_seed_and_search(self) -> None:
         orders = self.store.list_orders()
         self.assertEqual(len(orders), 4)
