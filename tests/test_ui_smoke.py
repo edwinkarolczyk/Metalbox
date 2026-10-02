@@ -98,6 +98,64 @@ class UiSmokeTest(unittest.TestCase):
             self.assertTrue(dialog.quantity_spin.isEnabled())
             dialog.close()
 
+    def test_update_panel_overlay_does_not_change_main_layout(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            original = metalbox_app.DEV_UPDATE_STATE_FILE
+            try:
+                metalbox_app.DEV_UPDATE_STATE_FILE = Path(temp) / "update_state.json"
+                metalbox_app.save_dev_update_state(
+                    {
+                        "schema": 2,
+                        "status": "updated",
+                        "old_version": "0.1.13",
+                        "new_version": metalbox_app.APP_VERSION,
+                        "title": "Test overlay",
+                        "description": "Panel nie może zmieniać layoutu.",
+                        "ready_for_next": False,
+                        "changes": [
+                            {
+                                "id": "overlay",
+                                "text": "Panel nie zmienia layoutu",
+                                "trigger": "page:orders",
+                                "checked": False,
+                                "checked_at": None,
+                                "note": "",
+                                "problem": False,
+                            }
+                        ],
+                    }
+                )
+
+                db_path = Path(temp) / "overlay.sqlite3"
+                store = MetalboxStore(db_path)
+                store.seed_development_data()
+                store.ensure_development_progress_seeded()
+
+                config = metalbox_app.ClientConfig(
+                    server_ip="127.0.0.1",
+                    station_name="TEST — Development",
+                    inactivity_seconds=90,
+                    configured=True,
+                    test_mode=True,
+                )
+
+                window = metalbox_app.MainWindow(config, store)
+                window.resize(1400, 850)
+                window.show()
+                self.qt_app.processEvents()
+
+                before = window.stack.geometry()
+                window._setup_update_test_panel()
+                self.qt_app.processEvents()
+                after = window.stack.geometry()
+
+                self.assertEqual(before, after)
+                self.assertIs(window.update_test_panel.parent(), window)
+                self.assertTrue(window.update_test_panel.isVisible())
+                window.close()
+            finally:
+                metalbox_app.DEV_UPDATE_STATE_FILE = original
+
     def test_update_checklist_panel_constructs_and_persists(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             original = metalbox_app.DEV_UPDATE_STATE_FILE
