@@ -48,7 +48,7 @@ from PySide6.QtWidgets import (
 )
 
 APP_NAME = "Metalbox"
-APP_VERSION = "0.1.8.1"
+APP_VERSION = "0.1.9"
 LOCAL_DATA_ROOT = Path(
     os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
 ) / "Metalbox"
@@ -754,6 +754,8 @@ class OrderHistoryDialog(QDialog):
             "order_opened": "Otwarto zlecenie",
             "operation_status_changed": "Zmieniono status operacji",
             "good_quantity_added": "Dodano dobrą ilość",
+            "order_created": "Utworzono zlecenie",
+            "order_updated": "Zaktualizowano zlecenie",
         }
 
         for event in events:
@@ -1437,6 +1439,276 @@ class DepartmentPage(PageBase):
             QMessageBox.warning(self, "Nie można dodać ilości", str(exc))
 
 
+class OrderEditorDialog(QDialog):
+    def __init__(
+        self,
+        store: MetalboxStore,
+        *,
+        order_code: str | None = None,
+        parent=None,
+    ):
+        super().__init__(parent)
+        self.store = store
+        self.original_code = order_code
+        self.saved_code: str | None = None
+        self.item_rows: list[dict] = []
+        self.order = self.store.get_order(order_code) if order_code else None
+        self.structure_locked = bool(
+            order_code and self.store.order_has_production_activity(order_code)
+        )
+
+        self.setWindowTitle(
+            f"Edytuj {order_code}" if order_code else "Nowe zlecenie"
+        )
+        self.setModal(True)
+        self.setMinimumSize(sp(980), sp(700))
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(sp(20), sp(18), sp(20), sp(18))
+        root.setSpacing(sp(12))
+
+        root.addWidget(
+            section_heading(
+                "Edycja zlecenia" if order_code else "Nowe zlecenie",
+                "Zapis trafia bezpośrednio do bazy Development i audytu.",
+            )
+        )
+
+        form_frame = QFrame()
+        form_frame.setObjectName("panel")
+        form = QFormLayout(form_frame)
+        form.setContentsMargins(sp(16), sp(14), sp(16), sp(14))
+        form.setHorizontalSpacing(sp(16))
+        form.setVerticalSpacing(sp(10))
+
+        self.code_edit = QLineEdit()
+        self.code_edit.setPlaceholderText("np. ZL-900")
+        form.addRow("Numer ZL:", self.code_edit)
+
+        self.client_edit = QLineEdit()
+        self.client_edit.setPlaceholderText("Klient")
+        form.addRow("Klient:", self.client_edit)
+
+        self.deadline_edit = QLineEdit()
+        self.deadline_edit.setPlaceholderText("RRRR-MM-DD")
+        form.addRow("Termin wysyłki:", self.deadline_edit)
+
+        self.priority_combo = QComboBox()
+        self.priority_combo.addItems(["NORMALNY", "WYSOKI"])
+        form.addRow("Priorytet:", self.priority_combo)
+
+        self.status_combo = QComboBox()
+        self.status_combo.addItems(
+            ["NOWE", "W TRAKCIE", "WSTRZYMANE", "ZAKOŃCZONE", "ANULOWANE"]
+        )
+        form.addRow("Status:", self.status_combo)
+
+        root.addWidget(form_frame)
+
+        if self.structure_locked:
+            warning = QLabel(
+                "Pozycje i ilości są zablokowane, ponieważ produkcja tego ZL już się rozpoczęła. "
+                "Możesz zmienić dane nagłówka, termin, priorytet lub status."
+            )
+            warning.setObjectName("warningText")
+            warning.setWordWrap(True)
+            root.addWidget(warning)
+
+        items_header = QHBoxLayout()
+        items_header.addWidget(section_heading("Pozycje zlecenia"))
+        items_header.addStretch(1)
+
+        self.add_item_button = QPushButton("+ Dodaj pozycję")
+        self.add_item_button.setObjectName("secondary")
+        self.add_item_button.setEnabled(not self.structure_locked)
+        self.add_item_button.clicked.connect(lambda: self._add_item_row())
+        items_header.addWidget(self.add_item_button)
+        root.addLayout(items_header)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        body = QWidget()
+        self.items_layout = QVBoxLayout(body)
+        self.items_layout.setContentsMargins(0, 0, 0, 0)
+        self.items_layout.setSpacing(sp(8))
+        self.items_layout.addStretch(1)
+        scroll.setWidget(body)
+        root.addWidget(scroll, 1)
+
+        footer = QHBoxLayout()
+        footer.addStretch(1)
+
+        cancel = QPushButton("Anuluj")
+        cancel.clicked.connect(self.reject)
+        footer.addWidget(cancel)
+
+        save = QPushButton("Zapisz zlecenie")
+        save.setObjectName("primary")
+        save.clicked.connect(self._save)
+        footer.addWidget(save)
+        root.addLayout(footer)
+
+        self._load_existing()
+
+    def _load_existing(self) -> None:
+        if self.order is None:
+            self.status_combo.setCurrentText("NOWE")
+            self._add_item_row()
+            return
+
+        self.code_edit.setText(str(self.order["code"]))
+        self.client_edit.setText(str(self.order["client"]))
+        self.deadline_edit.setText(str(self.order["deadline"]))
+        self.priority_combo.setCurrentText(str(self.order["priority"]))
+        self.status_combo.setCurrentText(str(self.order["status"]))
+
+        for item in self.order.get("items", []):
+            self._add_item_row(
+                symbol=str(item["symbol"]),
+                name=str(item["name"]),
+                quantity=int(item["quantity"]),
+            )
+
+    def _add_item_row(
+        self,
+        *,
+        symbol: str = "",
+        name: str = "",
+        quantity: int = 1,
+    ) -> None:
+        frame = QFrame()
+        frame.setObjectName("orderItemRow")
+        row = QHBoxLayout(frame)
+        row.setContentsMargins(sp(10), sp(8), sp(10), sp(8))
+        row.setSpacing(sp(8))
+
+        position = QLabel(str(len(self.item_rows) + 1))
+        position.setObjectName("positionBadge")
+        position.setFixedWidth(sp(28))
+        row.addWidget(position)
+
+        symbol_edit = QLineEdit()
+        symbol_edit.setPlaceholderText("Symbol")
+        symbol_edit.setText(symbol)
+        symbol_edit.setFixedWidth(sp(170))
+        symbol_edit.setEnabled(not self.structure_locked)
+        row.addWidget(symbol_edit)
+
+        name_edit = QLineEdit()
+        name_edit.setPlaceholderText("Nazwa produktu")
+        name_edit.setText(name)
+        name_edit.setMinimumWidth(sp(380))
+        name_edit.setEnabled(not self.structure_locked)
+        row.addWidget(name_edit, 1)
+
+        quantity_spin = QSpinBox()
+        quantity_spin.setRange(1, 1_000_000)
+        quantity_spin.setValue(max(1, int(quantity)))
+        quantity_spin.setSuffix(" szt.")
+        quantity_spin.setFixedWidth(sp(140))
+        quantity_spin.setEnabled(not self.structure_locked)
+        row.addWidget(quantity_spin)
+
+        remove = QPushButton("Usuń")
+        remove.setObjectName("dangerGhost")
+        remove.setEnabled(not self.structure_locked)
+        row.addWidget(remove)
+
+        data = {
+            "frame": frame,
+            "position": position,
+            "symbol": symbol_edit,
+            "name": name_edit,
+            "quantity": quantity_spin,
+            "remove": remove,
+        }
+        self.item_rows.append(data)
+
+        insert_index = max(0, self.items_layout.count() - 1)
+        self.items_layout.insertWidget(insert_index, frame)
+        remove.clicked.connect(lambda: self._remove_item_row(data))
+        self._renumber_rows()
+
+    def _remove_item_row(self, data: dict) -> None:
+        if self.structure_locked:
+            return
+        if len(self.item_rows) <= 1:
+            QMessageBox.information(
+                self,
+                "Pozycje zlecenia",
+                "Zlecenie musi mieć co najmniej jedną pozycję.",
+            )
+            return
+
+        if data in self.item_rows:
+            self.item_rows.remove(data)
+            data["frame"].deleteLater()
+            self._renumber_rows()
+
+    def _renumber_rows(self) -> None:
+        for index, row in enumerate(self.item_rows, start=1):
+            row["position"].setText(str(index))
+
+    def _collect_items(self) -> list[dict]:
+        return [
+            {
+                "symbol": row["symbol"].text(),
+                "name": row["name"].text(),
+                "quantity": row["quantity"].value(),
+            }
+            for row in self.item_rows
+        ]
+
+    def _save(self) -> None:
+        try:
+            kwargs = {
+                "code": self.code_edit.text(),
+                "client": self.client_edit.text(),
+                "deadline": self.deadline_edit.text(),
+                "priority": self.priority_combo.currentText(),
+                "status": self.status_combo.currentText(),
+                "items": self._collect_items(),
+                "actor": "development-user",
+            }
+
+            if self.original_code:
+                result = self.store.update_order(
+                    self.original_code,
+                    **kwargs,
+                )
+                mark_update_check("order:update")
+                action_text = "Zlecenie zostało zaktualizowane."
+            else:
+                result = self.store.create_order(**kwargs)
+                mark_update_check("order:create")
+                action_text = "Zlecenie zostało utworzone."
+
+            self.saved_code = str(result["code"])
+            app_log(
+                f"{action_text} {self.saved_code} • "
+                f"pozycje={len(result.get('items', []))}"
+            )
+            QMessageBox.information(
+                self,
+                "Zlecenie zapisane",
+                f"{action_text}\n\n{self.saved_code}",
+            )
+            self.accept()
+        except ValueError as exc:
+            QMessageBox.warning(self, "Nie można zapisać ZL", str(exc))
+        except Exception as exc:
+            app_log(
+                f"Błąd zapisu ZL: {type(exc).__name__}: {exc}",
+                "ERROR",
+            )
+            QMessageBox.critical(
+                self,
+                "Błąd zapisu ZL",
+                f"{type(exc).__name__}: {exc}",
+            )
+
+
 class OrdersPage(PageBase):
     def __init__(
         self,
@@ -1478,9 +1750,14 @@ class OrdersPage(PageBase):
         refresh.clicked.connect(self._reload)
         controls.addWidget(refresh)
 
+        edit_order = QPushButton("Edytuj zaznaczone")
+        edit_order.setObjectName("secondary")
+        edit_order.clicked.connect(self._edit_selected)
+        controls.addWidget(edit_order)
+
         new_order = QPushButton("Nowe zlecenie")
         new_order.setObjectName("primary")
-        new_order.clicked.connect(lambda: mock_message(self, "Nowe zlecenie"))
+        new_order.clicked.connect(self._new_order)
         controls.addWidget(new_order)
         self.root.addLayout(controls)
 
@@ -1500,6 +1777,37 @@ class OrdersPage(PageBase):
 
         self._refresh_filter_buttons()
         self._reload()
+
+    def refresh_data(self) -> None:
+        self._reload()
+
+    def _new_order(self) -> None:
+        dialog = OrderEditorDialog(self.store, parent=self)
+        if dialog.exec() == QDialog.Accepted:
+            self._reload()
+            if dialog.saved_code:
+                self.open_order_callback(dialog.saved_code)
+
+    def _edit_selected(self) -> None:
+        row = self.table.currentRow()
+        if not (0 <= row < len(self.visible_rows)):
+            QMessageBox.information(
+                self,
+                "Edytuj zlecenie",
+                "Najpierw zaznacz zlecenie na liście.",
+            )
+            return
+
+        code = str(self.visible_rows[row]["code"])
+        dialog = OrderEditorDialog(
+            self.store,
+            order_code=code,
+            parent=self,
+        )
+        if dialog.exec() == QDialog.Accepted:
+            self._reload()
+            if dialog.saved_code:
+                self.open_order_callback(dialog.saved_code)
 
     def _set_filter(self, filter_name: str) -> None:
         self.active_filter = filter_name
@@ -3168,6 +3476,26 @@ QFrame#diagnosticRow {
     background: #101315;
     border: 1px solid #252a27;
     border-radius: 6px;
+}
+QFrame#orderItemRow {
+    background: #111416;
+    border: 1px solid #2a302c;
+    border-radius: 8px;
+}
+QLabel#positionBadge {
+    background: #173c28;
+    color: #72e59a;
+    border-radius: 6px;
+    padding: 5px;
+    font-weight: 900;
+}
+QLabel#warningText {
+    background: #1d1910;
+    color: #e2bd68;
+    border: 1px solid #6c572d;
+    border-radius: 7px;
+    padding: 10px;
+    font-weight: 750;
 }
 QLabel#diagnosticLabel {
     color: #dfe4e0;
