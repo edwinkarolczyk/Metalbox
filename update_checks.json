@@ -1,68 +1,13 @@
 {
   "schema": 1,
-  "version": "0.1.18",
-  "title": "Kreator i edycja ZL per pozycja",
-  "description": "Sprawdź, że edycja ZL zachowuje tożsamość pozycji, a blokady dotyczą tylko pozycji z historią produkcji.",
+  "version": "0.1.18.1",
+  "title": "Hotfix zamykania raportu testów",
+  "description": "Sprawdź nowy sposób kończenia checklisty: przyciski techniczne nie są już punktami testu, a kliknięcie „Gotowy na następne zmiany” kopiuje finalny raport automatycznie.",
   "checks": [
     {
-      "id": "profile-open",
-      "text": "1. Kliknij PROFIL / rolę użytkownika.",
-      "trigger": "profile:open"
-    },
-    {
-      "id": "manager-view",
-      "text": "2. Przejdź do widoku kierownika.",
-      "trigger": "view:manager"
-    },
-    {
-      "id": "orders-open",
-      "text": "3. Otwórz ZLECENIA.",
-      "trigger": "page:orders"
-    },
-    {
-      "id": "order-create",
-      "text": "4. Utwórz nowe testowe ZL z 3 pozycjami produktów i zapisz.",
-      "trigger": "order:create"
-    },
-    {
-      "id": "order-update",
-      "text": "5. Edytuj drugą pozycję: zmień nazwę lub ilość i zapisz ZL.",
-      "trigger": "order:update"
-    },
-    {
-      "id": "item-remove",
-      "text": "6. Usuń trzecią, nierozpoczętą pozycję i zapisz.",
-      "trigger": "order:item_remove"
-    },
-    {
-      "id": "item-duplicate",
-      "text": "7. Użyj „Duplikuj” na jednej pozycji i zapisz.",
-      "trigger": "order:item_duplicate"
-    },
-    {
-      "id": "start-production",
-      "text": "8. Otwórz Laser i rozpocznij produkcję pierwszej pozycji tego testowego ZL.",
-      "trigger": "production:item_session_start"
-    },
-    {
-      "id": "item-lock",
-      "text": "9. Wróć do edycji ZL. W rozpoczętej pozycji symbol, nazwa i „Usuń” mają być zablokowane, ale inne pozycje nadal edytowalne.",
-      "trigger": "order:item_lock_visible"
-    },
-    {
-      "id": "started-quantity",
-      "text": "10. Zwiększ ilość rozpoczętej pozycji i zapisz. Zmiana ma przejść bez utraty tej pozycji.",
-      "trigger": "order:started_quantity_changed"
-    },
-    {
-      "id": "copy-report",
-      "text": "11. Kliknij „Kopiuj raport”.",
-      "trigger": "update_panel:copy_report"
-    },
-    {
-      "id": "ready-next",
-      "text": "12. Jeśli wszystko jest OK, kliknij „Gotowy na następne zmiany”.",
-      "trigger": "update_panel:ready"
+      "id": "panel-flow",
+      "text": "1. Sprawdź, że w liście testów nie ma osobnych punktów „Kopiuj raport” ani „Gotowy na następne zmiany”.",
+      "trigger": "update_panel:visible"
     }
   ]
 }
