@@ -210,6 +210,76 @@ class MetalboxStoreTests(unittest.TestCase):
                 items=changed_items,
             )
 
+    def test_production_session_lifecycle(self) -> None:
+        session = self.store.start_production_session(
+            "ZL-740",
+            "Zgrzewarki",
+            ["Dawid", "Marek"],
+            actor="test-user",
+        )
+        self.assertEqual(session["status"], "AKTYWNA")
+        self.assertEqual(
+            [worker["worker_name"] for worker in session["workers"]],
+            ["Dawid", "Marek"],
+        )
+
+        paused = self.store.pause_production_session(
+            "ZL-740",
+            "Zgrzewarki",
+            actor="test-user",
+        )
+        self.assertEqual(paused["status"], "WSTRZYMANA")
+
+        resumed = self.store.resume_production_session(
+            "ZL-740",
+            "Zgrzewarki",
+            actor="test-user",
+        )
+        self.assertEqual(resumed["status"], "AKTYWNA")
+
+        result = self.store.add_department_good_qty(
+            "ZL-740",
+            "Zgrzewarki",
+            1,
+            actor="test-user",
+            session_id=int(resumed["id"]),
+        )
+        self.assertEqual(result["added"], 1)
+
+        session_id = self.store.finish_production_session(
+            "ZL-740",
+            "Zgrzewarki",
+            actor="test-user",
+        )
+        self.assertGreater(session_id, 0)
+        self.assertIsNone(
+            self.store.get_department_session("ZL-740", "Zgrzewarki")
+        )
+
+        events = self.store.list_audit_events(
+            entity_type="order",
+            entity_id="ZL-740",
+            limit=100,
+        )
+        actions = {event["action"] for event in events}
+        self.assertIn("session_started", actions)
+        self.assertIn("session_paused", actions)
+        self.assertIn("session_resumed", actions)
+        self.assertIn("session_finished", actions)
+
+    def test_cannot_start_second_open_session(self) -> None:
+        self.store.start_production_session(
+            "ZL-740",
+            "Zgrzewarki",
+            ["Dawid"],
+        )
+        with self.assertRaises(ValueError):
+            self.store.start_production_session(
+                "ZL-740",
+                "Zgrzewarki",
+                ["Marek"],
+            )
+
     def test_status_change_is_audited(self) -> None:
         self.store.set_department_order_status(
             "ZL-740",
