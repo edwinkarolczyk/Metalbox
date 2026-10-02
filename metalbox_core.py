@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Iterator
 
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 DEFAULT_ROUTE = ("Laser", "Giętarki", "Zgrzewarki", "Malarnia", "Pakownia")
 
 
@@ -137,6 +137,7 @@ class MetalboxStore:
                 CREATE TABLE IF NOT EXISTS quality_events (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+                    order_item_id INTEGER REFERENCES order_items(id) ON DELETE SET NULL,
                     department TEXT NOT NULL,
                     kind TEXT NOT NULL,
                     quantity INTEGER NOT NULL CHECK(quantity > 0),
@@ -208,6 +209,12 @@ class MetalboxStore:
                 "operation_progress",
                 "scrap_qty",
                 "INTEGER NOT NULL DEFAULT 0",
+            )
+            self._ensure_column(
+                db,
+                "quality_events",
+                "order_item_id",
+                "INTEGER REFERENCES order_items(id) ON DELETE SET NULL",
             )
 
             db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
@@ -950,7 +957,7 @@ class MetalboxStore:
 
             items = db.execute(
                 """
-                SELECT position_no, symbol, name, quantity
+                SELECT id, position_no, symbol, name, quantity
                 FROM order_items
                 WHERE order_id = ?
                 ORDER BY position_no ASC
