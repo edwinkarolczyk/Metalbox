@@ -48,7 +48,7 @@ from PySide6.QtWidgets import (
 )
 
 APP_NAME = "Metalbox"
-APP_VERSION = "0.1.14"
+APP_VERSION = "0.1.15"
 LOCAL_DATA_ROOT = Path(
     os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
 ) / "Metalbox"
@@ -63,6 +63,7 @@ DEV_ROOT = LOCAL_DATA_ROOT / "dev"
 DEV_DATA_DIR = DEV_ROOT / "data"
 DEV_DB_FILE = DEV_DATA_DIR / "metalbox-dev.sqlite3"
 DEV_UPDATE_STATE_FILE = DEV_ROOT / "update_state.json"
+DEV_VIEW_STATE_FILE = CONFIG_DIR / "dev_view.json"
 
 # Tylko na czas developmentu. Ustaw False przed wersją produkcyjną,
 # aby całkowicie ukryć przycisk szybkiego zamykania aplikacji.
@@ -1049,6 +1050,47 @@ class ClientConfig:
             ),
             encoding="utf-8",
         )
+
+
+@dataclass
+class DevViewState:
+    role: str = "KIEROWNIK"
+    department: str = "Zgrzewarki"
+
+    @classmethod
+    def load(cls) -> "DevViewState":
+        try:
+            data = json.loads(DEV_VIEW_STATE_FILE.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError):
+            return cls()
+
+        role = str(data.get("role", "KIEROWNIK")).strip().upper()
+        if role not in {"PRACOWNIK", "BRYGADZISTA", "KIEROWNIK", "ADMIN"}:
+            role = "KIEROWNIK"
+
+        department = str(data.get("department", "Zgrzewarki")).strip()
+        if department not in DEPARTMENTS:
+            department = "Zgrzewarki"
+
+        return cls(role=role, department=department)
+
+    def save(self) -> None:
+        DEV_VIEW_STATE_FILE.write_text(
+            json.dumps(
+                {
+                    "role": self.role,
+                    "department": self.department,
+                    "updated_at": datetime.now().isoformat(timespec="seconds"),
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+
+    @property
+    def management(self) -> bool:
+        return self.role in {"KIEROWNIK", "ADMIN"}
 
 
 def mock_message(parent, title: str = "Metalbox Development") -> None:
