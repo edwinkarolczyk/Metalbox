@@ -233,6 +233,12 @@ class UiSmokeTest(unittest.TestCase):
                     for i in range(dialog.rework_target_combo.count())
                 ],
             )
+
+            target_index = dialog.rework_target_combo.findData("Giętarki")
+            self.assertGreaterEqual(target_index, 0)
+            dialog.rework_target_combo.setCurrentIndex(target_index)
+            self.qt_app.processEvents()
+            self.assertTrue(dialog.save_button.isEnabled())
             dialog.close()
 
             store.report_quality_quantity(
