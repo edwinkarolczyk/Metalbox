@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
-from metalbox_core import MetalboxStore, SCHEMA_VERSION
+from metalbox_core import MetalboxStore, SCHEMA_VERSION, QUALITY_REASON_CODES
 
 from PySide6.QtCore import QEvent, Qt, QTimer
 from PySide6.QtGui import QColor
@@ -48,7 +48,7 @@ from PySide6.QtWidgets import (
 )
 
 APP_NAME = "Metalbox"
-APP_VERSION = "0.1.19.2"
+APP_VERSION = "0.1.20"
 LOCAL_DATA_ROOT = Path(
     os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
 ) / "Metalbox"
@@ -932,6 +932,18 @@ def scaled_stylesheet(css: str) -> str:
         css,
     )
 
+QUALITY_REASON_LABELS = {
+    "NIEZGODNY_WYMIAR": "Niezgodny wymiar",
+    "USZKODZENIE_POWIERZCHNI": "Uszkodzenie powierzchni / rysa",
+    "BLAD_ZGRZEWU": "Błąd zgrzewu",
+    "BLAD_SPAWANIA": "Błąd spawania",
+    "BLAD_GIECIA": "Błąd gięcia",
+    "BLAD_CIECIA": "Błąd cięcia",
+    "BLAD_MALOWANIA": "Błąd malowania",
+    "USZKODZENIE_MECHANICZNE": "Uszkodzenie mechaniczne",
+    "INNE": "Inne",
+}
+
 DEPARTMENTS = [
     "Gilotyna",
     "Laser",
@@ -1526,7 +1538,10 @@ class QualityReportDialog(QDialog):
         self.kind_combo.addItems(["BRAK", "POPRAWKA", "ZŁOM"])
         form.addRow("4. Typ:", self.kind_combo)
 
-        self.rework_target_label = QLabel("5. Cofnij do etapu:")
+        self.reporter_combo = QComboBox()
+        form.addRow("5. Zgłaszający:", self.reporter_combo)
+
+        self.rework_target_label = QLabel("6. Cofnij do etapu:")
         self.rework_target_combo = QComboBox()
         form.addRow(self.rework_target_label, self.rework_target_combo)
 
@@ -1538,15 +1553,19 @@ class QualityReportDialog(QDialog):
         self.quantity_spin = QSpinBox()
         self.quantity_spin.setRange(1, 1_000_000)
         self.quantity_spin.setSuffix(" szt.")
-        form.addRow("6. Ilość:", self.quantity_spin)
+        form.addRow("7. Ilość:", self.quantity_spin)
 
-        self.reason_edit = QLineEdit()
-        self.reason_edit.setPlaceholderText("np. nieprawidłowy zgrzew, rysa, wymiar")
-        form.addRow("7. Przyczyna:", self.reason_edit)
+        self.reason_combo = QComboBox()
+        for code in QUALITY_REASON_CODES:
+            self.reason_combo.addItem(
+                QUALITY_REASON_LABELS.get(code, code),
+                code,
+            )
+        form.addRow("8. Przyczyna:", self.reason_combo)
 
         self.note_edit = QLineEdit()
         self.note_edit.setPlaceholderText("Opcjonalna uwaga")
-        form.addRow("8. Uwagi:", self.note_edit)
+        form.addRow("9. Uwagi:", self.note_edit)
 
         self.capacity_label = QLabel()
         self.capacity_label.setObjectName("hint")
@@ -1598,7 +1617,12 @@ class QualityReportDialog(QDialog):
             self._on_rework_target_changed
         )
         self.quantity_spin.valueChanged.connect(self._on_quantity_changed)
-        self.reason_edit.editingFinished.connect(self._on_reason_finished)
+        self.reporter_combo.currentIndexChanged.connect(
+            lambda _index: self._update_save_state()
+        )
+        self.reason_combo.currentIndexChanged.connect(
+            lambda _index: mark_update_check("quality:reason_selected")
+        )
 
         self._refresh_context()
         mark_update_check("quality:dialog_open")
@@ -1611,6 +1635,15 @@ class QualityReportDialog(QDialog):
 
     def _selected_item_id(self) -> int | None:
         value = self.item_combo.currentData()
+        if value in (None, ""):
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    def _selected_reporter_id(self) -> int | None:
+        value = self.reporter_combo.currentData()
         if value in (None, ""):
             return None
         try:
@@ -1718,10 +1751,6 @@ class QualityReportDialog(QDialog):
         ):
             mark_update_check("quality:quantity_set")
 
-    def _on_reason_finished(self) -> None:
-        if self.reason_edit.text().strip():
-            mark_update_check("quality:reason_entered")
-
     def _refresh_rework_help(self) -> None:
         code, department = self._context()
         if self.kind_combo.currentText() != "POPRAWKA":
@@ -1772,6 +1801,7 @@ class QualityReportDialog(QDialog):
             bool(code)
             and bool(department)
             and item_id is not None
+            and self._selected_reporter_id() is not None
             and available > 0
             and target_ok
         )
@@ -1797,6 +1827,7 @@ class QualityReportDialog(QDialog):
         if not code or item_id is None or not department:
             self.capacity_label.setText("—")
             self.session_label.setText("—")
+            self.reporter_combo.clear()
             self.rework_target_combo.clear()
             self.save_button.setEnabled(False)
             self._refresh_rework_help()
@@ -1843,12 +1874,61 @@ class QualityReportDialog(QDialog):
             department,
             item_id,
         )
+
+        current_reporter = self._selected_reporter_id()
+        self.reporter_combo.blockSignals(True)
+        self.reporter_combo.clear()
+        self.reporter_combo.addItem("— wybierz pracownika —", "")
+        reporter_ids: set[int] = set()
+
         if session:
+            active_workers = [
+                worker
+                for worker in session.get("workers", [])
+                if not worker.get("left_at")
+            ]
+            worker_names: list[str] = []
+            for worker in active_workers:
+                worker_names.append(str(worker.get("worker_name", "—")))
+                employee_id = worker.get("employee_id")
+                if employee_id is None:
+                    continue
+                employee_id = int(employee_id)
+                if employee_id in reporter_ids:
+                    continue
+                reporter_ids.add(employee_id)
+                self.reporter_combo.addItem(
+                    str(worker.get("worker_name", "—")),
+                    employee_id,
+                )
             self.session_label.setText(
-                f"#{session['id']} • {session['status']}"
+                f"#{session['id']} • {session['status']} • obsada: "
+                + (", ".join(worker_names) if worker_names else "brak aktywnej obsady")
             )
         else:
-            self.session_label.setText("brak otwartej sesji")
+            employees = self.store.list_employees(active_only=True)
+            for employee in employees:
+                employee_id = int(employee["id"])
+                if employee_id in reporter_ids:
+                    continue
+                reporter_ids.add(employee_id)
+                label = str(employee["name"])
+                employee_department = str(employee.get("department", "")).strip()
+                if employee_department:
+                    label += f" • {employee_department}"
+                self.reporter_combo.addItem(label, employee_id)
+            self.session_label.setText(
+                "brak otwartej sesji — zgłaszającego wybierz z aktywnych profili"
+            )
+
+        if current_reporter is not None:
+            index = self.reporter_combo.findData(current_reporter)
+            if index >= 0:
+                self.reporter_combo.setCurrentIndex(index)
+        if self.reporter_combo.currentIndex() == 0 and self.reporter_combo.count() == 2:
+            self.reporter_combo.setCurrentIndex(1)
+        self.reporter_combo.setEnabled(self.reporter_combo.count() > 1)
+        self.reporter_combo.blockSignals(False)
 
         self._update_save_state()
         self._refresh_rework_help()
@@ -1889,9 +1969,9 @@ class QualityReportDialog(QDialog):
                 department,
                 self.kind_combo.currentText(),
                 self.quantity_spin.value(),
-                reason=self.reason_edit.text(),
+                reason=self.reason_combo.currentText(),
                 note=self.note_edit.text(),
-                actor="development-user",
+                actor=self.reporter_combo.currentText().split(" • ", 1)[0],
                 session_id=session_id,
                 rework_target_department=(
                     str(self.rework_target_combo.currentData() or "").strip()
@@ -1899,6 +1979,7 @@ class QualityReportDialog(QDialog):
                     else None
                 ),
                 order_item_id=item_id,
+                reporter_employee_id=self._selected_reporter_id(),
             )
             self.saved = True
             mark_update_check("quality:report")
@@ -1906,7 +1987,8 @@ class QualityReportDialog(QDialog):
                 mark_update_check("rework:create")
             app_log(
                 f"Jakość: {code} • {department} • "
-                f"{result['kind']} {result['quantity']} szt. • sesja={session_id}"
+                f"{result['kind']} {result['quantity']} szt. • "
+                f"zgłosił={result['reporter']} • sesja={session_id}"
             )
             QMessageBox.information(
                 self,
@@ -4244,11 +4326,32 @@ class QualityPage(PageBase):
         if item is None:
             return
 
+        employees = self.store.list_employees(active_only=True)
+        names = [str(employee["name"]) for employee in employees]
+        if not names:
+            QMessageBox.warning(
+                self,
+                "Poprawki",
+                "Brak aktywnych profili pracowników. Nie można zapisać wykonawcy akcji.",
+            )
+            return
+
+        actor, ok = QInputDialog.getItem(
+            self,
+            "Kto wykonuje tę akcję?",
+            "Wybierz pracownika:",
+            names,
+            0,
+            False,
+        )
+        if not ok or not actor:
+            return
+
         try:
             updated = self.store.transition_rework_job(
                 int(item["id"]),
                 action,
-                actor="development-user",
+                actor=str(actor),
             )
             trigger = {
                 "START": "rework:start",
@@ -4293,7 +4396,7 @@ class QualityPage(PageBase):
                 event.get("quantity", 0),
                 event.get("reason", "—"),
                 event.get("session_id") or "—",
-                event.get("actor", "—"),
+                event.get("reporter_name") or event.get("actor", "—"),
             ]
 
             self.table.setRowHeight(row_index, sp(38))
