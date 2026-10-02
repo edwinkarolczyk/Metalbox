@@ -577,14 +577,27 @@ class MetalboxStore:
             if quantity <= 0:
                 raise ValueError(f"Pozycja {index}: ilość musi być większa od zera.")
 
-            cleaned_items.append(
-                {
-                    "position_no": index,
-                    "symbol": symbol,
-                    "name": name,
-                    "quantity": quantity,
-                }
-            )
+            cleaned = {
+                "position_no": index,
+                "symbol": symbol,
+                "name": name,
+                "quantity": quantity,
+            }
+            raw_id = item.get("id")
+            if raw_id not in (None, ""):
+                try:
+                    item_id = int(raw_id)
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(
+                        f"Pozycja {index}: nieprawidłowy identyfikator pozycji."
+                    ) from exc
+                if item_id <= 0:
+                    raise ValueError(
+                        f"Pozycja {index}: nieprawidłowy identyfikator pozycji."
+                    )
+                cleaned["id"] = item_id
+
+            cleaned_items.append(cleaned)
 
         return {
             "code": code,
@@ -720,26 +733,83 @@ class MetalboxStore:
             raise RuntimeError("Zlecenie zostało zapisane, ale nie można go ponownie odczytać.")
         return created
 
-    def order_has_production_activity(self, code: str) -> bool:
+    def get_order_item_edit_states(self, code: str) -> dict[int, dict]:
+        """Zwraca blokady edycji per pozycja bez blokowania całego ZL."""
         with self._connect() as db:
-            row = db.execute(
+            order = db.execute(
+                "SELECT id FROM orders WHERE code = ?",
+                (code.strip().upper(),),
+            ).fetchone()
+            if order is None:
+                return {}
+            order_id = int(order["id"])
+
+            legacy_session = db.execute(
                 """
                 SELECT 1
-                FROM operation_progress op
-                JOIN order_items oi ON oi.id = op.order_item_id
-                JOIN orders o ON o.id = oi.order_id
-                WHERE o.code = ?
-                  AND (
-                      op.good_qty > 0
-                      OR op.reject_qty > 0
-                      OR op.rework_qty > 0
-                      OR op.status IN ('AKTYWNE', 'WSTRZYMANE', 'GOTOWE')
-                  )
+                FROM production_sessions
+                WHERE order_id = ? AND order_item_id IS NULL
                 LIMIT 1
                 """,
-                (code,),
-            ).fetchone()
-        return row is not None
+                (order_id,),
+            ).fetchone() is not None
+
+            rows = db.execute(
+                """
+                SELECT
+                    oi.id,
+                    oi.position_no,
+                    CASE
+                        WHEN EXISTS(
+                            SELECT 1
+                            FROM production_sessions s
+                            WHERE s.order_item_id = oi.id
+                        ) THEN 1
+                        WHEN MAX(
+                            CASE
+                                WHEN op.good_qty > 0
+                                  OR op.reject_qty > 0
+                                  OR op.rework_qty > 0
+                                  OR op.scrap_qty > 0
+                                  OR op.status IN ('AKTYWNE', 'WSTRZYMANE', 'GOTOWE')
+                                THEN 1 ELSE 0
+                            END
+                        ) = 1 THEN 1
+                        ELSE 0
+                    END AS started,
+                    COALESCE(
+                        MAX(
+                            op.good_qty
+                            + op.reject_qty
+                            + op.rework_qty
+                            + op.scrap_qty
+                        ),
+                        0
+                    ) AS processed_qty
+                FROM order_items oi
+                LEFT JOIN operation_progress op
+                    ON op.order_item_id = oi.id
+                WHERE oi.order_id = ?
+                GROUP BY oi.id, oi.position_no
+                ORDER BY oi.position_no
+                """,
+                (order_id,),
+            ).fetchall()
+
+        return {
+            int(row["id"]): {
+                "started": bool(int(row["started"])) or legacy_session,
+                "processed_qty": max(0, int(row["processed_qty"])),
+                "position_no": int(row["position_no"]),
+            }
+            for row in rows
+        }
+
+    def order_has_production_activity(self, code: str) -> bool:
+        return any(
+            bool(state["started"])
+            for state in self.get_order_item_edit_states(code).values()
+        )
 
     def update_order(
         self,
@@ -766,7 +836,11 @@ class MetalboxStore:
 
         with self._connect() as db:
             order = db.execute(
-                "SELECT id FROM orders WHERE code = ?",
+                """
+                SELECT id, code, client, deadline, priority, status
+                FROM orders
+                WHERE code = ?
+                """,
                 (original_code,),
             ).fetchone()
             if order is None:
@@ -781,28 +855,11 @@ class MetalboxStore:
                 if collision is not None:
                     raise ValueError(f"Zlecenie {payload['code']} już istnieje.")
 
-            activity = db.execute(
-                """
-                SELECT 1
-                FROM operation_progress op
-                JOIN order_items oi ON oi.id = op.order_item_id
-                WHERE oi.order_id = ?
-                  AND (
-                      op.good_qty > 0
-                      OR op.reject_qty > 0
-                      OR op.rework_qty > 0
-                      OR op.status IN ('AKTYWNE', 'WSTRZYMANE', 'GOTOWE')
-                  )
-                LIMIT 1
-                """,
-                (order_id,),
-            ).fetchone() is not None
-
             existing_items = [
                 dict(row)
                 for row in db.execute(
                     """
-                    SELECT position_no, symbol, name, quantity
+                    SELECT id, position_no, symbol, name, quantity
                     FROM order_items
                     WHERE order_id = ?
                     ORDER BY position_no
@@ -810,13 +867,144 @@ class MetalboxStore:
                     (order_id,),
                 ).fetchall()
             ]
+            existing_by_id = {
+                int(item["id"]): item
+                for item in existing_items
+            }
 
-            structural_change = existing_items != payload["items"]
-            if activity and structural_change:
-                raise ValueError(
-                    "Nie można zmieniać pozycji ani ilości ZL po rozpoczęciu produkcji. "
-                    "Możesz nadal zmienić klienta, termin, priorytet lub status."
+            legacy_session = db.execute(
+                """
+                SELECT 1
+                FROM production_sessions
+                WHERE order_id = ? AND order_item_id IS NULL
+                LIMIT 1
+                """,
+                (order_id,),
+            ).fetchone() is not None
+
+            activity_rows = db.execute(
+                """
+                SELECT
+                    oi.id,
+                    CASE
+                        WHEN EXISTS(
+                            SELECT 1
+                            FROM production_sessions s
+                            WHERE s.order_item_id = oi.id
+                        ) THEN 1
+                        WHEN MAX(
+                            CASE
+                                WHEN op.good_qty > 0
+                                  OR op.reject_qty > 0
+                                  OR op.rework_qty > 0
+                                  OR op.scrap_qty > 0
+                                  OR op.status IN ('AKTYWNE', 'WSTRZYMANE', 'GOTOWE')
+                                THEN 1 ELSE 0
+                            END
+                        ) = 1 THEN 1
+                        ELSE 0
+                    END AS started,
+                    COALESCE(
+                        MAX(
+                            op.good_qty
+                            + op.reject_qty
+                            + op.rework_qty
+                            + op.scrap_qty
+                        ),
+                        0
+                    ) AS processed_qty
+                FROM order_items oi
+                LEFT JOIN operation_progress op
+                    ON op.order_item_id = oi.id
+                WHERE oi.order_id = ?
+                GROUP BY oi.id
+                """,
+                (order_id,),
+            ).fetchall()
+            edit_states = {
+                int(row["id"]): {
+                    "started": bool(int(row["started"])) or legacy_session,
+                    "processed_qty": max(0, int(row["processed_qty"])),
+                }
+                for row in activity_rows
+            }
+
+            requested_ids: list[int] = []
+            for item in payload["items"]:
+                if "id" not in item:
+                    continue
+                item_id = int(item["id"])
+                if item_id in requested_ids:
+                    raise ValueError(
+                        f"Pozycja ID {item_id} występuje w ZL więcej niż raz."
+                    )
+                if item_id not in existing_by_id:
+                    raise ValueError(
+                        f"Pozycja ID {item_id} nie należy do {original_code}."
+                    )
+                requested_ids.append(item_id)
+
+            requested_id_set = set(requested_ids)
+            removed_items = [
+                item
+                for item in existing_items
+                if int(item["id"]) not in requested_id_set
+            ]
+
+            for old in removed_items:
+                item_id = int(old["id"])
+                if edit_states.get(item_id, {}).get("started", False):
+                    raise ValueError(
+                        f"Nie można usunąć pozycji {old['position_no']} "
+                        f"({old['symbol']}), ponieważ ma historię produkcji."
+                    )
+
+            item_changes: list[dict] = []
+            for item in payload["items"]:
+                if "id" not in item:
+                    continue
+                item_id = int(item["id"])
+                old = existing_by_id[item_id]
+                state = edit_states.get(
+                    item_id,
+                    {"started": False, "processed_qty": 0},
                 )
+                if state["started"]:
+                    if (
+                        item["symbol"] != str(old["symbol"])
+                        or item["name"] != str(old["name"])
+                    ):
+                        raise ValueError(
+                            f"Pozycja {old['position_no']} ({old['symbol']}) "
+                            "ma historię produkcji. Symbolu i nazwy nie można już zmienić."
+                        )
+                    minimum = max(1, int(state["processed_qty"]))
+                    if int(item["quantity"]) < minimum:
+                        raise ValueError(
+                            f"Pozycja {old['position_no']} ({old['symbol']}): "
+                            f"ilość nie może być mniejsza niż {minimum} szt., "
+                            "bo tyle zostało już przetworzone."
+                        )
+
+            header_before = {
+                "code": str(order["code"]),
+                "client": str(order["client"]),
+                "deadline": str(order["deadline"]),
+                "priority": str(order["priority"]),
+                "status": str(order["status"]),
+            }
+            header_after = {
+                "code": payload["code"],
+                "client": payload["client"],
+                "deadline": payload["deadline"],
+                "priority": payload["priority"],
+                "status": payload["status"],
+            }
+            header_changes = {
+                field: {"old": header_before[field], "new": header_after[field]}
+                for field in header_before
+                if header_before[field] != header_after[field]
+            }
 
             db.execute(
                 """
@@ -835,13 +1023,104 @@ class MetalboxStore:
                 ),
             )
 
-            if structural_change:
+            for old in removed_items:
                 db.execute(
-                    "DELETE FROM order_items WHERE order_id = ?",
-                    (order_id,),
+                    "DELETE FROM order_items WHERE id = ?",
+                    (int(old["id"]),),
                 )
-                for item in payload["items"]:
-                    item_cursor = db.execute(
+                item_changes.append(
+                    {
+                        "action": "deleted",
+                        "order_item_id": int(old["id"]),
+                        "old": old,
+                        "new": None,
+                    }
+                )
+
+            # Zwolnij docelowe numery pozycji przed zmianą kolejności.
+            # ID pozostają niezmienne, więc sesje/jakość nadal wskazują te same rekordy.
+            db.execute(
+                """
+                UPDATE order_items
+                SET position_no = position_no + 1000000
+                WHERE order_id = ?
+                """,
+                (order_id,),
+            )
+
+            for item in payload["items"]:
+                after = {
+                    "position_no": int(item["position_no"]),
+                    "symbol": item["symbol"],
+                    "name": item["name"],
+                    "quantity": int(item["quantity"]),
+                }
+
+                if "id" in item:
+                    item_id = int(item["id"])
+                    old = existing_by_id[item_id]
+                    before = {
+                        "position_no": int(old["position_no"]),
+                        "symbol": str(old["symbol"]),
+                        "name": str(old["name"]),
+                        "quantity": int(old["quantity"]),
+                    }
+
+                    db.execute(
+                        """
+                        UPDATE order_items
+                        SET position_no = ?, symbol = ?, name = ?, quantity = ?
+                        WHERE id = ? AND order_id = ?
+                        """,
+                        (
+                            after["position_no"],
+                            after["symbol"],
+                            after["name"],
+                            after["quantity"],
+                            item_id,
+                            order_id,
+                        ),
+                    )
+
+                    if before["quantity"] != after["quantity"]:
+                        db.execute(
+                            """
+                            UPDATE operation_progress
+                            SET
+                                planned_qty = ?,
+                                status = CASE
+                                    WHEN status IN ('AKTYWNE', 'WSTRZYMANE') THEN status
+                                    WHEN good_qty >= ? THEN 'GOTOWE'
+                                    WHEN (
+                                        good_qty
+                                        + reject_qty
+                                        + rework_qty
+                                        + scrap_qty
+                                    ) > 0 THEN 'AKTYWNE'
+                                    ELSE 'OCZEKUJE'
+                                END,
+                                updated_at = ?
+                            WHERE order_item_id = ?
+                            """,
+                            (
+                                after["quantity"],
+                                after["quantity"],
+                                now,
+                                item_id,
+                            ),
+                        )
+
+                    if before != after:
+                        item_changes.append(
+                            {
+                                "action": "updated",
+                                "order_item_id": item_id,
+                                "old": before,
+                                "new": after,
+                            }
+                        )
+                else:
+                    cursor = db.execute(
                         """
                         INSERT INTO order_items(
                             order_id, position_no, symbol, name, quantity
@@ -850,18 +1129,29 @@ class MetalboxStore:
                         """,
                         (
                             order_id,
-                            item["position_no"],
-                            item["symbol"],
-                            item["name"],
-                            item["quantity"],
+                            after["position_no"],
+                            after["symbol"],
+                            after["name"],
+                            after["quantity"],
                         ),
                     )
+                    item_id = int(cursor.lastrowid)
                     self._insert_default_route(
                         db,
-                        order_item_id=int(item_cursor.lastrowid),
-                        quantity=int(item["quantity"]),
+                        order_item_id=item_id,
+                        quantity=after["quantity"],
                         now=now,
                     )
+                    item_changes.append(
+                        {
+                            "action": "added",
+                            "order_item_id": item_id,
+                            "old": None,
+                            "new": after,
+                        }
+                    )
+
+            self._recalculate_order_percentages(db, order_id)
 
             self._audit_in_connection(
                 db,
@@ -871,11 +1161,9 @@ class MetalboxStore:
                 entity_id=payload["code"],
                 payload={
                     "previous_code": original_code,
-                    "client": payload["client"],
-                    "deadline": payload["deadline"],
-                    "priority": payload["priority"],
-                    "status": payload["status"],
-                    "structural_change": structural_change,
+                    "header_changes": header_changes,
+                    "item_changes": item_changes,
+                    "structural_change": bool(item_changes),
                     "items": payload["items"],
                 },
             )
