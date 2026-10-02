@@ -19,9 +19,9 @@ import urllib.request
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
-from tkinter import Tk, messagebox
+from tkinter import Tk, messagebox, ttk
 
-DEV_RUNNER_VERSION = "1.3.3"
+DEV_RUNNER_VERSION = "1.3.4"
 REPO = "edwinkarolczyk/Metalbox"
 BRANCH = "main"
 API_BASE = f"https://api.github.com/repos/{REPO}"
@@ -41,6 +41,60 @@ LOG_FILE = LOG_DIR / "dev-runner.log"
 RUNNER_RELEASE_API = f"{API_BASE}/releases/tags/dev-runner"
 
 _DLL_DIR_HANDLES: list[object] = []
+
+
+class LauncherStatus:
+    def __init__(self) -> None:
+        self.root = Tk()
+        self.root.title("MetalboxDev")
+        self.root.geometry("460x145")
+        self.root.resizable(False, False)
+        self.root.attributes("-topmost", True)
+
+        self.title = ttk.Label(
+            self.root,
+            text="Metalbox Development",
+            font=("Segoe UI", 13, "bold"),
+        )
+        self.title.pack(pady=(16, 6))
+
+        self.label = ttk.Label(
+            self.root,
+            text="Uruchamianie MetalboxDev…",
+            font=("Segoe UI", 10),
+        )
+        self.label.pack(pady=(0, 10))
+
+        self.progress = ttk.Progressbar(
+            self.root,
+            orient="horizontal",
+            length=390,
+            mode="indeterminate",
+            maximum=100,
+        )
+        self.progress.pack()
+        self.progress.start(12)
+        self.root.update()
+
+    def set(self, text: str, progress: int | None = None) -> None:
+        try:
+            self.label.configure(text=text)
+            if progress is None:
+                self.progress.configure(mode="indeterminate")
+                self.progress.start(12)
+            else:
+                self.progress.stop()
+                self.progress.configure(mode="determinate", value=max(0, min(100, int(progress))))
+            self.root.update()
+        except Exception:
+            pass
+
+    def close(self) -> None:
+        try:
+            self.progress.stop()
+            self.root.destroy()
+        except Exception:
+            pass
 
 
 def ensure_dirs() -> None:
@@ -154,21 +208,42 @@ def _release_asset_url(release: dict, name: str) -> str:
     return ""
 
 
-def _download_to(url: str, destination: Path) -> None:
+def _download_to(
+    url: str,
+    destination: Path,
+    status: LauncherStatus | None = None,
+    *,
+    label: str = "Pobieranie aktualizacji…",
+) -> None:
     request = urllib.request.Request(
         url,
         headers={"User-Agent": f"MetalboxDev/{DEV_RUNNER_VERSION}"},
     )
     with urllib.request.urlopen(request, timeout=45) as response, destination.open("wb") as out:
-        shutil.copyfileobj(response, out, length=1024 * 1024)
+        total = int(response.headers.get("Content-Length") or 0)
+        downloaded = 0
+        while True:
+            chunk = response.read(512 * 1024)
+            if not chunk:
+                break
+            out.write(chunk)
+            downloaded += len(chunk)
+            if status is not None:
+                if total > 0:
+                    pct = int(downloaded * 100 / total)
+                    status.set(f"{label} {pct}%", pct)
+                else:
+                    status.set(label)
 
 
-def check_self_update() -> bool:
+def check_self_update(status: LauncherStatus | None = None) -> bool:
     """Aktualizuje MetalboxDev.exe i zwraca True, gdy bieżący proces ma się zakończyć."""
     if not getattr(sys, "frozen", False) or sys.platform != "win32":
         return False
 
     try:
+        if status is not None:
+            status.set("Sprawdzam aktualizację MetalboxDev…")
         release = json.loads(github_bytes(RUNNER_RELEASE_API).decode("utf-8"))
         manifest_url = _release_asset_url(release, "dev-runner.json")
         exe_url = _release_asset_url(release, "MetalboxDev.exe")
@@ -188,7 +263,12 @@ def check_self_update() -> bool:
         new_exe = TEMP_DIR / "MetalboxDev.new.exe"
         new_exe.unlink(missing_ok=True)
         log(f"Samouaktualnienie Runnera {DEV_RUNNER_VERSION} -> {remote_version}")
-        _download_to(exe_url, new_exe)
+        _download_to(
+            exe_url,
+            new_exe,
+            status,
+            label=f"Pobieram MetalboxDev {remote_version}…",
+        )
 
         actual_sha = _sha256(new_exe).lower()
         if actual_sha != expected_sha:
@@ -426,13 +506,30 @@ def save_update_state(
 
 
 
-def download_source_zip(sha: str, destination: Path) -> None:
+def download_source_zip(
+    sha: str,
+    destination: Path,
+    status: LauncherStatus | None = None,
+) -> None:
     request = urllib.request.Request(
         f"{API_BASE}/zipball/{sha}",
         headers={"User-Agent": f"MetalboxDev/{DEV_RUNNER_VERSION}"},
     )
     with urllib.request.urlopen(request, timeout=40) as response, destination.open("wb") as out:
-        shutil.copyfileobj(response, out, length=1024 * 1024)
+        total = int(response.headers.get("Content-Length") or 0)
+        downloaded = 0
+        while True:
+            chunk = response.read(512 * 1024)
+            if not chunk:
+                break
+            out.write(chunk)
+            downloaded += len(chunk)
+            if status is not None:
+                if total > 0:
+                    pct = int(downloaded * 100 / total)
+                    status.set(f"Pobieram aktualny Metalbox… {pct}%", pct)
+                else:
+                    status.set("Pobieram aktualny Metalbox…")
 
 
 def extract_source(zip_path: Path, destination_root: Path) -> Path:
@@ -453,18 +550,22 @@ def extract_source(zip_path: Path, destination_root: Path) -> Path:
     return extracted
 
 
-def sync_source() -> tuple[bool, str]:
+def sync_source(status: LauncherStatus | None = None) -> tuple[bool, str]:
     """Synchronizuje kod bez ruszania katalogu używanego przez uruchomioną wersję."""
     ensure_dirs()
     current = load_state()
     current_sha = str(current.get("commit", "")).strip()
     current_source = active_source_dir(current)
 
+    if status is not None:
+        status.set("Sprawdzam aktualizacje Metalbox…")
     try:
         remote_sha = latest_commit()
     except Exception as exc:
         if _valid_source(current_source):
             log(f"Brak aktualizacji online, uruchamiam cache: {exc}", "WARN")
+            if status is not None:
+                status.set("Brak połączenia — uruchamiam wersję lokalną…", 100)
             return False, current_sha or "offline"
         raise RuntimeError(
             "Nie można połączyć się z GitHubem i brak lokalnej kopii Metalbox."
@@ -474,6 +575,8 @@ def sync_source() -> tuple[bool, str]:
 
     if remote_sha == current_sha and _valid_source(current_source):
         log(f"Źródła aktualne: {remote_sha[:12]}")
+        if status is not None:
+            status.set("Brak aktualizacji — uruchamiam obecną wersję…", 100)
         return False, remote_sha
 
     old_version = (
@@ -490,7 +593,9 @@ def sync_source() -> tuple[bool, str]:
         zip_path.unlink(missing_ok=True)
         shutil.rmtree(staging_root, ignore_errors=True)
 
-        download_source_zip(remote_sha, zip_path)
+        download_source_zip(remote_sha, zip_path, status)
+        if status is not None:
+            status.set("Rozpakowuję i sprawdzam aktualizację…")
         extracted = extract_source(zip_path, staging_root)
 
         # Walidujemy wszystkie moduły Pythona przed ustawieniem wersji jako aktywnej.
@@ -528,6 +633,11 @@ def sync_source() -> tuple[bool, str]:
         f"{len(checks_payload.get('checks', []))} testów funkcjonalnych. "
         f"Aktywny katalog: {remote_source}"
     )
+    if status is not None:
+        status.set(
+            f"Aktualizacja {old_version} → {new_version} gotowa — uruchamiam Metalbox…",
+            100,
+        )
     return True, remote_sha
 
 
@@ -616,19 +726,27 @@ def main() -> int:
     if "--self-test-qt" in sys.argv:
         return qt_self_test()
 
+    status = LauncherStatus()
+    status.set("Uruchamianie MetalboxDev…")
     log(f"Start MetalboxDev {DEV_RUNNER_VERSION}")
 
-    if check_self_update():
+    if check_self_update(status):
+        status.set("Aktualizuję MetalboxDev.exe — za chwilę uruchomi się ponownie…", 100)
         log("Uruchomiono podmianę MetalboxDev.exe — kończę bieżący proces.")
+        status.close()
         return 0
 
     try:
-        updated, sha = sync_source()
+        updated, sha = sync_source(status)
         log(f"Uruchamiam źródła {sha[:12] if sha else '-'}")
     except Exception as exc:
+        status.close()
         log(f"Błąd synchronizacji: {exc}", "ERROR")
         show_error("Metalbox Development", str(exc))
         return 1
+
+    status.set("Uruchamiam Metalbox…", 100)
+    status.close()
 
     try:
         return run_source()
