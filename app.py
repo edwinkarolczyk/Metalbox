@@ -2024,6 +2024,8 @@ class SessionWorkersDialog(QDialog):
             mark_update_check("session:worker_join")
             self.refresh_data()
         except ValueError as exc:
+            if "jest już przypisany do otwartej sesji" in str(exc):
+                mark_update_check("session:worker_conflict")
             QMessageBox.warning(self, "Nie można dodać pracownika", str(exc))
 
     def _remove_worker(self) -> None:
@@ -2457,6 +2459,8 @@ class DepartmentPage(PageBase):
             mark_update_check("production:item_session_start")
             self.refresh_data()
         except ValueError as exc:
+            if "jest już przypisany do otwartej sesji" in str(exc):
+                mark_update_check("session:worker_conflict")
             QMessageBox.warning(self, "Nie można rozpocząć sesji", str(exc))
 
     def _pause_session(self, code: str, order_item_id: int) -> None:
