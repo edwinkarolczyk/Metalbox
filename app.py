@@ -48,7 +48,7 @@ from PySide6.QtWidgets import (
 )
 
 APP_NAME = "Metalbox"
-APP_VERSION = "0.1.16"
+APP_VERSION = "0.1.17"
 LOCAL_DATA_ROOT = Path(
     os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
 ) / "Metalbox"
@@ -2394,6 +2394,7 @@ class DepartmentPage(PageBase):
             QMessageBox.warning(self, "Nie można wznowić sesji", str(exc))
 
     def _report_quality(self, code: str, order_item_id: int) -> None:
+        mark_update_check("production:item_quality_open")
         dialog = QualityReportDialog(
             self.store,
             code=code,
@@ -2405,6 +2406,7 @@ class DepartmentPage(PageBase):
             self.refresh_data()
 
     def _manage_workers(self, code: str, order_item_id: int) -> None:
+        mark_update_check("production:item_workers_open")
         session = self.store.get_department_session(
             code,
             self.department,
