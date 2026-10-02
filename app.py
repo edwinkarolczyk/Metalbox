@@ -714,6 +714,7 @@ class UpdateChecklistPanel(QWidget):
         self.flush_notes()
         state = load_dev_update_state()
         QApplication.clipboard().setText(format_update_report_with_logs(state))
+        mark_update_check("update_panel:copy_report_logs")
         QMessageBox.information(
             self,
             "Raport i logi skopiowane",
