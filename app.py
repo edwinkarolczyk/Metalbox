@@ -1469,6 +1469,8 @@ class QualityReportDialog(QDialog):
         self.rework_target_combo.currentTextChanged.connect(
             self._on_rework_target_changed
         )
+        self.quantity_spin.valueChanged.connect(self._on_quantity_changed)
+        self.reason_edit.editingFinished.connect(self._on_reason_finished)
 
         self._refresh_context()
         mark_update_check("quality:dialog_open")
@@ -1527,6 +1529,17 @@ class QualityReportDialog(QDialog):
             and self.kind_combo.currentText() == "POPRAWKA"
         ):
             mark_update_check("quality:target_selected")
+
+    def _on_quantity_changed(self, value: int) -> None:
+        if (
+            self.kind_combo.currentText() == "POPRAWKA"
+            and int(value) > 0
+        ):
+            mark_update_check("quality:quantity_set")
+
+    def _on_reason_finished(self) -> None:
+        if self.reason_edit.text().strip():
+            mark_update_check("quality:reason_entered")
 
     def _refresh_rework_help(self) -> None:
         code, department = self._context()
