@@ -2847,6 +2847,7 @@ class OrderEditorDialog(QDialog):
             self.item_rows.remove(data)
             data["frame"].deleteLater()
             self._renumber_rows()
+            mark_update_check("order:item_remove")
 
     def _renumber_rows(self) -> None:
         for index, row in enumerate(self.item_rows, start=1):
