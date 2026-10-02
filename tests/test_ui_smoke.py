@@ -37,6 +37,25 @@ class UiSmokeTest(unittest.TestCase):
             self.assertEqual(window.windowTitle(), f"Metalbox {metalbox_app.APP_VERSION}")
             window.close()
 
+    def test_order_editor_dialog_constructs(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            db_path = Path(temp) / "metalbox-editor.sqlite3"
+            store = MetalboxStore(db_path)
+            store.seed_development_data()
+            store.ensure_development_progress_seeded()
+
+            dialog = metalbox_app.OrderEditorDialog(store)
+            self.assertEqual(len(dialog.item_rows), 1)
+            dialog.close()
+
+            edit_dialog = metalbox_app.OrderEditorDialog(
+                store,
+                order_code="ZL-740",
+            )
+            self.assertTrue(edit_dialog.structure_locked)
+            self.assertGreaterEqual(len(edit_dialog.item_rows), 1)
+            edit_dialog.close()
+
     def test_update_checklist_dialog_constructs(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             original = metalbox_app.DEV_UPDATE_STATE_FILE
