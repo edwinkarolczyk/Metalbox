@@ -103,11 +103,23 @@ class UiSmokeTest(unittest.TestCase):
             store.ensure_development_progress_seeded()
             store.ensure_development_employees_seeded()
 
-            order = store.get_order("ZL-740")
-            self.assertIsNotNone(order)
+            order = store.create_order(
+                code="ZL-UI-WORKER",
+                client="Test obsady",
+                deadline="2026-11-30",
+                priority="NORMALNY",
+                status="NOWE",
+                items=[
+                    {
+                        "symbol": "UI-W",
+                        "name": "Test pracownika",
+                        "quantity": 5,
+                    }
+                ],
+            )
             item_id = int(order["items"][0]["id"])
             store.start_production_session(
-                "ZL-740",
+                "ZL-UI-WORKER",
                 "Laser",
                 ["Dawid"],
                 order_item_id=item_id,
@@ -125,7 +137,7 @@ class UiSmokeTest(unittest.TestCase):
                 for r in range(page.table.rowCount())
             ]
             dawid_row = next(row for row in rows if row and row[0] == "Dawid")
-            self.assertTrue(any("ZL-740" in value for value in dawid_row))
+            self.assertTrue(any("ZL-UI-WORKER" in value for value in dawid_row))
             self.assertGreaterEqual(page.history_table.rowCount(), 1)
             page.close()
 
