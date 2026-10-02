@@ -107,6 +107,45 @@ class MetalboxStoreTests(unittest.TestCase):
         self.assertIn("employee_id", columns)
         self.assertEqual(version, SCHEMA_VERSION)
 
+    def test_migrates_v8_quality_reporter_employee_id(self) -> None:
+        legacy_path = Path(self.temp_dir.name) / "legacy-v8-quality.sqlite3"
+        db = sqlite3.connect(legacy_path)
+        try:
+            db.executescript(
+                """
+                CREATE TABLE quality_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    order_id INTEGER NOT NULL,
+                    order_item_id INTEGER,
+                    department TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    quantity INTEGER NOT NULL,
+                    reason TEXT NOT NULL DEFAULT '',
+                    note TEXT NOT NULL DEFAULT '',
+                    session_id INTEGER,
+                    occurred_at TEXT NOT NULL,
+                    actor TEXT NOT NULL DEFAULT 'system'
+                );
+                PRAGMA user_version = 8;
+                """
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        migrated = MetalboxStore(legacy_path)
+        with migrated._connect() as db2:
+            columns = {
+                str(row["name"])
+                for row in db2.execute(
+                    "PRAGMA table_info(quality_events)"
+                ).fetchall()
+            }
+            version = int(db2.execute("PRAGMA user_version").fetchone()[0])
+
+        self.assertIn("reporter_employee_id", columns)
+        self.assertEqual(version, SCHEMA_VERSION)
+
     def test_seed_and_search(self) -> None:
         orders = self.store.list_orders()
         self.assertEqual(len(orders), 4)
@@ -678,6 +717,108 @@ class MetalboxStoreTests(unittest.TestCase):
         )
         self.assertEqual(bound["symbol"], selected["symbol"])
         self.assertEqual(bound["name"], selected["name"])
+
+    def test_quality_reporter_is_bound_to_active_session_crew(self) -> None:
+        reporter = self.store.create_employee(
+            name="Reporter Jakości",
+            department="Zgrzewarki",
+            competency="Produkcja",
+        )
+        outsider = self.store.create_employee(
+            name="Poza Obsada",
+            department="Zgrzewarki",
+            competency="Produkcja",
+        )
+
+        order = self.store.get_order("ZL-740")
+        self.assertIsNotNone(order)
+        item = next(
+            item
+            for item in order["items"]
+            if self.store.get_item_department_capacity(
+                "ZL-740",
+                int(item["id"]),
+                "Zgrzewarki",
+            )["available_now"] > 0
+        )
+        item_id = int(item["id"])
+
+        session = self.store.start_production_session(
+            "ZL-740",
+            "Zgrzewarki",
+            ["Reporter Jakości"],
+            order_item_id=item_id,
+        )
+
+        result = self.store.report_quality_quantity(
+            "ZL-740",
+            "Zgrzewarki",
+            "BRAK",
+            1,
+            reason="Błąd zgrzewu",
+            session_id=int(session["id"]),
+            order_item_id=item_id,
+            reporter_employee_id=int(reporter["id"]),
+        )
+        self.assertEqual(result["reporter"], "Reporter Jakości")
+        self.assertEqual(
+            result["reporter_employee_id"],
+            int(reporter["id"]),
+        )
+
+        event = self.store.list_quality_events(
+            code="ZL-740",
+            department="Zgrzewarki",
+        )[0]
+        self.assertEqual(event["reporter_name"], "Reporter Jakości")
+        self.assertEqual(
+            int(event["reporter_employee_id"]),
+            int(reporter["id"]),
+        )
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "nie należy do aktualnej obsady",
+        ):
+            self.store.report_quality_quantity(
+                "ZL-740",
+                "Zgrzewarki",
+                "BRAK",
+                1,
+                reason="Błąd zgrzewu",
+                session_id=int(session["id"]),
+                order_item_id=item_id,
+                reporter_employee_id=int(outsider["id"]),
+            )
+
+    def test_quality_cannot_exceed_selected_item_capacity(self) -> None:
+        order = self.store.get_order("ZL-740")
+        self.assertIsNotNone(order)
+        item = next(
+            item
+            for item in order["items"]
+            if self.store.get_item_department_capacity(
+                "ZL-740",
+                int(item["id"]),
+                "Zgrzewarki",
+            )["available_now"] > 0
+        )
+        item_id = int(item["id"])
+        capacity = self.store.get_item_department_capacity(
+            "ZL-740",
+            item_id,
+            "Zgrzewarki",
+        )
+
+        with self.assertRaisesRegex(ValueError, "maksymalnie"):
+            self.store.report_quality_quantity(
+                "ZL-740",
+                "Zgrzewarki",
+                "ZŁOM",
+                int(capacity["available_now"]) + 1,
+                reason="Uszkodzenie mechaniczne",
+                order_item_id=item_id,
+            )
 
     def test_quality_event_reduces_available_capacity(self) -> None:
         session = self.store.start_production_session(
