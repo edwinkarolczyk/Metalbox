@@ -1237,6 +1237,7 @@ class MetalboxStore:
         worker_name: str,
         *,
         actor: str = "development-user",
+        order_item_id: int | None = None,
     ) -> dict:
         worker_name = worker_name.strip()
         if not worker_name:
@@ -1251,11 +1252,12 @@ class MetalboxStore:
                 JOIN orders o ON o.id = s.order_id
                 WHERE o.code = ?
                   AND s.department = ?
+                  AND (? IS NULL OR s.order_item_id = ?)
                   AND s.status IN ('AKTYWNA', 'WSTRZYMANA')
                 ORDER BY s.id DESC
                 LIMIT 1
                 """,
-                (code, department),
+                (code, department, order_item_id, order_item_id),
             ).fetchone()
             if session is None:
                 raise ValueError("Brak otwartej sesji.")
@@ -1293,14 +1295,16 @@ class MetalboxStore:
                 payload={
                     "session_id": session_id,
                     "department": department,
+                    "order_item_id": order_item_id,
                     "worker": worker_name,
                 },
             )
 
-        result = self.get_department_session(code, department)
+        result = self.get_department_session(code, department, order_item_id)
         if result is None:
             raise RuntimeError("Nie można odczytać sesji po zmianie obsady.")
         return result
+
 
     def remove_session_worker(
         self,
@@ -1309,6 +1313,7 @@ class MetalboxStore:
         worker_name: str,
         *,
         actor: str = "development-user",
+        order_item_id: int | None = None,
     ) -> dict:
         worker_name = worker_name.strip()
         now = datetime.now(timezone.utc).isoformat()
@@ -1321,11 +1326,12 @@ class MetalboxStore:
                 JOIN orders o ON o.id = s.order_id
                 WHERE o.code = ?
                   AND s.department = ?
+                  AND (? IS NULL OR s.order_item_id = ?)
                   AND s.status IN ('AKTYWNA', 'WSTRZYMANA')
                 ORDER BY s.id DESC
                 LIMIT 1
                 """,
-                (code, department),
+                (code, department, order_item_id, order_item_id),
             ).fetchone()
             if session is None:
                 raise ValueError("Brak otwartej sesji.")
@@ -1376,14 +1382,16 @@ class MetalboxStore:
                 payload={
                     "session_id": session_id,
                     "department": department,
+                    "order_item_id": order_item_id,
                     "worker": worker_name,
                 },
             )
 
-        result = self.get_department_session(code, department)
+        result = self.get_department_session(code, department, order_item_id)
         if result is None:
             raise RuntimeError("Nie można odczytać sesji po zmianie obsady.")
         return result
+
 
     def pause_production_session(
         self,
