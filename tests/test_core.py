@@ -405,7 +405,7 @@ class MetalboxStoreTests(unittest.TestCase):
             item_id,
             "Laser",
         )
-        self.assertEqual(int(capacity["planned_qty"]), 12)
+        self.assertEqual(int(capacity["remaining"]), 9)
 
         with self.assertRaises(ValueError):
             self.store.update_order(
