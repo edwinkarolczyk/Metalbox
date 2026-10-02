@@ -1618,7 +1618,7 @@ class QualityReportDialog(QDialog):
         )
         self.quantity_spin.valueChanged.connect(self._on_quantity_changed)
         self.reporter_combo.currentIndexChanged.connect(
-            lambda _index: self._update_save_state()
+            self._on_reporter_changed
         )
         self.reason_combo.currentIndexChanged.connect(
             lambda _index: mark_update_check("quality:reason_selected")
@@ -1743,6 +1743,11 @@ class QualityReportDialog(QDialog):
             and self.kind_combo.currentText() == "POPRAWKA"
         ):
             mark_update_check("quality:target_selected")
+
+    def _on_reporter_changed(self, _index: int) -> None:
+        self._update_save_state()
+        if self._selected_reporter_id() is not None:
+            mark_update_check("quality:reporter_selected")
 
     def _on_quantity_changed(self, value: int) -> None:
         if (
@@ -1905,6 +1910,8 @@ class QualityReportDialog(QDialog):
                 f"#{session['id']} • {session['status']} • obsada: "
                 + (", ".join(worker_names) if worker_names else "brak aktywnej obsady")
             )
+            if reporter_ids:
+                mark_update_check("quality:session_crew_visible")
         else:
             employees = self.store.list_employees(active_only=True)
             for employee in employees:
