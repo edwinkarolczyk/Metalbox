@@ -156,6 +156,51 @@ class UiSmokeTest(unittest.TestCase):
             finally:
                 metalbox_app.DEV_UPDATE_STATE_FILE = original
 
+    def test_rework_quality_ui_constructs(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            db_path = Path(temp) / "metalbox-rework-ui.sqlite3"
+            store = MetalboxStore(db_path)
+            store.seed_development_data()
+            store.ensure_development_progress_seeded()
+            session = store.start_production_session(
+                "ZL-740",
+                "Zgrzewarki",
+                ["Dawid"],
+            )
+
+            dialog = metalbox_app.QualityReportDialog(
+                store,
+                code="ZL-740",
+                department="Zgrzewarki",
+            )
+            dialog.kind_combo.setCurrentText("POPRAWKA")
+            dialog._refresh_context()
+            self.assertTrue(dialog.rework_target_combo.isVisible())
+            self.assertGreater(dialog.rework_target_combo.count(), 0)
+            self.assertIn(
+                "Giętarki",
+                [
+                    dialog.rework_target_combo.itemText(i)
+                    for i in range(dialog.rework_target_combo.count())
+                ],
+            )
+            dialog.close()
+
+            store.report_quality_quantity(
+                "ZL-740",
+                "Zgrzewarki",
+                "POPRAWKA",
+                1,
+                reason="Test UI poprawki",
+                session_id=int(session["id"]),
+                rework_target_department="Giętarki",
+            )
+
+            page = metalbox_app.QualityPage(lambda: None, store)
+            page.refresh_data()
+            self.assertGreaterEqual(page.rework_table.rowCount(), 1)
+            page.close()
+
     def test_update_checklist_panel_constructs_and_persists(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             original = metalbox_app.DEV_UPDATE_STATE_FILE
