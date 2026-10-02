@@ -1,42 +1,32 @@
 {
   "schema": 1,
-  "version": "0.1.11",
-  "title": "Obsada sesji na żywo",
-  "description": "Sprawdź dodawanie i wychodzenie pracowników podczas trwającej sesji. Punkty zaznaczają się automatycznie.",
+  "version": "0.1.12",
+  "title": "Jakość: braki, poprawki i złom",
+  "description": "Sprawdź zgłoszenia jakościowe i ich wpływ na dostępne ilości. Punkty zaznaczają się automatycznie.",
   "checks": [
     {
       "id": "department-open",
-      "text": "Wejdź do działu produkcyjnego",
+      "text": "Wejdź do działu produkcyjnego z otwartą sesją",
       "trigger": "department:open"
     },
     {
-      "id": "session-start",
-      "text": "Rozpocznij sesję z co najmniej jedną osobą",
-      "trigger": "session:start"
-    },
-    {
-      "id": "worker-join",
-      "text": "Dodaj kolejną osobę przez przycisk Obsada",
-      "trigger": "session:worker_join"
-    },
-    {
-      "id": "worker-leave",
-      "text": "Zakończ udział jednej z osób w sesji",
-      "trigger": "session:worker_leave"
+      "id": "quality-report",
+      "text": "Zgłoś BRAK, POPRAWKĘ albo ZŁOM z karty ZL",
+      "trigger": "quality:report"
     },
     {
       "id": "operation-quantity",
-      "text": "Dodaj wykonaną ilość w aktywnej sesji",
+      "text": "Dodaj dobrą ilość i sprawdź, że wadliwe sztuki nie przechodzą dalej",
       "trigger": "operation:quantity"
     },
     {
-      "id": "session-finish",
-      "text": "Zakończ sesję",
-      "trigger": "session:finish"
+      "id": "quality-page",
+      "text": "Otwórz moduł Jakość i sprawdź zapisane zdarzenie",
+      "trigger": "quality:open"
     },
     {
       "id": "order-history",
-      "text": "Sprawdź historię ZL z wejściem/wyjściem pracowników",
+      "text": "Sprawdź zdarzenie jakościowe w historii ZL",
       "trigger": "order:history"
     }
   ]
