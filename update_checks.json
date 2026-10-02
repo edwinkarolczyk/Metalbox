@@ -1,13 +1,43 @@
 {
   "schema": 1,
-  "version": "0.1.18.1",
-  "title": "Hotfix zamykania raportu testów",
-  "description": "Sprawdź nowy sposób kończenia checklisty: przyciski techniczne nie są już punktami testu, a kliknięcie „Gotowy na następne zmiany” kopiuje finalny raport automatycznie.",
+  "version": "0.1.19",
+  "title": "Pracownicy, obsada i rejestracja pracy",
+  "description": "Sprawdź profile pracowników, przypisanie do konkretnej sesji, blokadę podwójnej obsady oraz historię wejścia i wyjścia z pracy.",
   "checks": [
     {
-      "id": "panel-flow",
-      "text": "1. Sprawdź, że w liście testów nie ma osobnych punktów „Kopiuj raport” ani „Gotowy na następne zmiany”.",
-      "trigger": "update_panel:visible"
+      "id": "employees-view",
+      "text": "1. Otwórz PRACOWNICY i sprawdź listę profili oraz bieżące przypisania.",
+      "trigger": "employees:view"
+    },
+    {
+      "id": "employee-create",
+      "text": "2. Dodaj testowego pracownika i sprawdź, że pojawia się na liście.",
+      "trigger": "employee:create"
+    },
+    {
+      "id": "session-start",
+      "text": "3. Otwórz dział i rozpocznij sesję konkretnej pozycji, wybierając pracownika z listy.",
+      "trigger": "production:item_session_start"
+    },
+    {
+      "id": "worker-join",
+      "text": "4. Otwórz Obsada i dodaj drugiego pracownika z listy.",
+      "trigger": "session:worker_join"
+    },
+    {
+      "id": "worker-conflict",
+      "text": "5. Spróbuj przypisać tę samą osobę do innej otwartej sesji. Program ma zablokować konflikt.",
+      "trigger": "session:worker_conflict"
+    },
+    {
+      "id": "worker-leave",
+      "text": "6. W Obsada zakończ udział jednej osoby.",
+      "trigger": "session:worker_leave"
+    },
+    {
+      "id": "history",
+      "text": "7. Wróć do PRACOWNICY i sprawdź historię pracy: ZL, pozycja, dział, wejście, wyjście i czas.",
+      "trigger": "employees:history_visible"
     }
   ]
 }
