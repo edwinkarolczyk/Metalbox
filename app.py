@@ -48,7 +48,7 @@ from PySide6.QtWidgets import (
 )
 
 APP_NAME = "Metalbox"
-APP_VERSION = "0.1.11"
+APP_VERSION = "0.1.12"
 LOCAL_DATA_ROOT = Path(
     os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
 ) / "Metalbox"
@@ -762,6 +762,7 @@ class OrderHistoryDialog(QDialog):
             "session_finished": "Zakończono sesję",
             "session_worker_joined": "Pracownik dołączył do sesji",
             "session_worker_left": "Pracownik zakończył udział w sesji",
+            "quality_reported": "Zgłoszono zdarzenie jakościowe",
         }
 
         for event in events:
@@ -1107,6 +1108,175 @@ class PageBase(QWidget):
         # Zawartość wykorzystuje dostępną szerokość ekranu. Nie dzielimy jej
         # przez boczne stretch-e, które wcześniej zwężały widok do ok. 1/3.
         outer.addWidget(self.content, 1, Qt.AlignTop | Qt.AlignHCenter)
+
+
+class QualityReportDialog(QDialog):
+    def __init__(
+        self,
+        store: MetalboxStore,
+        *,
+        code: str | None = None,
+        department: str | None = None,
+        parent=None,
+    ):
+        super().__init__(parent)
+        self.store = store
+        self.fixed_code = code
+        self.fixed_department = department
+        self.saved = False
+
+        self.setWindowTitle("Zgłoszenie jakości")
+        self.setModal(True)
+        self.setMinimumSize(sp(700), sp(520))
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(sp(20), sp(18), sp(20), sp(18))
+        root.setSpacing(sp(12))
+        root.addWidget(
+            section_heading(
+                "Zgłoszenie jakości",
+                "Brak, poprawka lub złom nie przechodzą dalej jako dobra sztuka.",
+            )
+        )
+
+        form_frame = QFrame()
+        form_frame.setObjectName("panel")
+        form = QFormLayout(form_frame)
+        form.setContentsMargins(sp(16), sp(14), sp(16), sp(14))
+        form.setHorizontalSpacing(sp(16))
+        form.setVerticalSpacing(sp(10))
+
+        self.order_combo = QComboBox()
+        orders = self.store.list_orders()
+        self.order_combo.addItems([str(order["code"]) for order in orders])
+        if code:
+            self.order_combo.setCurrentText(code)
+            self.order_combo.setEnabled(False)
+        form.addRow("Zlecenie:", self.order_combo)
+
+        self.department_combo = QComboBox()
+        self.department_combo.addItems(list(DEPARTMENTS))
+        if department:
+            self.department_combo.setCurrentText(department)
+            self.department_combo.setEnabled(False)
+        form.addRow("Dział:", self.department_combo)
+
+        self.kind_combo = QComboBox()
+        self.kind_combo.addItems(["BRAK", "POPRAWKA", "ZŁOM"])
+        form.addRow("Typ:", self.kind_combo)
+
+        self.quantity_spin = QSpinBox()
+        self.quantity_spin.setRange(1, 1_000_000)
+        self.quantity_spin.setSuffix(" szt.")
+        form.addRow("Ilość:", self.quantity_spin)
+
+        self.reason_edit = QLineEdit()
+        self.reason_edit.setPlaceholderText("np. nieprawidłowy zgrzew, rysa, wymiar")
+        form.addRow("Przyczyna:", self.reason_edit)
+
+        self.note_edit = QLineEdit()
+        self.note_edit.setPlaceholderText("Opcjonalna uwaga")
+        form.addRow("Uwagi:", self.note_edit)
+
+        self.capacity_label = QLabel()
+        self.capacity_label.setObjectName("hint")
+        form.addRow("Dostępne:", self.capacity_label)
+
+        self.session_label = QLabel()
+        self.session_label.setObjectName("hint")
+        form.addRow("Sesja:", self.session_label)
+
+        root.addWidget(form_frame)
+
+        footer = QHBoxLayout()
+        footer.addStretch(1)
+
+        cancel = QPushButton("Anuluj")
+        cancel.clicked.connect(self.reject)
+        footer.addWidget(cancel)
+
+        save = QPushButton("Zapisz zgłoszenie")
+        save.setObjectName("primary")
+        save.clicked.connect(self._save)
+        footer.addWidget(save)
+        root.addLayout(footer)
+
+        self.order_combo.currentTextChanged.connect(self._refresh_context)
+        self.department_combo.currentTextChanged.connect(self._refresh_context)
+        self._refresh_context()
+
+    def _context(self) -> tuple[str, str]:
+        return (
+            self.order_combo.currentText().strip(),
+            self.department_combo.currentText().strip(),
+        )
+
+    def _refresh_context(self) -> None:
+        code, department = self._context()
+        if not code or not department:
+            self.capacity_label.setText("—")
+            self.session_label.setText("—")
+            return
+
+        try:
+            capacity = self.store.get_department_order_capacity(
+                code,
+                department,
+            )
+            available = int(capacity["available_now"])
+        except ValueError:
+            available = 0
+
+        self.capacity_label.setText(f"{available} szt. do rozliczenia jakościowego")
+        self.quantity_spin.setMaximum(max(1, available))
+        self.quantity_spin.setEnabled(available > 0)
+
+        session = self.store.get_department_session(code, department)
+        if session:
+            self.session_label.setText(
+                f"#{session['id']} • {session['status']}"
+            )
+        else:
+            self.session_label.setText("brak otwartej sesji")
+
+    def _save(self) -> None:
+        code, department = self._context()
+        if not code or not department:
+            QMessageBox.warning(
+                self,
+                "Zgłoszenie jakości",
+                "Wybierz ZL i dział.",
+            )
+            return
+
+        session = self.store.get_department_session(code, department)
+        session_id = int(session["id"]) if session else None
+
+        try:
+            result = self.store.report_quality_quantity(
+                code,
+                department,
+                self.kind_combo.currentText(),
+                self.quantity_spin.value(),
+                reason=self.reason_edit.text(),
+                note=self.note_edit.text(),
+                actor="development-user",
+                session_id=session_id,
+            )
+            self.saved = True
+            mark_update_check("quality:report")
+            app_log(
+                f"Jakość: {code} • {department} • "
+                f"{result['kind']} {result['quantity']} szt. • sesja={session_id}"
+            )
+            QMessageBox.information(
+                self,
+                "Jakość",
+                f"Zapisano {result['kind']}: {result['quantity']} szt.",
+            )
+            self.accept()
+        except ValueError as exc:
+            QMessageBox.warning(self, "Nie można zapisać zgłoszenia", str(exc))
 
 
 class SessionWorkersDialog(QDialog):
@@ -1485,6 +1655,7 @@ class DepartmentPage(PageBase):
             "Wstrzymaj",
             "Wznów",
             "Dodaj ilość",
+            "Jakość",
             "Obsada",
             "Zakończ sesję",
             "Problem",
@@ -1527,6 +1698,11 @@ class DepartmentPage(PageBase):
                 )
                 btn.clicked.connect(
                     lambda checked=False, z=code, r=remaining: self._add_quantity(z, r)
+                )
+            elif text == "Jakość":
+                btn.setEnabled(session is not None and available_now > 0)
+                btn.clicked.connect(
+                    lambda checked=False, z=code: self._report_quality(z)
                 )
             elif text == "Obsada":
                 btn.setEnabled(session is not None)
@@ -1668,6 +1844,16 @@ class DepartmentPage(PageBase):
             self.refresh_data()
         except ValueError as exc:
             QMessageBox.warning(self, "Nie można wznowić sesji", str(exc))
+
+    def _report_quality(self, code: str) -> None:
+        dialog = QualityReportDialog(
+            self.store,
+            code=code,
+            department=self.department,
+            parent=self,
+        )
+        if dialog.exec() == QDialog.Accepted and dialog.saved:
+            self.refresh_data()
 
     def _manage_workers(self, code: str) -> None:
         session = self.store.get_department_session(code, self.department)
@@ -2419,7 +2605,8 @@ class OrderDetailPage(PageBase):
             bar.setRange(0, max(planned, 1))
             bar.setValue(min(good, max(planned, 1)))
             bar.setFormat(
-                f"{good} / {planned} szt. • braki {rejects} • poprawki {rework} • {status}"
+                f"{good} / {planned} szt. • braki {rejects} • "
+                f"poprawki {rework} • złom {int(row.get('scrap_qty', 0))} • {status}"
             )
 
         self.store.add_audit_event(
@@ -2897,38 +3084,104 @@ class EmployeesPage(PageBase):
 
 
 class QualityPage(PageBase):
-    def __init__(self, go_home: Callable):
+    def __init__(self, go_home: Callable, store: MetalboxStore):
         super().__init__(
             "Jakość / braki / poprawki",
             go_home,
-            "Dobre sztuki idą dalej. Braki, poprawki i cofnięcia etapów zachowują pełną historię.",
+            "Zgłoszenia jakościowe z bazy Development. Tylko dobre sztuki przechodzą dalej.",
         )
+        self.store = store
+
         controls = QHBoxLayout()
-        for text in ("Nowe zgłoszenie", "Do poprawki", "Wstrzymane", "Złom", "Historia"):
-            btn = QPushButton(text)
-            if text == "Nowe zgłoszenie":
-                btn.setObjectName("primary")
-            btn.clicked.connect(lambda checked=False, t=text: mock_message(self, t))
-            controls.addWidget(btn)
+
+        new_report = QPushButton("Nowe zgłoszenie")
+        new_report.setObjectName("primary")
+        new_report.clicked.connect(self._new_report)
+        controls.addWidget(new_report)
+
+        refresh = QPushButton("Odśwież")
+        refresh.setObjectName("secondary")
+        refresh.clicked.connect(self.refresh_data)
+        controls.addWidget(refresh)
+
         controls.addStretch(1)
         self.root.addLayout(controls)
 
-        table = compact_table(
-            ["Data", "ZL", "Dział", "Produkt", "Ilość", "Status", "Zgłosił"],
-            [list(row) for row in QUALITY_ROWS],
-            [90, 90, 150, 150, 90, 140, 180],
-            240,
+        self.table = compact_table(
+            ["Data", "ZL", "Dział", "Typ", "Ilość", "Przyczyna", "Sesja", "Zgłosił"],
+            [],
+            [155, 100, 140, 110, 80, 280, 90, 150],
+            300,
         )
-        self.root.addWidget(table, alignment=Qt.AlignLeft)
+        self.root.addWidget(self.table, alignment=Qt.AlignLeft)
 
         stats = QHBoxLayout()
-        stats.addWidget(card("Dobre sztuki", "2 846", "dzisiaj", 210))
-        stats.addWidget(card("Do poprawki", "17", "otwarte", 210))
-        stats.addWidget(card("Złom", "4", "dzisiaj", 210))
-        stats.addWidget(card("Cofnięcia", "3", "na wcześniejszy etap", 210))
+        self.reject_card = card("Braki", "0", "szt.", 210)
+        self.rework_card = card("Do poprawki", "0", "szt.", 210)
+        self.scrap_card = card("Złom", "0", "szt.", 210)
+        stats.addWidget(self.reject_card)
+        stats.addWidget(self.rework_card)
+        stats.addWidget(self.scrap_card)
         stats.addStretch(1)
         self.root.addLayout(stats)
         self.root.addStretch(1)
+
+        self.refresh_data()
+
+    def _set_card_value(self, frame: QFrame, value: int) -> None:
+        label = frame.findChild(QLabel, "cardValue")
+        if label is not None:
+            label.setText(str(value))
+
+    def _new_report(self) -> None:
+        dialog = QualityReportDialog(
+            self.store,
+            parent=self,
+        )
+        if dialog.exec() == QDialog.Accepted and dialog.saved:
+            self.refresh_data()
+
+    def refresh_data(self) -> None:
+        rows = self.store.list_quality_events(limit=500)
+        self.table.setRowCount(len(rows))
+
+        for row_index, event in enumerate(rows):
+            occurred_at = str(event.get("occurred_at", ""))
+            try:
+                occurred_at = datetime.fromisoformat(occurred_at).strftime(
+                    "%d.%m.%Y %H:%M"
+                )
+            except ValueError:
+                pass
+
+            values = [
+                occurred_at,
+                event.get("code", "—"),
+                event.get("department", "—"),
+                event.get("kind", "—"),
+                event.get("quantity", 0),
+                event.get("reason", "—"),
+                event.get("session_id") or "—",
+                event.get("actor", "—"),
+            ]
+
+            self.table.setRowHeight(row_index, sp(38))
+            for column_index, value in enumerate(values):
+                item = QTableWidgetItem(str(value))
+                if column_index == 3:
+                    kind = str(value)
+                    if kind == "ZŁOM":
+                        item.setForeground(QColor("#eb7373"))
+                    elif kind == "POPRAWKA":
+                        item.setForeground(QColor("#e4bd68"))
+                    elif kind == "BRAK":
+                        item.setForeground(QColor("#dd8a72"))
+                self.table.setItem(row_index, column_index, item)
+
+        summary = self.store.quality_summary()
+        self._set_card_value(self.reject_card, int(summary["reject"]))
+        self._set_card_value(self.rework_card, int(summary["rework"]))
+        self._set_card_value(self.scrap_card, int(summary["scrap"]))
 
 
 class ShippingPage(PageBase):
@@ -3174,7 +3427,7 @@ class MainWindow(QMainWindow):
         self.user_profile_page = UserProfilePage(self.go_home)
         self.diagnostics_page = DiagnosticsPage(self.go_home, self.config)
         self.employees_page = EmployeesPage(self.go_home)
-        self.quality_page = QualityPage(self.go_home)
+        self.quality_page = QualityPage(self.go_home, self.store)
         self.shipping_page = ShippingPage(self.go_home)
         self.reports_page = ReportsPage(self.go_home)
         self.tv_page = TVPage(self.go_home)
