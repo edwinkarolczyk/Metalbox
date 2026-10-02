@@ -1910,13 +1910,14 @@ class MetalboxStore:
             db.execute(
                 """
                 INSERT INTO quality_events(
-                    order_id, department, kind, quantity, reason, note,
+                    order_id, order_item_id, department, kind, quantity, reason, note,
                     session_id, occurred_at, actor
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     order_id,
+                    order_item_id,
                     department,
                     kind,
                     quantity,
