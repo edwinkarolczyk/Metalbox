@@ -48,7 +48,7 @@ from PySide6.QtWidgets import (
 )
 
 APP_NAME = "Metalbox"
-APP_VERSION = "0.1.10"
+APP_VERSION = "0.1.11"
 LOCAL_DATA_ROOT = Path(
     os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
 ) / "Metalbox"
@@ -760,6 +760,8 @@ class OrderHistoryDialog(QDialog):
             "session_paused": "Wstrzymano sesję",
             "session_resumed": "Wznowiono sesję",
             "session_finished": "Zakończono sesję",
+            "session_worker_joined": "Pracownik dołączył do sesji",
+            "session_worker_left": "Pracownik zakończył udział w sesji",
         }
 
         for event in events:
@@ -1107,6 +1109,166 @@ class PageBase(QWidget):
         outer.addWidget(self.content, 1, Qt.AlignTop | Qt.AlignHCenter)
 
 
+class SessionWorkersDialog(QDialog):
+    def __init__(
+        self,
+        store: MetalboxStore,
+        code: str,
+        department: str,
+        parent=None,
+    ):
+        super().__init__(parent)
+        self.store = store
+        self.code = code
+        self.department = department
+
+        self.setWindowTitle(f"Obsada sesji — {code} • {department}")
+        self.setModal(True)
+        self.setMinimumSize(sp(760), sp(520))
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(sp(20), sp(18), sp(20), sp(18))
+        root.setSpacing(sp(12))
+
+        root.addWidget(
+            section_heading(
+                f"Obsada • {code} • {department}",
+                "Dołączenie i wyjście pracownika zapisuje się w sesji oraz audycie.",
+            )
+        )
+
+        self.session_label = QLabel()
+        self.session_label.setObjectName("hint")
+        root.addWidget(self.session_label)
+
+        self.table = compact_table(
+            ["Pracownik", "Dołączył", "Wyszedł", "Stan"],
+            [],
+            [230, 180, 180, 120],
+            300,
+        )
+        root.addWidget(self.table)
+
+        buttons = QHBoxLayout()
+
+        add_btn = QPushButton("+ Dodaj pracownika")
+        add_btn.setObjectName("primary")
+        add_btn.clicked.connect(self._add_worker)
+        buttons.addWidget(add_btn)
+
+        remove_btn = QPushButton("Zakończ udział zaznaczonej osoby")
+        remove_btn.setObjectName("warningGhost")
+        remove_btn.clicked.connect(self._remove_worker)
+        buttons.addWidget(remove_btn)
+
+        buttons.addStretch(1)
+
+        close_btn = QPushButton("Zamknij")
+        close_btn.clicked.connect(self.accept)
+        buttons.addWidget(close_btn)
+        root.addLayout(buttons)
+
+        self.refresh_data()
+
+    @staticmethod
+    def _display_datetime(value: str | None) -> str:
+        if not value:
+            return "—"
+        try:
+            return datetime.fromisoformat(str(value)).strftime("%d.%m.%Y %H:%M:%S")
+        except ValueError:
+            return str(value)
+
+    def refresh_data(self) -> None:
+        session = self.store.get_department_session(
+            self.code,
+            self.department,
+        )
+        if session is None:
+            self.session_label.setText("Brak otwartej sesji.")
+            self.table.setRowCount(0)
+            return
+
+        self.session_label.setText(
+            f"Sesja #{session['id']} • {session['status']} • "
+            f"start: {self._display_datetime(session['started_at'])}"
+        )
+
+        workers = list(session.get("workers", []))
+        self.table.setRowCount(len(workers))
+        for row_index, worker in enumerate(workers):
+            active = not bool(worker.get("left_at"))
+            values = [
+                worker.get("worker_name", "—"),
+                self._display_datetime(worker.get("joined_at")),
+                self._display_datetime(worker.get("left_at")),
+                "AKTYWNY" if active else "ZAKOŃCZONY",
+            ]
+            self.table.setRowHeight(row_index, sp(38))
+            for column_index, value in enumerate(values):
+                item = QTableWidgetItem(str(value))
+                if column_index == 3:
+                    item.setForeground(
+                        QColor("#67dc8e") if active else QColor("#727a74")
+                    )
+                self.table.setItem(row_index, column_index, item)
+
+    def _add_worker(self) -> None:
+        name, ok = QInputDialog.getText(
+            self,
+            "Dodaj pracownika",
+            "Pracownik:",
+        )
+        if not ok:
+            return
+        try:
+            self.store.add_session_worker(
+                self.code,
+                self.department,
+                name,
+                actor="development-user",
+            )
+            mark_update_check("session:worker_join")
+            self.refresh_data()
+        except ValueError as exc:
+            QMessageBox.warning(self, "Nie można dodać pracownika", str(exc))
+
+    def _remove_worker(self) -> None:
+        row = self.table.currentRow()
+        if row < 0:
+            QMessageBox.information(
+                self,
+                "Obsada",
+                "Najpierw zaznacz aktywnego pracownika.",
+            )
+            return
+
+        name_item = self.table.item(row, 0)
+        state_item = self.table.item(row, 3)
+        if name_item is None or state_item is None:
+            return
+        if state_item.text() != "AKTYWNY":
+            QMessageBox.information(
+                self,
+                "Obsada",
+                "Ta osoba już zakończyła udział w sesji.",
+            )
+            return
+
+        worker_name = name_item.text()
+        try:
+            self.store.remove_session_worker(
+                self.code,
+                self.department,
+                worker_name,
+                actor="development-user",
+            )
+            mark_update_check("session:worker_leave")
+            self.refresh_data()
+        except ValueError as exc:
+            QMessageBox.warning(self, "Nie można usunąć pracownika", str(exc))
+
+
 class DepartmentPage(PageBase):
     def __init__(self, department: str, go_home: Callable, store: MetalboxStore):
         super().__init__(
@@ -1323,6 +1485,7 @@ class DepartmentPage(PageBase):
             "Wstrzymaj",
             "Wznów",
             "Dodaj ilość",
+            "Obsada",
             "Zakończ sesję",
             "Problem",
             "Szczegóły",
@@ -1364,6 +1527,11 @@ class DepartmentPage(PageBase):
                 )
                 btn.clicked.connect(
                     lambda checked=False, z=code, r=remaining: self._add_quantity(z, r)
+                )
+            elif text == "Obsada":
+                btn.setEnabled(session is not None)
+                btn.clicked.connect(
+                    lambda checked=False, z=code: self._manage_workers(z)
                 )
             elif text == "Zakończ sesję":
                 btn.setEnabled(session is not None)
@@ -1500,6 +1668,25 @@ class DepartmentPage(PageBase):
             self.refresh_data()
         except ValueError as exc:
             QMessageBox.warning(self, "Nie można wznowić sesji", str(exc))
+
+    def _manage_workers(self, code: str) -> None:
+        session = self.store.get_department_session(code, self.department)
+        if session is None:
+            QMessageBox.information(
+                self,
+                "Obsada",
+                "Najpierw rozpocznij sesję produkcyjną.",
+            )
+            return
+
+        dialog = SessionWorkersDialog(
+            self.store,
+            code,
+            self.department,
+            self,
+        )
+        dialog.exec()
+        self.refresh_data()
 
     def _finish_session(self, code: str) -> None:
         session = self.store.get_department_session(code, self.department)
