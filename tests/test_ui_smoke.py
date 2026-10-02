@@ -76,6 +76,28 @@ class UiSmokeTest(unittest.TestCase):
             self.assertEqual(dialog.table.rowCount(), 2)
             dialog.close()
 
+    def test_quality_report_dialog_constructs(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            db_path = Path(temp) / "metalbox-quality-ui.sqlite3"
+            store = MetalboxStore(db_path)
+            store.seed_development_data()
+            store.ensure_development_progress_seeded()
+            store.start_production_session(
+                "ZL-740",
+                "Zgrzewarki",
+                ["Dawid"],
+            )
+
+            dialog = metalbox_app.QualityReportDialog(
+                store,
+                code="ZL-740",
+                department="Zgrzewarki",
+            )
+            self.assertEqual(dialog.order_combo.currentText(), "ZL-740")
+            self.assertEqual(dialog.department_combo.currentText(), "Zgrzewarki")
+            self.assertTrue(dialog.quantity_spin.isEnabled())
+            dialog.close()
+
     def test_update_checklist_dialog_constructs(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             original = metalbox_app.DEV_UPDATE_STATE_FILE
