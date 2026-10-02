@@ -1,32 +1,32 @@
 {
   "schema": 1,
-  "version": "0.1.13",
-  "title": "Dolny panel testów aktualizacji",
-  "description": "Sprawdź nowy dolny panel: nie blokuje programu, pamięta wyniki po restarcie i pozwala zakończyć cykl testu.",
+  "version": "0.1.13.1",
+  "title": "Nakładka testów bez zmiany wyglądu programu",
+  "description": "Panel testów jest teraz nadrzędną nakładką nad Metalboxem. Nie zmienia wysokości ani układu głównego interfejsu.",
   "checks": [
     {
-      "id": "panel-visible",
-      "text": "Panel testów jest na dole i nie blokuje pracy w programie",
+      "id": "overlay-layout",
+      "text": "Panel testów nie zmienia układu ani wysokości programu",
       "trigger": "page:orders"
     },
     {
-      "id": "panel-auto",
-      "text": "Wykonaj dowolny test funkcji i sprawdź automatyczne odhaczenie",
+      "id": "overlay-collapse",
+      "text": "Schowaj i pokaż panel bez zmiany układu programu",
       "trigger": "department:open"
     },
     {
-      "id": "panel-note",
-      "text": "Wpisz uwagę do punktu i sprawdź status DO POPRAWY",
+      "id": "overlay-note",
+      "text": "Wpisz uwagę i sprawdź status DO POPRAWY",
       "trigger": "update_panel:note"
     },
     {
-      "id": "panel-copy",
+      "id": "overlay-copy",
       "text": "Kliknij Kopiuj raport i wklej raport do schowka",
       "trigger": "update_panel:copy_report"
     },
     {
-      "id": "logs-export",
-      "text": "Pobierz diagnostykę i sprawdź, że raport testu jest dołączony",
+      "id": "overlay-ready",
+      "text": "Po zakończeniu testu użyj Gotowy na następne zmiany",
       "trigger": "logs:export"
     }
   ]
