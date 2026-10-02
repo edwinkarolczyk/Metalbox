@@ -48,7 +48,7 @@ from PySide6.QtWidgets import (
 )
 
 APP_NAME = "Metalbox"
-APP_VERSION = "0.1.13.1"
+APP_VERSION = "0.1.13.2"
 LOCAL_DATA_ROOT = Path(
     os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
 ) / "Metalbox"
@@ -610,9 +610,9 @@ class UpdateChecklistPanel(QWidget):
 
     def _copy_report(self) -> None:
         self.flush_notes()
+        mark_update_check("update_panel:copy_report")
         state = load_dev_update_state()
         QApplication.clipboard().setText(format_update_test_report(state))
-        mark_update_check("update_panel:copy_report")
         QMessageBox.information(
             self,
             "Raport skopiowany",
@@ -632,8 +632,11 @@ class UpdateChecklistPanel(QWidget):
         pending = sum(
             1
             for item in changes
-            if not bool(item.get("checked", False))
-            and not str(item.get("note", "")).strip()
+            if (
+                str(item.get("trigger", "")) != "update_panel:ready"
+                and not bool(item.get("checked", False))
+                and not str(item.get("note", "")).strip()
+            )
         )
 
         message = (
@@ -651,6 +654,21 @@ class UpdateChecklistPanel(QWidget):
         )
         if answer != QMessageBox.Yes:
             return
+
+        mark_update_check("update_panel:ready")
+        state = load_dev_update_state()
+        changes = state.get("changes", [])
+        if not isinstance(changes, list):
+            changes = []
+        problems = sum(
+            1 for item in changes if str(item.get("note", "")).strip()
+        )
+        pending = sum(
+            1
+            for item in changes
+            if not bool(item.get("checked", False))
+            and not str(item.get("note", "")).strip()
+        )
 
         state["ready_for_next"] = True
         state["completed_at"] = datetime.now().isoformat(timespec="seconds")
@@ -672,6 +690,7 @@ class UpdateChecklistPanel(QWidget):
         self.collapsed = not self.collapsed
         self.scroll.setVisible(not self.collapsed)
         self.collapse_btn.setText("Pokaż" if self.collapsed else "Schowaj")
+        mark_update_check("update_panel:collapse")
 
         height = sp(50) if self.collapsed else sp(240)
         self.setFixedHeight(height)
@@ -3786,6 +3805,7 @@ class MainWindow(QMainWindow):
         self.update_test_panel.show()
         self._position_update_test_panel()
         self.update_test_panel.raise_()
+        mark_update_check("update_panel:visible")
 
         if self.dev_exit_button is not None:
             self.dev_exit_button.raise_()
