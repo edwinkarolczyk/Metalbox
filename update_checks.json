@@ -1,18 +1,43 @@
 {
   "schema": 1,
-  "version": "0.1.19.2",
-  "title": "Stały widok wszystkich działów",
-  "description": "Sprawdź, czy pracownik zawsze widzi całą siatkę działów, ale dostęp ma tylko do swojego działu.",
+  "version": "0.1.20",
+  "title": "Jakość — zgłaszający i obieg poprawek",
+  "description": "Sprawdź zgłoszenie jakości na konkretnej pozycji ZL oraz pełny obieg poprawki. Każdy punkt mówi dokładnie, co kliknąć i czego oczekiwać.",
   "checks": [
     {
-      "id": "worker-departments-visible",
-      "text": "1. Wejdź w PROFIL → ustaw rolę PRACOWNIK → wybierz np. Zgrzewarki → kliknij „Zastosuj wybraną rolę”. Na pulpicie mają być widoczne WSZYSTKIE działy. Zgrzewarki mają być wyraźnie podświetlone i klikalne, a pozostałe działy wyszarzone i nieklikalne. Jeśli dokładnie tak jest — zaznacz OK.",
-      "trigger": ""
+      "id": "quality-open",
+      "text": "1. Wejdź w JAKOŚĆ → kliknij „Nowe zgłoszenie”. W oknie mają być pola: Zlecenie, Pozycja / produkt, Dział zgłoszenia, Typ, Zgłaszający, Ilość, Przyczyna i Uwagi. Jeśli są — punkt zaliczy się automatycznie.",
+      "trigger": "quality:dialog_open"
     },
     {
-      "id": "manager-departments-active",
-      "text": "2. Wejdź w PROFIL → wybierz KIEROWNIK → kliknij „Zastosuj wybraną rolę”. Wszystkie działy mają nadal być widoczne i wszystkie mają być aktywne/klikalne. Jeśli tak jest — punkt zaliczy się automatycznie.",
-      "trigger": "view:manager"
+      "id": "quality-crew",
+      "text": "2. Dla pozycji, która ma otwartą sesję produkcyjną, wybierz tę pozycję i dział. W polu „Zgłaszający” mają być tylko osoby aktualnie pracujące w tej sesji. Pod polem „Sesja” ma być pokazana obsada. Jeśli tak jest — punkt zaliczy się automatycznie.",
+      "trigger": "quality:session_crew_visible"
+    },
+    {
+      "id": "quality-reporter",
+      "text": "3. W polu „Zgłaszający” wybierz jednego pracownika z obsady. Następnie wybierz przyczynę z gotowej listy, np. „Błąd zgrzewu”. Nie wpisujesz przyczyny ręcznie. Jeśli wybór działa — punkt zaliczy się automatycznie.",
+      "trigger": "quality:reporter_selected"
+    },
+    {
+      "id": "quality-report",
+      "text": "4. Ustaw Typ = POPRAWKA, Ilość = 1 szt., wybierz wcześniejszy etap w polu „Cofnij do etapu” i kliknij „Zapisz zgłoszenie”. Po zapisie w JAKOŚĆ ma pojawić się wpis z konkretnym ZL, produktem, działem, ilością i nazwą zgłaszającego. Jeśli zapis się uda — punkt zaliczy się automatycznie.",
+      "trigger": "rework:create"
+    },
+    {
+      "id": "rework-start",
+      "text": "5. W tabeli „Poprawki w obiegu” zaznacz utworzoną poprawkę → kliknij „Rozpocznij naprawę” → wybierz pracownika wykonującego akcję. Status ma zmienić się z DO_NAPRAWY na W_NAPRAWIE.",
+      "trigger": "rework:start"
+    },
+    {
+      "id": "rework-repaired",
+      "text": "6. Zaznacz tę samą poprawkę → kliknij „Oznacz naprawione” → wybierz pracownika. Status ma zmienić się z W_NAPRAWIE na DO_KONTROLI.",
+      "trigger": "rework:repaired"
+    },
+    {
+      "id": "rework-accept",
+      "text": "7. Zaznacz tę samą poprawkę → kliknij „Zaakceptuj poprawkę” → wybierz pracownika. Status ma zmienić się z DO_KONTROLI na ZAMKNIĘTA, a 1 szt. ma wrócić do dostępnej ilości etapu źródłowego.",
+      "trigger": "rework:accept"
     }
   ]
 }
