@@ -351,6 +351,78 @@ class MetalboxStoreTests(unittest.TestCase):
                 ["Marek"],
             )
 
+    def test_quality_event_reduces_available_capacity(self) -> None:
+        session = self.store.start_production_session(
+            "ZL-740",
+            "Zgrzewarki",
+            ["Dawid"],
+            actor="test-user",
+        )
+        before = self.store.get_department_order_capacity(
+            "ZL-740",
+            "Zgrzewarki",
+        )
+
+        result = self.store.report_quality_quantity(
+            "ZL-740",
+            "Zgrzewarki",
+            "BRAK",
+            2,
+            reason="Nieprawidłowy zgrzew",
+            note="Test jakości",
+            actor="test-user",
+            session_id=int(session["id"]),
+        )
+        self.assertEqual(result["kind"], "BRAK")
+        self.assertEqual(result["quantity"], 2)
+
+        after = self.store.get_department_order_capacity(
+            "ZL-740",
+            "Zgrzewarki",
+        )
+        self.assertEqual(
+            after["available_now"],
+            before["available_now"] - 2,
+        )
+
+        events = self.store.list_quality_events(
+            code="ZL-740",
+            department="Zgrzewarki",
+        )
+        self.assertTrue(
+            any(
+                event["kind"] == "BRAK"
+                and int(event["quantity"]) == 2
+                and event["reason"] == "Nieprawidłowy zgrzew"
+                for event in events
+            )
+        )
+
+    def test_quality_summary_counts_types(self) -> None:
+        session = self.store.start_production_session(
+            "ZL-740",
+            "Zgrzewarki",
+            ["Dawid"],
+        )
+        for kind, quantity in (
+            ("BRAK", 1),
+            ("POPRAWKA", 1),
+            ("ZŁOM", 1),
+        ):
+            self.store.report_quality_quantity(
+                "ZL-740",
+                "Zgrzewarki",
+                kind,
+                quantity,
+                reason="Test",
+                session_id=int(session["id"]),
+            )
+
+        summary = self.store.quality_summary()
+        self.assertEqual(summary["reject"], 1)
+        self.assertEqual(summary["rework"], 1)
+        self.assertEqual(summary["scrap"], 1)
+
     def test_status_change_is_audited(self) -> None:
         self.store.set_department_order_status(
             "ZL-740",
