@@ -26,7 +26,6 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialog,
-    QDockWidget,
     QFormLayout,
     QFrame,
     QGridLayout,
@@ -49,7 +48,7 @@ from PySide6.QtWidgets import (
 )
 
 APP_NAME = "Metalbox"
-APP_VERSION = "0.1.13"
+APP_VERSION = "0.1.13.1"
 LOCAL_DATA_ROOT = Path(
     os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
 ) / "Metalbox"
@@ -664,20 +663,23 @@ class UpdateChecklistPanel(QWidget):
         )
 
         window = self.window()
-        dock = getattr(window, "update_test_dock", None)
-        if dock is not None:
-            dock.hide()
+        self.hide()
+        positioner = getattr(window, "_position_update_test_panel", None)
+        if callable(positioner):
+            positioner()
 
     def _toggle_collapsed(self) -> None:
         self.collapsed = not self.collapsed
         self.scroll.setVisible(not self.collapsed)
         self.collapse_btn.setText("Pokaż" if self.collapsed else "Schowaj")
 
-        dock = getattr(self.window(), "update_test_dock", None)
-        if dock is not None:
-            height = sp(50) if self.collapsed else sp(240)
-            dock.setMinimumHeight(height)
-            dock.setMaximumHeight(height)
+        height = sp(50) if self.collapsed else sp(240)
+        self.setFixedHeight(height)
+
+        window = self.window()
+        positioner = getattr(window, "_position_update_test_panel", None)
+        if callable(positioner):
+            positioner()
 
 
 
@@ -3657,6 +3659,7 @@ class MainWindow(QMainWindow):
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         self._position_dev_exit_button()
+        self._position_update_test_panel()
 
     def _position_dev_exit_button(self) -> None:
         if self.dev_exit_button is None:
@@ -3777,23 +3780,39 @@ class MainWindow(QMainWindow):
         if new_version and new_version != APP_VERSION:
             return
 
-        self.update_test_dock = QDockWidget(self)
-        self.update_test_dock.setObjectName("updateTestDock")
-        self.update_test_dock.setAllowedAreas(Qt.BottomDockWidgetArea)
-        self.update_test_dock.setFeatures(QDockWidget.NoDockWidgetFeatures)
-        self.update_test_dock.setTitleBarWidget(QWidget())
+        self.update_test_panel = UpdateChecklistPanel(self)
+        self.update_test_panel.setObjectName("updateTestOverlay")
+        self.update_test_panel.setFixedHeight(sp(240))
+        self.update_test_panel.show()
+        self._position_update_test_panel()
+        self.update_test_panel.raise_()
 
-        self.update_test_panel = UpdateChecklistPanel(self.update_test_dock)
-        self.update_test_dock.setWidget(self.update_test_panel)
-        self.addDockWidget(Qt.BottomDockWidgetArea, self.update_test_dock)
+        if self.dev_exit_button is not None:
+            self.dev_exit_button.raise_()
 
-        self.update_test_dock.setMinimumHeight(sp(240))
-        self.update_test_dock.setMaximumHeight(sp(240))
-        self.update_test_dock.show()
         app_log(
-            "Pokazano dolny panel testów aktualizacji: "
+            "Pokazano nakładkę testów aktualizacji bez zmiany layoutu: "
             f"{state.get('old_version', '—')} -> {state.get('new_version', APP_VERSION)}"
         )
+
+    def _position_update_test_panel(self) -> None:
+        panel = getattr(self, "update_test_panel", None)
+        if panel is None or not panel.isVisible():
+            return
+
+        margin = sp(14)
+        width = max(sp(720), self.width() - (margin * 2))
+        width = min(width, sp(1500))
+        x = max(margin, (self.width() - width) // 2)
+        y = max(
+            margin,
+            self.height() - panel.height() - margin,
+        )
+        panel.setGeometry(x, y, width, panel.height())
+        panel.raise_()
+
+        if self.dev_exit_button is not None:
+            self.dev_exit_button.raise_()
 
     def closeEvent(self, event) -> None:
         panel = getattr(self, "update_test_panel", None)
@@ -4218,9 +4237,10 @@ QCheckBox {
 QCheckBox:hover {
     background: #121815;
 }
-QDockWidget#updateTestDock {
+QWidget#updateTestOverlay {
     background: #0f1213;
-    border-top: 1px solid #354039;
+    border: 1px solid #47554d;
+    border-radius: 10px;
 }
 QLabel#updatePanelTitle {
     color: #f3f5f3;
