@@ -151,9 +151,6 @@ class MetalboxStore:
                 CREATE INDEX IF NOT EXISTS idx_session_workers_session
                     ON session_workers(session_id, left_at);
 
-                CREATE INDEX IF NOT EXISTS idx_session_workers_employee
-                    ON session_workers(employee_id, left_at);
-
                 CREATE TABLE IF NOT EXISTS quality_events (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
