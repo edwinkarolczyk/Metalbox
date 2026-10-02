@@ -56,6 +56,26 @@ class UiSmokeTest(unittest.TestCase):
             self.assertGreaterEqual(len(edit_dialog.item_rows), 1)
             edit_dialog.close()
 
+    def test_session_workers_dialog_constructs(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            db_path = Path(temp) / "metalbox-session-ui.sqlite3"
+            store = MetalboxStore(db_path)
+            store.seed_development_data()
+            store.ensure_development_progress_seeded()
+            store.start_production_session(
+                "ZL-740",
+                "Zgrzewarki",
+                ["Dawid", "Marek"],
+            )
+
+            dialog = metalbox_app.SessionWorkersDialog(
+                store,
+                "ZL-740",
+                "Zgrzewarki",
+            )
+            self.assertEqual(dialog.table.rowCount(), 2)
+            dialog.close()
+
     def test_update_checklist_dialog_constructs(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             original = metalbox_app.DEV_UPDATE_STATE_FILE
