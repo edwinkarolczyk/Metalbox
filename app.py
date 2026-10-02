@@ -4074,6 +4074,8 @@ class EmployeesPage(PageBase):
         self._set_card_value(self.assigned_card, assigned)
         self._set_card_value(self.history_card, len(history))
         mark_update_check("employees:view")
+        if history:
+            mark_update_check("employees:history_visible")
 
 
 
