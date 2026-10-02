@@ -128,6 +128,88 @@ class MetalboxStoreTests(unittest.TestCase):
             )
         )
 
+    def test_create_order_with_default_route(self) -> None:
+        created = self.store.create_order(
+            code="ZL-900",
+            client="Test Klient",
+            deadline="2026-11-05",
+            priority="WYSOKI",
+            status="NOWE",
+            items=[
+                {"symbol": "ABC-1", "name": "Produkt A", "quantity": 12},
+                {"symbol": "ABC-2", "name": "Produkt B", "quantity": 7},
+            ],
+            actor="test-user",
+        )
+        self.assertEqual(created["code"], "ZL-900")
+        self.assertEqual(len(created["items"]), 2)
+
+        stages = self.store.get_order_stage_progress("ZL-900")
+        self.assertEqual(
+            [row["department"] for row in stages],
+            ["Laser", "Giętarki", "Zgrzewarki", "Malarnia", "Pakownia"],
+        )
+        self.assertTrue(all(int(row["good_qty"]) == 0 for row in stages))
+
+        events = self.store.list_audit_events(
+            entity_type="order",
+            entity_id="ZL-900",
+        )
+        self.assertTrue(any(event["action"] == "order_created" for event in events))
+
+    def test_update_order_before_production_can_change_items(self) -> None:
+        self.store.create_order(
+            code="ZL-901",
+            client="Klient",
+            deadline="2026-11-05",
+            priority="NORMALNY",
+            status="NOWE",
+            items=[{"symbol": "A", "name": "Produkt", "quantity": 10}],
+        )
+
+        updated = self.store.update_order(
+            "ZL-901",
+            code="ZL-901",
+            client="Nowy klient",
+            deadline="2026-11-10",
+            priority="WYSOKI",
+            status="NOWE",
+            items=[
+                {"symbol": "A", "name": "Produkt", "quantity": 15},
+                {"symbol": "B", "name": "Drugi", "quantity": 5},
+            ],
+        )
+        self.assertEqual(updated["client"], "Nowy klient")
+        self.assertEqual(len(updated["items"]), 2)
+        self.assertEqual(updated["items"][0]["quantity"], 15)
+
+    def test_update_order_after_production_blocks_structural_change(self) -> None:
+        capacity = self.store.get_department_order_capacity("ZL-740", "Zgrzewarki")
+        self.assertGreater(capacity["available_now"], 0)
+        self.store.add_department_good_qty("ZL-740", "Zgrzewarki", 1)
+
+        order = self.store.get_order("ZL-740")
+        self.assertIsNotNone(order)
+        changed_items = [
+            {
+                "symbol": item["symbol"],
+                "name": item["name"],
+                "quantity": int(item["quantity"]) + (1 if index == 0 else 0),
+            }
+            for index, item in enumerate(order["items"])
+        ]
+
+        with self.assertRaises(ValueError):
+            self.store.update_order(
+                "ZL-740",
+                code="ZL-740",
+                client=order["client"],
+                deadline=order["deadline"],
+                priority=order["priority"],
+                status=order["status"],
+                items=changed_items,
+            )
+
     def test_status_change_is_audited(self) -> None:
         self.store.set_department_order_status(
             "ZL-740",
