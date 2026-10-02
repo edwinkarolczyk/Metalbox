@@ -423,6 +423,123 @@ class MetalboxStoreTests(unittest.TestCase):
         self.assertEqual(summary["rework"], 1)
         self.assertEqual(summary["scrap"], 1)
 
+    def test_rework_targets_are_earlier_stages(self) -> None:
+        targets = self.store.get_rework_target_departments(
+            "ZL-740",
+            "Zgrzewarki",
+        )
+        self.assertIn("Giętarki", targets)
+        self.assertIn("Laser", targets)
+        self.assertNotIn("Malarnia", targets)
+
+    def test_rework_full_cycle_returns_capacity_to_source(self) -> None:
+        session = self.store.start_production_session(
+            "ZL-740",
+            "Zgrzewarki",
+            ["Dawid"],
+            actor="test-user",
+        )
+        before = self.store.get_department_order_capacity(
+            "ZL-740",
+            "Zgrzewarki",
+        )
+
+        result = self.store.report_quality_quantity(
+            "ZL-740",
+            "Zgrzewarki",
+            "POPRAWKA",
+            2,
+            reason="Korekta elementu",
+            note="Test obiegu",
+            actor="test-user",
+            session_id=int(session["id"]),
+            rework_target_department="Giętarki",
+        )
+        self.assertEqual(result["kind"], "POPRAWKA")
+        self.assertEqual(result["rework_target_department"], "Giętarki")
+
+        after_report = self.store.get_department_order_capacity(
+            "ZL-740",
+            "Zgrzewarki",
+        )
+        self.assertEqual(
+            after_report["available_now"],
+            before["available_now"] - 2,
+        )
+
+        jobs = self.store.list_rework_jobs(code="ZL-740")
+        self.assertGreaterEqual(len(jobs), 1)
+        job = jobs[0]
+        self.assertEqual(job["status"], "DO_NAPRAWY")
+        self.assertEqual(job["target_department"], "Giętarki")
+
+        job = self.store.transition_rework_job(
+            int(job["id"]),
+            "START",
+            actor="test-user",
+        )
+        self.assertEqual(job["status"], "W_NAPRAWIE")
+
+        job = self.store.transition_rework_job(
+            int(job["id"]),
+            "NAPRAWIONE",
+            actor="test-user",
+        )
+        self.assertEqual(job["status"], "DO_KONTROLI")
+
+        job = self.store.transition_rework_job(
+            int(job["id"]),
+            "AKCEPTUJ",
+            actor="test-user",
+        )
+        self.assertEqual(job["status"], "ZAMKNIĘTA")
+
+        after_accept = self.store.get_department_order_capacity(
+            "ZL-740",
+            "Zgrzewarki",
+        )
+        self.assertEqual(
+            after_accept["available_now"],
+            before["available_now"],
+        )
+
+    def test_rework_scrap_does_not_return_capacity(self) -> None:
+        session = self.store.start_production_session(
+            "ZL-740",
+            "Zgrzewarki",
+            ["Dawid"],
+        )
+        before = self.store.get_department_order_capacity(
+            "ZL-740",
+            "Zgrzewarki",
+        )
+
+        self.store.report_quality_quantity(
+            "ZL-740",
+            "Zgrzewarki",
+            "POPRAWKA",
+            1,
+            reason="Do decyzji",
+            session_id=int(session["id"]),
+            rework_target_department="Giętarki",
+        )
+        job = self.store.list_rework_jobs(code="ZL-740")[0]
+
+        job = self.store.transition_rework_job(
+            int(job["id"]),
+            "ZŁOM",
+        )
+        self.assertEqual(job["status"], "ZŁOM")
+
+        after_scrap = self.store.get_department_order_capacity(
+            "ZL-740",
+            "Zgrzewarki",
+        )
+        self.assertEqual(
+            after_scrap["available_now"],
+            before["available_now"] - 1,
+        )
+
     def test_status_change_is_audited(self) -> None:
         self.store.set_department_order_status(
             "ZL-740",
