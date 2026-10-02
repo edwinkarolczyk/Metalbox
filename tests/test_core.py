@@ -416,6 +416,9 @@ class MetalboxStoreTests(unittest.TestCase):
                 quantity,
                 reason="Test",
                 session_id=int(session["id"]),
+                rework_target_department=(
+                    "Giętarki" if kind == "POPRAWKA" else None
+                ),
             )
 
         summary = self.store.quality_summary()
