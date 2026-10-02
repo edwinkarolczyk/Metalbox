@@ -94,6 +94,40 @@ class UiSmokeTest(unittest.TestCase):
             self.assertTrue(edit_dialog.add_item_button.isEnabled())
             edit_dialog.close()
 
+    def test_employees_page_uses_database_and_shows_assignment(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            db_path = Path(temp) / "employees-ui.sqlite3"
+            store = MetalboxStore(db_path)
+            store.seed_development_data()
+            store.ensure_development_progress_seeded()
+            store.ensure_development_employees_seeded()
+
+            order = store.get_order("ZL-740")
+            self.assertIsNotNone(order)
+            item_id = int(order["items"][0]["id"])
+            store.start_production_session(
+                "ZL-740",
+                "Laser",
+                ["Dawid"],
+                order_item_id=item_id,
+            )
+
+            page = metalbox_app.EmployeesPage(lambda: None, store)
+            self.assertGreaterEqual(page.table.rowCount(), 3)
+
+            rows = [
+                [
+                    page.table.item(r, c).text()
+                    for c in range(page.table.columnCount())
+                    if page.table.item(r, c) is not None
+                ]
+                for r in range(page.table.rowCount())
+            ]
+            dawid_row = next(row for row in rows if row and row[0] == "Dawid")
+            self.assertTrue(any("ZL-740" in value for value in dawid_row))
+            self.assertGreaterEqual(page.history_table.rowCount(), 1)
+            page.close()
+
     def test_session_workers_dialog_constructs(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             db_path = Path(temp) / "metalbox-session-ui.sqlite3"
