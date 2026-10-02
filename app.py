@@ -3971,6 +3971,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.config = config
         self.store = store
+        self.view_state = DevViewState.load()
         self.setWindowTitle(f"{APP_NAME} {APP_VERSION}")
         self.setMinimumSize(sp(1180), sp(720))
 
@@ -3993,7 +3994,11 @@ class MainWindow(QMainWindow):
         self.products_page = ProductsPage(self.go_home, self.open_product)
         self.alerts_page = AlertsPage(self.go_home, self.store)
         self.semiproducts_page = SemiProductsPage(self.go_home)
-        self.user_profile_page = UserProfilePage(self.go_home)
+        self.user_profile_page = UserProfilePage(
+            self.go_home,
+            lambda: self.view_state,
+            self.apply_dev_view_state,
+        )
         self.diagnostics_page = DiagnosticsPage(self.go_home, self.config)
         self.employees_page = EmployeesPage(self.go_home)
         self.quality_page = QualityPage(self.go_home, self.store)
@@ -4042,6 +4047,7 @@ class MainWindow(QMainWindow):
             self.dev_exit_button.raise_()
             self._position_dev_exit_button()
 
+        QTimer.singleShot(0, self._apply_role_view)
         QTimer.singleShot(250, self._setup_update_test_panel)
 
     def eventFilter(self, obj, event):
