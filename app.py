@@ -48,7 +48,7 @@ from PySide6.QtWidgets import (
 )
 
 APP_NAME = "Metalbox"
-APP_VERSION = "0.1.17.2"
+APP_VERSION = "0.1.18"
 LOCAL_DATA_ROOT = Path(
     os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
 ) / "Metalbox"
@@ -2612,8 +2612,10 @@ class OrderEditorDialog(QDialog):
         self.saved_code: str | None = None
         self.item_rows: list[dict] = []
         self.order = self.store.get_order(order_code) if order_code else None
-        self.structure_locked = bool(
-            order_code and self.store.order_has_production_activity(order_code)
+        self.item_edit_states = (
+            self.store.get_order_item_edit_states(order_code)
+            if order_code
+            else {}
         )
 
         self.setWindowTitle(
@@ -2664,14 +2666,20 @@ class OrderEditorDialog(QDialog):
 
         root.addWidget(form_frame)
 
-        if self.structure_locked:
+        if any(
+            bool(state.get("started"))
+            for state in self.item_edit_states.values()
+        ):
             warning = QLabel(
-                "Pozycje i ilości są zablokowane, ponieważ produkcja tego ZL już się rozpoczęła. "
-                "Możesz zmienić dane nagłówka, termin, priorytet lub status."
+                "Pozycje z historią produkcji są chronione osobno: symbolu, nazwy "
+                "i samej pozycji nie można już usunąć. Ilość można zmienić, ale "
+                "nie poniżej ilości już przetworzonej. Pozostałe pozycje ZL "
+                "nadal można normalnie edytować."
             )
             warning.setObjectName("warningText")
             warning.setWordWrap(True)
             root.addWidget(warning)
+            mark_update_check("order:item_lock_visible")
 
         items_header = QHBoxLayout()
         items_header.addWidget(section_heading("Pozycje zlecenia"))
@@ -2679,7 +2687,6 @@ class OrderEditorDialog(QDialog):
 
         self.add_item_button = QPushButton("+ Dodaj pozycję")
         self.add_item_button.setObjectName("secondary")
-        self.add_item_button.setEnabled(not self.structure_locked)
         self.add_item_button.clicked.connect(lambda: self._add_item_row())
         items_header.addWidget(self.add_item_button)
         root.addLayout(items_header)
@@ -2723,18 +2730,32 @@ class OrderEditorDialog(QDialog):
         self.status_combo.setCurrentText(str(self.order["status"]))
 
         for item in self.order.get("items", []):
+            item_id = int(item["id"])
+            state = self.item_edit_states.get(
+                item_id,
+                {"started": False, "processed_qty": 0},
+            )
             self._add_item_row(
+                item_id=item_id,
                 symbol=str(item["symbol"]),
                 name=str(item["name"]),
                 quantity=int(item["quantity"]),
+                started=bool(state.get("started", False)),
+                minimum_quantity=max(
+                    1,
+                    int(state.get("processed_qty", 0)),
+                ),
             )
 
     def _add_item_row(
         self,
         *,
+        item_id: int | None = None,
         symbol: str = "",
         name: str = "",
         quantity: int = 1,
+        started: bool = False,
+        minimum_quantity: int = 1,
     ) -> None:
         frame = QFrame()
         frame.setObjectName("orderItemRow")
@@ -2751,46 +2772,68 @@ class OrderEditorDialog(QDialog):
         symbol_edit.setPlaceholderText("Symbol")
         symbol_edit.setText(symbol)
         symbol_edit.setFixedWidth(sp(170))
-        symbol_edit.setEnabled(not self.structure_locked)
+        symbol_edit.setEnabled(not started)
         row.addWidget(symbol_edit)
 
         name_edit = QLineEdit()
         name_edit.setPlaceholderText("Nazwa produktu")
         name_edit.setText(name)
         name_edit.setMinimumWidth(sp(380))
-        name_edit.setEnabled(not self.structure_locked)
+        name_edit.setEnabled(not started)
         row.addWidget(name_edit, 1)
 
         quantity_spin = QSpinBox()
-        quantity_spin.setRange(1, 1_000_000)
-        quantity_spin.setValue(max(1, int(quantity)))
+        minimum_quantity = max(1, int(minimum_quantity))
+        quantity_spin.setRange(minimum_quantity, 1_000_000)
+        quantity_spin.setValue(max(minimum_quantity, int(quantity)))
         quantity_spin.setSuffix(" szt.")
         quantity_spin.setFixedWidth(sp(140))
-        quantity_spin.setEnabled(not self.structure_locked)
         row.addWidget(quantity_spin)
+
+        duplicate = QPushButton("Duplikuj")
+        duplicate.setObjectName("secondary")
+        row.addWidget(duplicate)
 
         remove = QPushButton("Usuń")
         remove.setObjectName("dangerGhost")
-        remove.setEnabled(not self.structure_locked)
+        remove.setEnabled(not started)
         row.addWidget(remove)
 
         data = {
+            "id": item_id,
+            "started": started,
+            "minimum_quantity": minimum_quantity,
             "frame": frame,
             "position": position,
             "symbol": symbol_edit,
             "name": name_edit,
             "quantity": quantity_spin,
+            "duplicate": duplicate,
             "remove": remove,
         }
         self.item_rows.append(data)
 
         insert_index = max(0, self.items_layout.count() - 1)
         self.items_layout.insertWidget(insert_index, frame)
+        duplicate.clicked.connect(lambda: self._duplicate_item_row(data))
         remove.clicked.connect(lambda: self._remove_item_row(data))
         self._renumber_rows()
 
+    def _duplicate_item_row(self, data: dict) -> None:
+        self._add_item_row(
+            symbol=data["symbol"].text(),
+            name=data["name"].text(),
+            quantity=data["quantity"].value(),
+        )
+        mark_update_check("order:item_duplicate")
+
     def _remove_item_row(self, data: dict) -> None:
-        if self.structure_locked:
+        if bool(data.get("started")):
+            QMessageBox.information(
+                self,
+                "Pozycja z historią produkcji",
+                "Nie można usunąć pozycji, która ma historię produkcji.",
+            )
             return
         if len(self.item_rows) <= 1:
             QMessageBox.information(
@@ -2810,14 +2853,17 @@ class OrderEditorDialog(QDialog):
             row["position"].setText(str(index))
 
     def _collect_items(self) -> list[dict]:
-        return [
-            {
+        items: list[dict] = []
+        for row in self.item_rows:
+            item = {
                 "symbol": row["symbol"].text(),
                 "name": row["name"].text(),
                 "quantity": row["quantity"].value(),
             }
-            for row in self.item_rows
-        ]
+            if row.get("id") is not None:
+                item["id"] = int(row["id"])
+            items.append(item)
+        return items
 
     def _save(self) -> None:
         try:
