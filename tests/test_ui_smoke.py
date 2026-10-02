@@ -339,7 +339,6 @@ class UiSmokeTest(unittest.TestCase):
                 lambda: None,
                 store,
             )
-            page.refresh_data()
 
             rows = [
                 row
