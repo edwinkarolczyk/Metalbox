@@ -98,7 +98,7 @@ class UiSmokeTest(unittest.TestCase):
             self.assertTrue(dialog.quantity_spin.isEnabled())
             dialog.close()
 
-    def test_update_checklist_dialog_constructs(self) -> None:
+    def test_update_checklist_panel_constructs_and_persists(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             original = metalbox_app.DEV_UPDATE_STATE_FILE
             try:
@@ -107,11 +107,11 @@ class UiSmokeTest(unittest.TestCase):
                     {
                         "schema": 2,
                         "status": "updated",
-                        "old_version": "0.1.7",
+                        "old_version": "0.1.12",
                         "new_version": metalbox_app.APP_VERSION,
                         "title": "Test aktualizacji",
-                        "description": "Sprawdzenie okna.",
-                        "popup_shown": False,
+                        "description": "Sprawdzenie panelu.",
+                        "ready_for_next": False,
                         "changes": [
                             {
                                 "id": "orders-open",
@@ -121,15 +121,30 @@ class UiSmokeTest(unittest.TestCase):
                                 "checked_at": None,
                                 "note": "",
                                 "problem": False,
-                            }
+                            },
+                            {
+                                "id": "problem",
+                                "text": "Wpisz uwagę",
+                                "trigger": "update_panel:note",
+                                "checked": False,
+                                "checked_at": None,
+                                "note": "testowa uwaga",
+                                "problem": True,
+                            },
                         ],
                     }
                 )
 
-                dialog = metalbox_app.UpdateChecklistDialog()
-                self.assertFalse(dialog.isModal())
-                self.assertEqual(len(dialog.rows), 1)
-                dialog.close()
+                panel = metalbox_app.UpdateChecklistPanel()
+                self.assertEqual(len(panel.rows), 2)
+                self.assertIn("uwagi 1", panel._progress_text())
+
+                state = metalbox_app.load_dev_update_state()
+                self.assertEqual(
+                    state["changes"][1]["note"],
+                    "testowa uwaga",
+                )
+                panel.close()
             finally:
                 metalbox_app.DEV_UPDATE_STATE_FILE = original
 
