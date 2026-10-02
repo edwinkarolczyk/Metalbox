@@ -98,6 +98,55 @@ class UiSmokeTest(unittest.TestCase):
             self.assertTrue(dialog.quantity_spin.isEnabled())
             dialog.close()
 
+    def test_worker_and_manager_views_are_separated(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            original_view_file = metalbox_app.DEV_VIEW_STATE_FILE
+            try:
+                metalbox_app.DEV_VIEW_STATE_FILE = Path(temp) / "dev_view.json"
+                metalbox_app.DevViewState(
+                    role="PRACOWNIK",
+                    department="Zgrzewarki",
+                ).save()
+
+                db_path = Path(temp) / "role-view.sqlite3"
+                store = MetalboxStore(db_path)
+                store.seed_development_data()
+                store.ensure_development_progress_seeded()
+
+                config = metalbox_app.ClientConfig(
+                    server_ip="127.0.0.1",
+                    station_name="TEST — Development",
+                    inactivity_seconds=90,
+                    configured=True,
+                    test_mode=True,
+                )
+
+                window = metalbox_app.MainWindow(config, store)
+                window.resize(1400, 850)
+                window.show()
+                self.qt_app.processEvents()
+                window._apply_role_view()
+                self.qt_app.processEvents()
+
+                self.assertFalse(window.management_frame.isVisible())
+                self.assertTrue(
+                    window.department_buttons["Zgrzewarki"].isVisible()
+                )
+                self.assertFalse(
+                    window.department_buttons["Malarnia"].isVisible()
+                )
+
+                window.apply_dev_view_state("KIEROWNIK", "Zgrzewarki")
+                self.qt_app.processEvents()
+
+                self.assertTrue(window.management_frame.isVisible())
+                self.assertTrue(
+                    window.department_buttons["Malarnia"].isVisible()
+                )
+                window.close()
+            finally:
+                metalbox_app.DEV_VIEW_STATE_FILE = original_view_file
+
     def test_update_panel_overlay_does_not_change_main_layout(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             original = metalbox_app.DEV_UPDATE_STATE_FILE
