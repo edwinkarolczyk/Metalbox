@@ -1,32 +1,42 @@
 {
   "schema": 1,
-  "version": "0.1.13.2",
-  "title": "Automatyczne odhaczanie testów",
-  "description": "Sprawdź, że czynności w panelu same zaliczają odpowiadające im punkty. Nie trzeba ręcznie klikać checkboxów.",
+  "version": "0.1.14",
+  "title": "Pełny obieg POPRAWKI",
+  "description": "Sprawdź cofnięcie sztuki do wcześniejszego etapu, naprawę, kontrolę i powrót do produkcji. Punkty zaliczają się automatycznie.",
   "checks": [
     {
-      "id": "auto-visible",
-      "text": "Panel testów pojawił się jako nakładka bez zmiany layoutu",
-      "trigger": "update_panel:visible"
+      "id": "rework-create",
+      "text": "Zgłoś POPRAWKĘ i wybierz wcześniejszy etap",
+      "trigger": "rework:create"
     },
     {
-      "id": "auto-collapse",
-      "text": "Schowaj albo pokaż panel",
-      "trigger": "update_panel:collapse"
+      "id": "rework-start",
+      "text": "Rozpocznij naprawę poprawki",
+      "trigger": "rework:start"
     },
     {
-      "id": "auto-note",
-      "text": "Wpisz uwagę i sprawdź automatyczny status DO POPRAWY",
-      "trigger": "update_panel:note"
+      "id": "rework-repaired",
+      "text": "Oznacz poprawkę jako naprawioną",
+      "trigger": "rework:repaired"
     },
     {
-      "id": "auto-copy",
-      "text": "Kliknij Kopiuj raport — punkt ma być już OK w skopiowanym raporcie",
+      "id": "rework-accept",
+      "text": "Zaakceptuj poprawkę po kontroli",
+      "trigger": "rework:accept"
+    },
+    {
+      "id": "rework-history",
+      "text": "Otwórz historię ZL i sprawdź zmianę statusu poprawki",
+      "trigger": "order:history"
+    },
+    {
+      "id": "analyzer-copy",
+      "text": "Kliknij Kopiuj raport — punkt ma być już OK w raporcie",
       "trigger": "update_panel:copy_report"
     },
     {
-      "id": "auto-ready",
-      "text": "Kliknij Gotowy na następne zmiany",
+      "id": "analyzer-ready",
+      "text": "Po zakończeniu kliknij Gotowy na następne zmiany",
       "trigger": "update_panel:ready"
     }
   ]
