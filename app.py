@@ -12,7 +12,7 @@ import sys
 import traceback
 import zipfile
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
@@ -48,7 +48,7 @@ from PySide6.QtWidgets import (
 )
 
 APP_NAME = "Metalbox"
-APP_VERSION = "0.1.17.1"
+APP_VERSION = "0.1.17.2"
 LOCAL_DATA_ROOT = Path(
     os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
 ) / "Metalbox"
@@ -63,6 +63,8 @@ DEV_ROOT = LOCAL_DATA_ROOT / "dev"
 DEV_DATA_DIR = DEV_ROOT / "data"
 DEV_DB_FILE = DEV_DATA_DIR / "metalbox-dev.sqlite3"
 DEV_UPDATE_STATE_FILE = DEV_ROOT / "update_state.json"
+DEV_SOURCE_STATE_FILE = DEV_ROOT / "source_state.json"
+INSTALLED_STATE_FILE = LOCAL_DATA_ROOT / "installed.json"
 DEV_VIEW_STATE_FILE = CONFIG_DIR / "dev_view.json"
 
 # Tylko na czas developmentu. Ustaw False przed wersją produkcyjną,
@@ -144,6 +146,51 @@ def _safe_json(path: Path) -> dict:
         return data if isinstance(data, dict) else {}
     except (OSError, ValueError, TypeError):
         return {}
+
+
+def _format_elapsed_update_age(value: str, *, now: datetime | None = None) -> str:
+    value = str(value or "").strip()
+    if not value:
+        return "czas aktualizacji nieznany"
+
+    try:
+        stamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return "czas aktualizacji nieznany"
+
+    if stamp.tzinfo is None:
+        current = now or datetime.now()
+    else:
+        current = now or datetime.now(timezone.utc)
+        current = current.astimezone(stamp.tzinfo)
+
+    elapsed = max(0, int((current - stamp).total_seconds()))
+    if elapsed < 60:
+        return f"{elapsed} s temu"
+    if elapsed < 3600:
+        return f"{elapsed // 60} min temu"
+    if elapsed < 86400:
+        return f"{elapsed // 3600} godz. temu"
+    return f"{elapsed // 86400} dni temu"
+
+
+def last_update_age_text(*, now: datetime | None = None) -> str:
+    dev_state = _safe_json(DEV_SOURCE_STATE_FILE)
+    value = str(dev_state.get("updated_at", "")).strip()
+
+    if not value:
+        installed = _safe_json(INSTALLED_STATE_FILE)
+        value = str(installed.get("installed_at", "")).strip()
+
+    if not value:
+        update_state = _safe_json(DEV_UPDATE_STATE_FILE)
+        value = str(update_state.get("updated_at", "")).strip()
+
+    return _format_elapsed_update_age(value, now=now)
+
+
+def version_status_text() -> str:
+    return f"DEV {APP_VERSION} • {last_update_age_text()}"
 
 
 def format_update_test_report(state: dict) -> str:
@@ -1318,9 +1365,15 @@ class Header(QWidget):
         layout.addLayout(titles)
         layout.addStretch(1)
 
-        version = QLabel(f"DEV  {APP_VERSION}")
-        version.setObjectName("versionChip")
-        layout.addWidget(version)
+        self.version_label = QLabel(version_status_text())
+        self.version_label.setObjectName("versionChip")
+        layout.addWidget(self.version_label)
+
+        self.version_age_timer = QTimer(self)
+        self.version_age_timer.timeout.connect(
+            lambda: self.version_label.setText(version_status_text())
+        )
+        self.version_age_timer.start(1000)
         layout.addSpacing(sp(8))
         layout.addWidget(back)
 
@@ -4248,6 +4301,10 @@ class MainWindow(QMainWindow):
         self.inactivity_timer.timeout.connect(self.go_home)
         QApplication.instance().installEventFilter(self)
 
+        self.version_age_timer = QTimer(self)
+        self.version_age_timer.timeout.connect(self._refresh_version_age)
+        self.version_age_timer.start(1000)
+
         self.dev_exit_button: QPushButton | None = None
         if SHOW_DEV_EXIT_BUTTON:
             self.dev_exit_button = QPushButton("✕", self)
@@ -4459,14 +4516,7 @@ class MainWindow(QMainWindow):
         self.management_frame.setVisible(manager)
 
         if hasattr(self, "home_subtitle"):
-            self.home_subtitle.setText(
-                (
-                    f"Pulpit kierownika • Development {APP_VERSION}"
-                    if manager
-                    else f"Pulpit pracownika • {self.view_state.department} • "
-                         f"Development {APP_VERSION}"
-                )
-            )
+            self._refresh_version_age()
 
         if hasattr(self, "home_profile_button"):
             self.home_profile_button.setText(
@@ -4484,6 +4534,20 @@ class MainWindow(QMainWindow):
             button.setVisible(manager or department == self.view_state.department)
 
         self.refresh_home()
+
+    def _refresh_version_age(self) -> None:
+        age = version_status_text()
+        for label in self.findChildren(QLabel, "versionChip"):
+            label.setText(age)
+
+        if hasattr(self, "home_subtitle"):
+            if self.view_state.management:
+                self.home_subtitle.setText(f"Pulpit kierownika • {age}")
+            else:
+                self.home_subtitle.setText(
+                    f"Pulpit pracownika • {self.view_state.department} • {age}"
+                )
+
 
     def _setup_update_test_panel(self) -> None:
         state = load_dev_update_state()
@@ -4552,7 +4616,7 @@ class MainWindow(QMainWindow):
         brand = QLabel("METALBOX")
         brand.setObjectName("brand")
         self.home_subtitle = QLabel(
-            f"Pulpit produkcyjny • Development {APP_VERSION}"
+            f"Pulpit produkcyjny • {version_status_text()}"
         )
         self.home_subtitle.setObjectName("subtitle")
         titles.addWidget(brand)
