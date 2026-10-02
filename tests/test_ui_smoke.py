@@ -366,7 +366,10 @@ class UiSmokeTest(unittest.TestCase):
             start_buttons = [
                 button
                 for button in page.findChildren(metalbox_app.QPushButton)
-                if button.text() == "Rozpocznij"
+                if (
+                    button.text() == "Rozpocznij"
+                    and button.property("orderCode") == "ZL-740"
+                )
             ]
             self.assertEqual(len(start_buttons), 5)
             self.assertTrue(any(button.isEnabled() for button in start_buttons))
