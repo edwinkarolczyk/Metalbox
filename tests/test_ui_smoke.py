@@ -175,7 +175,7 @@ class UiSmokeTest(unittest.TestCase):
             )
             dialog.kind_combo.setCurrentText("POPRAWKA")
             dialog._refresh_context()
-            self.assertTrue(dialog.rework_target_combo.isVisible())
+            self.assertFalse(dialog.rework_target_combo.isHidden())
             self.assertGreater(dialog.rework_target_combo.count(), 0)
             self.assertIn(
                 "Giętarki",
