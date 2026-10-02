@@ -1786,6 +1786,31 @@ class MetalboxStore:
             if not rows:
                 raise ValueError(f"Brak operacji {department} dla {code}.")
 
+            target_operations: dict[int, int] = {}
+            if kind == "POPRAWKA":
+                for row in rows:
+                    target = db.execute(
+                        """
+                        SELECT id
+                        FROM operation_progress
+                        WHERE order_item_id = ?
+                          AND department = ?
+                          AND sequence_no < ?
+                        LIMIT 1
+                        """,
+                        (
+                            int(row["order_item_id"]),
+                            rework_target_department,
+                            int(row["sequence_no"]),
+                        ),
+                    ).fetchone()
+                    if target is None:
+                        raise ValueError(
+                            f"Etap {rework_target_department} nie jest wcześniejszym "
+                            f"etapem dla {department}."
+                        )
+                    target_operations[int(row["id"])] = int(target["id"])
+
             available_total = sum(
                 self._row_available_to_process(row)
                 for row in rows
