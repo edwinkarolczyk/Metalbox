@@ -2778,7 +2778,7 @@ class OrderDetailPage(PageBase):
             bar.setValue(min(good, max(planned, 1)))
             bar.setFormat(
                 f"{good} / {planned} szt. • braki {rejects} • "
-                f"poprawki {rework} • złom {int(row.get('scrap_qty', 0))} • {status}"
+                f"poprawki {rework} • złom {int(row["scrap_qty"])} • {status}"
             )
 
         self.store.add_audit_event(
