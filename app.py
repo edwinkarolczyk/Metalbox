@@ -1586,12 +1586,20 @@ class QualityReportDialog(QDialog):
                 str(self.rework_target_combo.currentData() or "").strip()
             )
 
-        self.save_button.setEnabled(
+        enabled = (
             bool(code)
             and bool(department)
             and available > 0
             and target_ok
         )
+        self.save_button.setEnabled(enabled)
+
+        if (
+            enabled
+            and kind == "POPRAWKA"
+            and str(self.rework_target_combo.currentData() or "").strip()
+        ):
+            mark_update_check("quality:save_enabled")
 
     def _refresh_context(self) -> None:
         code, department = self._context()
