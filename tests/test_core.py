@@ -351,6 +351,73 @@ class MetalboxStoreTests(unittest.TestCase):
                 ["Marek"],
             )
 
+    def test_quality_event_is_bound_to_specific_order_item(self) -> None:
+        order = self.store.get_order("ZL-740")
+        self.assertIsNotNone(order)
+
+        selected = None
+        for item in order["items"]:
+            try:
+                capacity = self.store.get_item_department_capacity(
+                    "ZL-740",
+                    int(item["id"]),
+                    "Zgrzewarki",
+                )
+            except ValueError:
+                continue
+            if int(capacity["available_now"]) > 0:
+                selected = item
+                break
+
+        self.assertIsNotNone(selected)
+        item_id = int(selected["id"])
+        before = self.store.get_item_department_capacity(
+            "ZL-740",
+            item_id,
+            "Zgrzewarki",
+        )
+
+        session = self.store.start_production_session(
+            "ZL-740",
+            "Zgrzewarki",
+            ["Dawid"],
+            actor="test-user",
+        )
+
+        result = self.store.report_quality_quantity(
+            "ZL-740",
+            "Zgrzewarki",
+            "BRAK",
+            1,
+            reason="Test pozycji",
+            actor="test-user",
+            session_id=int(session["id"]),
+            order_item_id=item_id,
+        )
+        self.assertEqual(result["order_item_id"], item_id)
+
+        after = self.store.get_item_department_capacity(
+            "ZL-740",
+            item_id,
+            "Zgrzewarki",
+        )
+        self.assertEqual(
+            after["available_now"],
+            before["available_now"] - 1,
+        )
+
+        events = self.store.list_quality_events(
+            code="ZL-740",
+            department="Zgrzewarki",
+        )
+        bound = next(
+            event
+            for event in events
+            if int(event["order_item_id"] or 0) == item_id
+        )
+        self.assertEqual(bound["symbol"], selected["symbol"])
+        self.assertEqual(bound["name"], selected["name"])
+
     def test_quality_event_reduces_available_capacity(self) -> None:
         session = self.store.start_production_session(
             "ZL-740",
