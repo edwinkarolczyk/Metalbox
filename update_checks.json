@@ -1,33 +1,33 @@
 {
   "schema": 1,
-  "version": "0.1.12",
-  "title": "Jakość: braki, poprawki i złom",
-  "description": "Sprawdź zgłoszenia jakościowe i ich wpływ na dostępne ilości. Punkty zaznaczają się automatycznie.",
+  "version": "0.1.13",
+  "title": "Dolny panel testów aktualizacji",
+  "description": "Sprawdź nowy dolny panel: nie blokuje programu, pamięta wyniki po restarcie i pozwala zakończyć cykl testu.",
   "checks": [
     {
-      "id": "department-open",
-      "text": "Wejdź do działu produkcyjnego z otwartą sesją",
+      "id": "panel-visible",
+      "text": "Panel testów jest na dole i nie blokuje pracy w programie",
+      "trigger": "page:orders"
+    },
+    {
+      "id": "panel-auto",
+      "text": "Wykonaj dowolny test funkcji i sprawdź automatyczne odhaczenie",
       "trigger": "department:open"
     },
     {
-      "id": "quality-report",
-      "text": "Zgłoś BRAK, POPRAWKĘ albo ZŁOM z karty ZL",
-      "trigger": "quality:report"
+      "id": "panel-note",
+      "text": "Wpisz uwagę do punktu i sprawdź status DO POPRAWY",
+      "trigger": "update_panel:note"
     },
     {
-      "id": "operation-quantity",
-      "text": "Dodaj dobrą ilość i sprawdź, że wadliwe sztuki nie przechodzą dalej",
-      "trigger": "operation:quantity"
+      "id": "panel-copy",
+      "text": "Kliknij Kopiuj raport i wklej raport do schowka",
+      "trigger": "update_panel:copy_report"
     },
     {
-      "id": "quality-page",
-      "text": "Otwórz moduł Jakość i sprawdź zapisane zdarzenie",
-      "trigger": "quality:open"
-    },
-    {
-      "id": "order-history",
-      "text": "Sprawdź zdarzenie jakościowe w historii ZL",
-      "trigger": "order:history"
+      "id": "logs-export",
+      "text": "Pobierz diagnostykę i sprawdź, że raport testu jest dołączony",
+      "trigger": "logs:export"
     }
   ]
 }
