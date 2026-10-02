@@ -48,7 +48,7 @@ from PySide6.QtWidgets import (
 )
 
 APP_NAME = "Metalbox"
-APP_VERSION = "0.1.9"
+APP_VERSION = "0.1.10"
 LOCAL_DATA_ROOT = Path(
     os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
 ) / "Metalbox"
@@ -756,6 +756,10 @@ class OrderHistoryDialog(QDialog):
             "good_quantity_added": "Dodano dobrą ilość",
             "order_created": "Utworzono zlecenie",
             "order_updated": "Zaktualizowano zlecenie",
+            "session_started": "Rozpoczęto sesję produkcyjną",
+            "session_paused": "Wstrzymano sesję",
+            "session_resumed": "Wznowiono sesję",
+            "session_finished": "Zakończono sesję",
         }
 
         for event in events:
@@ -1108,7 +1112,7 @@ class DepartmentPage(PageBase):
         super().__init__(
             department,
             go_home,
-            "Kolejka działu i bieżąca produkcja z bazy Development.",
+            "Kolejka działu, sesje pracy i bieżąca produkcja z bazy Development.",
         )
         self.department = department
         self.store = store
@@ -1169,22 +1173,22 @@ class DepartmentPage(PageBase):
         configs = {
             "Laser": (
                 "Laser / półprodukty",
-                "Bieżące cięcie: 1.435.135 • 420/1200 szt.",
+                "Bieżące cięcie: dane z kolejki działu",
                 "Planowane: produkcja półproduktów również bez konkretnego ZL.",
             ),
             "Zgrzewarki": (
                 "Obsada i akord",
-                "ZL-740 • 4 osoby • zmiana I",
+                "Sesje pracy są już zapisywane w bazie Development.",
                 "Brygadzista zatwierdza dobre sztuki; stawki pieniężne pozostają ukryte.",
             ),
             "Malarnia": (
                 "Aktualny kolor",
-                "RAL 9011 • ZL-763 • 612/864 szt.",
+                "RAL zostanie podpięty z karty produktu.",
                 "Planowane: grupowanie po RAL, zużycie farby w kg i kolejka tylko z gotowych sztuk.",
             ),
             "Pakownia": (
                 "Pakowanie",
-                "Najbliższa wysyłka: ZL-763 • 08.10",
+                "Kolejka wysyłkowa będzie pobierana z gotowości ZL.",
                 "Planowane: sposób pakowania z karty produktu, palety, etykiety i gotowość wysyłki.",
             ),
             "Magazyn": (
@@ -1194,8 +1198,8 @@ class DepartmentPage(PageBase):
             ),
             "Spawalnia": (
                 "Spawalnia",
-                "2 aktywne zlecenia • 1 poprawka",
-                "Planowane: sesje pracy, kontrola jakości i cofnięcia do naprawy.",
+                "Sesje pracy są już dostępne na kartach ZL.",
+                "Planowane: kontrola jakości i cofnięcia do naprawy.",
             ),
         }
         if department not in configs:
@@ -1226,7 +1230,15 @@ class DepartmentPage(PageBase):
         layout.addWidget(button)
         return frame
 
-    def _order_card(self, code: str, product: str, total: int, done: int, status_text: str, idx: int) -> QFrame:
+    def _order_card(
+        self,
+        code: str,
+        product: str,
+        total: int,
+        done: int,
+        status_text: str,
+        idx: int,
+    ) -> QFrame:
         frame = QFrame()
         frame.setObjectName("orderCard")
         frame.setMaximumWidth(sp(1540))
@@ -1241,7 +1253,9 @@ class DepartmentPage(PageBase):
         product_label = QLabel(product)
         product_label.setObjectName("orderDetails")
         status = QLabel(status_text)
-        status.setObjectName("statusPillPaused" if status_text == "WSTRZYMANE" else "statusPill")
+        status.setObjectName(
+            "statusPillPaused" if status_text == "WSTRZYMANE" else "statusPill"
+        )
 
         top.addWidget(code_label)
         top.addWidget(product_label)
@@ -1260,7 +1274,6 @@ class DepartmentPage(PageBase):
         bar.setMinimumHeight(sp(30))
         box.addWidget(bar)
 
-        bottom = QHBoxLayout()
         remaining = max(0, total - done)
         try:
             capacity = self.store.get_department_order_capacity(
@@ -1271,52 +1284,103 @@ class DepartmentPage(PageBase):
         except ValueError:
             available_now = 0
 
+        session = self.store.get_department_session(code, self.department)
+        session_status = str(session["status"]) if session else ""
+        workers = []
+        if session:
+            workers = [
+                str(worker["worker_name"])
+                for worker in session.get("workers", [])
+                if not worker.get("left_at")
+            ]
+
+        info_row = QHBoxLayout()
         info = QLabel(
             f"Pozostało: {remaining} szt. • dostępne teraz: {available_now} szt. • "
             f"kolejność: {idx + 1}"
         )
         info.setObjectName("hint")
-        bottom.addWidget(info)
-        bottom.addStretch(1)
-        for text in ("Rozpocznij", "Wstrzymaj", "Wznów", "Dodaj ilość", "Problem", "Szczegóły"):
+        info_row.addWidget(info)
+        info_row.addStretch(1)
+
+        if session:
+            session_label = QLabel(
+                f"SESJA #{session['id']} • {session_status} • "
+                f"obsada: {', '.join(workers) if workers else '—'}"
+            )
+            session_label.setObjectName(
+                "sessionPaused" if session_status == "WSTRZYMANA" else "sessionActive"
+            )
+        else:
+            session_label = QLabel("BRAK OTWARTEJ SESJI")
+            session_label.setObjectName("sessionNone")
+        info_row.addWidget(session_label)
+        box.addLayout(info_row)
+
+        bottom = QHBoxLayout()
+        button_specs = (
+            "Rozpocznij",
+            "Wstrzymaj",
+            "Wznów",
+            "Dodaj ilość",
+            "Zakończ sesję",
+            "Problem",
+            "Szczegóły",
+        )
+        for text in button_specs:
             btn = QPushButton(text)
+
             if text in {"Rozpocznij", "Wznów"}:
                 btn.setObjectName("primary")
-            elif text == "Wstrzymaj":
+            elif text in {"Wstrzymaj", "Zakończ sesję"}:
                 btn.setObjectName("warningGhost")
             elif text == "Problem":
                 btn.setObjectName("dangerGhost")
 
             if text == "Rozpocznij":
-                btn.setEnabled(status_text == "OCZEKUJE")
+                btn.setEnabled(
+                    session is None
+                    and remaining > 0
+                    and available_now > 0
+                )
                 btn.clicked.connect(
-                    lambda checked=False, z=code: self._set_status(z, "AKTYWNE")
+                    lambda checked=False, z=code: self._start_session(z)
                 )
             elif text == "Wstrzymaj":
-                btn.setEnabled(status_text == "AKTYWNE")
+                btn.setEnabled(session_status == "AKTYWNA")
                 btn.clicked.connect(
-                    lambda checked=False, z=code: self._set_status(z, "WSTRZYMANE")
+                    lambda checked=False, z=code: self._pause_session(z)
                 )
             elif text == "Wznów":
-                btn.setEnabled(status_text == "WSTRZYMANE")
+                btn.setEnabled(session_status == "WSTRZYMANA")
                 btn.clicked.connect(
-                    lambda checked=False, z=code: self._set_status(z, "AKTYWNE")
+                    lambda checked=False, z=code: self._resume_session(z)
                 )
             elif text == "Dodaj ilość":
                 btn.setEnabled(
-                    status_text == "AKTYWNE"
+                    session_status == "AKTYWNA"
                     and remaining > 0
                     and available_now > 0
                 )
                 btn.clicked.connect(
                     lambda checked=False, z=code, r=remaining: self._add_quantity(z, r)
                 )
+            elif text == "Zakończ sesję":
+                btn.setEnabled(session is not None)
+                btn.clicked.connect(
+                    lambda checked=False, z=code: self._finish_session(z)
+                )
             elif text == "Problem":
-                btn.clicked.connect(lambda: mock_message(self, "Problem produkcyjny"))
+                btn.clicked.connect(
+                    lambda: mock_message(self, "Problem produkcyjny")
+                )
             else:
-                btn.clicked.connect(lambda: mock_message(self, "Szczegóły zlecenia"))
+                btn.clicked.connect(
+                    lambda: mock_message(self, "Szczegóły zlecenia")
+                )
 
             bottom.addWidget(btn)
+
         box.addLayout(bottom)
         return frame
 
@@ -1347,7 +1411,9 @@ class DepartmentPage(PageBase):
             empty_layout = QVBoxLayout(empty)
             empty_layout.setContentsMargins(sp(18), sp(18), sp(18), sp(18))
             empty_layout.addWidget(section_heading("Brak zleceń w kolejce"))
-            hint = QLabel("Dla tego działu nie ma obecnie pozycji w bazie Development.")
+            hint = QLabel(
+                "Dla tego działu nie ma obecnie pozycji w bazie Development."
+            )
             hint.setObjectName("hint")
             empty_layout.addWidget(hint)
             self.cards_layout.addWidget(empty)
@@ -1366,24 +1432,115 @@ class DepartmentPage(PageBase):
 
         self.cards_layout.addStretch(1)
 
-    def _set_status(self, code: str, status: str) -> None:
+    def _start_session(self, code: str) -> None:
+        workers_text, ok = QInputDialog.getText(
+            self,
+            "Rozpocznij sesję",
+            f"{code} • {self.department}\n\n"
+            "Podaj obsadę. Kilka osób rozdziel przecinkiem:",
+        )
+        if not ok:
+            return
+
+        workers = [
+            worker.strip()
+            for worker in re.split(r"[,;]", workers_text)
+            if worker.strip()
+        ]
+        if not workers:
+            QMessageBox.warning(
+                self,
+                "Rozpocznij sesję",
+                "Podaj co najmniej jedną osobę.",
+            )
+            return
+
         try:
-            self.store.set_department_order_status(
+            session = self.store.start_production_session(
                 code,
                 self.department,
-                status,
+                workers,
                 actor="development-user",
             )
             app_log(
-                f"Status operacji: {code} • {self.department} -> {status}"
+                f"Sesja #{session['id']} rozpoczęta: "
+                f"{code} • {self.department} • {', '.join(workers)}"
             )
-            mark_update_check("operation:status")
+            mark_update_check("session:start")
             self.refresh_data()
         except ValueError as exc:
-            QMessageBox.warning(self, "Nie można zmienić statusu", str(exc))
+            QMessageBox.warning(self, "Nie można rozpocząć sesji", str(exc))
+
+    def _pause_session(self, code: str) -> None:
+        try:
+            session = self.store.pause_production_session(
+                code,
+                self.department,
+                actor="development-user",
+            )
+            app_log(
+                f"Sesja #{session['id']} wstrzymana: {code} • {self.department}"
+            )
+            mark_update_check("session:pause")
+            self.refresh_data()
+        except ValueError as exc:
+            QMessageBox.warning(self, "Nie można wstrzymać sesji", str(exc))
+
+    def _resume_session(self, code: str) -> None:
+        try:
+            session = self.store.resume_production_session(
+                code,
+                self.department,
+                actor="development-user",
+            )
+            app_log(
+                f"Sesja #{session['id']} wznowiona: {code} • {self.department}"
+            )
+            mark_update_check("session:resume")
+            self.refresh_data()
+        except ValueError as exc:
+            QMessageBox.warning(self, "Nie można wznowić sesji", str(exc))
+
+    def _finish_session(self, code: str) -> None:
+        session = self.store.get_department_session(code, self.department)
+        if session is None:
+            return
+
+        answer = QMessageBox.question(
+            self,
+            "Zakończ sesję",
+            f"Zakończyć sesję #{session['id']} dla {code} • {self.department}?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+
+        try:
+            session_id = self.store.finish_production_session(
+                code,
+                self.department,
+                actor="development-user",
+            )
+            app_log(
+                f"Sesja #{session_id} zakończona: {code} • {self.department}"
+            )
+            mark_update_check("session:finish")
+            self.refresh_data()
+        except ValueError as exc:
+            QMessageBox.warning(self, "Nie można zakończyć sesji", str(exc))
 
     def _add_quantity(self, code: str, remaining: int) -> None:
         if remaining <= 0:
+            return
+
+        session = self.store.get_department_session(code, self.department)
+        if session is None or str(session["status"]) != "AKTYWNA":
+            QMessageBox.information(
+                self,
+                "Brak aktywnej sesji",
+                "Najpierw rozpocznij lub wznów sesję produkcyjną.",
+            )
             return
 
         try:
@@ -1411,6 +1568,7 @@ class DepartmentPage(PageBase):
             self,
             "Dodaj wykonaną ilość",
             f"{code} • {self.department}\n"
+            f"Sesja #{session['id']}\n"
             f"Dostępne teraz: {available_now} szt.\n"
             f"Pozostało wg planu: {demand_remaining} szt.\n\n"
             "Dodaj:",
@@ -1428,10 +1586,12 @@ class DepartmentPage(PageBase):
                 self.department,
                 quantity,
                 actor="development-user",
+                session_id=int(session["id"]),
             )
             app_log(
                 f"Dodano ilość: {code} • {self.department} • +{quantity} "
-                f"• postęp={result['progress']}% • gotowe={result['ready_percent']}%"
+                f"• sesja={session['id']} • postęp={result['progress']}% "
+                f"• gotowe={result['ready_percent']}%"
             )
             mark_update_check("operation:quantity")
             self.refresh_data()
@@ -3496,6 +3656,21 @@ QLabel#warningText {
     border-radius: 7px;
     padding: 10px;
     font-weight: 750;
+}
+QLabel#sessionActive {
+    color: #67dc8e;
+    font-size: 11px;
+    font-weight: 900;
+}
+QLabel#sessionPaused {
+    color: #e4bd68;
+    font-size: 11px;
+    font-weight: 900;
+}
+QLabel#sessionNone {
+    color: #727a74;
+    font-size: 11px;
+    font-weight: 800;
 }
 QLabel#diagnosticLabel {
     color: #dfe4e0;
