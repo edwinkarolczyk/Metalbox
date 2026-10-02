@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -454,6 +455,50 @@ class UiSmokeTest(unittest.TestCase):
                 panel.close()
             finally:
                 metalbox_app.DEV_UPDATE_STATE_FILE = original
+
+    def test_report_with_logs_includes_recent_app_and_runner_logs(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            temp_path = Path(temp)
+            original_app_log = metalbox_app.APP_LOG_FILE
+            original_log_dir = metalbox_app.LOG_DIR
+            original_source_state = metalbox_app.DEV_SOURCE_STATE_FILE
+            try:
+                metalbox_app.LOG_DIR = temp_path
+                metalbox_app.APP_LOG_FILE = temp_path / "metalbox.log"
+                metalbox_app.DEV_SOURCE_STATE_FILE = temp_path / "source_state.json"
+
+                metalbox_app.APP_LOG_FILE.write_text(
+                    "[2026-10-02 12:00:00] [INFO] Test Metalbox\n",
+                    encoding="utf-8",
+                )
+                (temp_path / "dev-runner.log").write_text(
+                    "[2026-10-02 12:00:01] [INFO] Test Runner\n",
+                    encoding="utf-8",
+                )
+                metalbox_app.DEV_SOURCE_STATE_FILE.write_text(
+                    json.dumps({"commit": "abc123"}),
+                    encoding="utf-8",
+                )
+
+                report = metalbox_app.format_update_report_with_logs(
+                    {
+                        "old_version": "0.1.19",
+                        "new_version": metalbox_app.APP_VERSION,
+                        "title": "Test",
+                        "ready_for_next": True,
+                        "completed_at": "2026-10-02T12:00:00",
+                        "changes": [],
+                    }
+                )
+                self.assertIn("DIAGNOSTYKA DO RAPORTU", report)
+                self.assertIn("Test Metalbox", report)
+                self.assertIn("Test Runner", report)
+                self.assertIn("Commit: abc123", report)
+                self.assertIn("Schemat bazy:", report)
+            finally:
+                metalbox_app.APP_LOG_FILE = original_app_log
+                metalbox_app.LOG_DIR = original_log_dir
+                metalbox_app.DEV_SOURCE_STATE_FILE = original_source_state
 
     def test_update_age_formats_seconds_minutes_and_hours(self) -> None:
         now = metalbox_app.datetime.fromisoformat("2026-10-02T10:00:00+00:00")
