@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Iterator
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 DEFAULT_ROUTE = ("Laser", "Giętarki", "Zgrzewarki", "Malarnia", "Pakownia")
 
 
@@ -106,6 +106,32 @@ class MetalboxStore:
 
                 CREATE INDEX IF NOT EXISTS idx_operation_progress_department
                     ON operation_progress(department, status);
+
+                CREATE TABLE IF NOT EXISTS production_sessions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+                    department TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'AKTYWNA',
+                    started_at TEXT NOT NULL,
+                    paused_at TEXT,
+                    ended_at TEXT,
+                    created_by TEXT NOT NULL DEFAULT 'system',
+                    note TEXT NOT NULL DEFAULT ''
+                );
+
+                CREATE TABLE IF NOT EXISTS session_workers (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id INTEGER NOT NULL REFERENCES production_sessions(id) ON DELETE CASCADE,
+                    worker_name TEXT NOT NULL,
+                    joined_at TEXT NOT NULL,
+                    left_at TEXT
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_sessions_order_department
+                    ON production_sessions(order_id, department, status);
+
+                CREATE INDEX IF NOT EXISTS idx_session_workers_session
+                    ON session_workers(session_id, left_at);
                 """
             )
 
@@ -941,6 +967,370 @@ class MetalboxStore:
             ),
         }
 
+    def get_department_session(
+        self,
+        code: str,
+        department: str,
+    ) -> dict | None:
+        with self._connect() as db:
+            row = db.execute(
+                """
+                SELECT
+                    s.id,
+                    s.status,
+                    s.started_at,
+                    s.paused_at,
+                    s.ended_at,
+                    s.created_by,
+                    s.note
+                FROM production_sessions s
+                JOIN orders o ON o.id = s.order_id
+                WHERE o.code = ?
+                  AND s.department = ?
+                  AND s.status IN ('AKTYWNA', 'WSTRZYMANA')
+                ORDER BY s.id DESC
+                LIMIT 1
+                """,
+                (code, department),
+            ).fetchone()
+            if row is None:
+                return None
+
+            workers = db.execute(
+                """
+                SELECT worker_name, joined_at, left_at
+                FROM session_workers
+                WHERE session_id = ?
+                ORDER BY id
+                """,
+                (int(row["id"]),),
+            ).fetchall()
+
+        result = dict(row)
+        result["workers"] = [dict(worker) for worker in workers]
+        return result
+
+    def start_production_session(
+        self,
+        code: str,
+        department: str,
+        workers: list[str],
+        *,
+        actor: str = "development-user",
+        note: str = "",
+    ) -> dict:
+        cleaned_workers = []
+        for worker in workers:
+            worker = str(worker).strip()
+            if worker and worker not in cleaned_workers:
+                cleaned_workers.append(worker)
+        if not cleaned_workers:
+            raise ValueError("Podaj co najmniej jedną osobę w obsadzie.")
+
+        now = datetime.now(timezone.utc).isoformat()
+        with self._connect() as db:
+            order = db.execute(
+                "SELECT id FROM orders WHERE code = ?",
+                (code,),
+            ).fetchone()
+            if order is None:
+                raise ValueError(f"Nie znaleziono zlecenia {code}.")
+            order_id = int(order["id"])
+
+            existing = db.execute(
+                """
+                SELECT id
+                FROM production_sessions
+                WHERE order_id = ?
+                  AND department = ?
+                  AND status IN ('AKTYWNA', 'WSTRZYMANA')
+                LIMIT 1
+                """,
+                (order_id, department),
+            ).fetchone()
+            if existing is not None:
+                raise ValueError(
+                    f"Dla {code} w dziale {department} istnieje już otwarta sesja."
+                )
+
+            rows = self._department_operation_rows(
+                db,
+                order_id=order_id,
+                department=department,
+            )
+            eligible = [
+                row
+                for row in rows
+                if self._row_available_to_process(row) > 0
+                and int(row["good_qty"]) < int(row["planned_qty"])
+            ]
+            if not eligible:
+                raise ValueError(
+                    f"Brak dostępnych sztuk dla {code} w dziale {department}."
+                )
+
+            cursor = db.execute(
+                """
+                INSERT INTO production_sessions(
+                    order_id, department, status, started_at, created_by, note
+                )
+                VALUES (?, ?, 'AKTYWNA', ?, ?, ?)
+                """,
+                (order_id, department, now, actor, note.strip()),
+            )
+            session_id = int(cursor.lastrowid)
+
+            for worker in cleaned_workers:
+                db.execute(
+                    """
+                    INSERT INTO session_workers(
+                        session_id, worker_name, joined_at
+                    )
+                    VALUES (?, ?, ?)
+                    """,
+                    (session_id, worker, now),
+                )
+
+            for row in eligible:
+                db.execute(
+                    """
+                    UPDATE operation_progress
+                    SET status = 'AKTYWNE', updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (now, int(row["id"])),
+                )
+
+            self._audit_in_connection(
+                db,
+                actor=actor,
+                action="session_started",
+                entity_type="order",
+                entity_id=code,
+                payload={
+                    "session_id": session_id,
+                    "department": department,
+                    "workers": cleaned_workers,
+                },
+            )
+
+        session = self.get_department_session(code, department)
+        if session is None:
+            raise RuntimeError("Sesja została utworzona, ale nie można jej odczytać.")
+        return session
+
+    def pause_production_session(
+        self,
+        code: str,
+        department: str,
+        *,
+        actor: str = "development-user",
+    ) -> dict:
+        now = datetime.now(timezone.utc).isoformat()
+        with self._connect() as db:
+            row = db.execute(
+                """
+                SELECT s.id, s.order_id
+                FROM production_sessions s
+                JOIN orders o ON o.id = s.order_id
+                WHERE o.code = ?
+                  AND s.department = ?
+                  AND s.status = 'AKTYWNA'
+                ORDER BY s.id DESC
+                LIMIT 1
+                """,
+                (code, department),
+            ).fetchone()
+            if row is None:
+                raise ValueError("Brak aktywnej sesji do wstrzymania.")
+
+            session_id = int(row["id"])
+            order_id = int(row["order_id"])
+
+            db.execute(
+                """
+                UPDATE production_sessions
+                SET status = 'WSTRZYMANA', paused_at = ?
+                WHERE id = ?
+                """,
+                (now, session_id),
+            )
+            db.execute(
+                """
+                UPDATE operation_progress
+                SET status = 'WSTRZYMANE', updated_at = ?
+                WHERE department = ?
+                  AND order_item_id IN (
+                      SELECT id FROM order_items WHERE order_id = ?
+                  )
+                  AND good_qty < planned_qty
+                  AND status = 'AKTYWNE'
+                """,
+                (now, department, order_id),
+            )
+
+            self._audit_in_connection(
+                db,
+                actor=actor,
+                action="session_paused",
+                entity_type="order",
+                entity_id=code,
+                payload={"session_id": session_id, "department": department},
+            )
+
+        session = self.get_department_session(code, department)
+        if session is None:
+            raise RuntimeError("Nie można odczytać wstrzymanej sesji.")
+        return session
+
+    def resume_production_session(
+        self,
+        code: str,
+        department: str,
+        *,
+        actor: str = "development-user",
+    ) -> dict:
+        now = datetime.now(timezone.utc).isoformat()
+        with self._connect() as db:
+            row = db.execute(
+                """
+                SELECT s.id, s.order_id
+                FROM production_sessions s
+                JOIN orders o ON o.id = s.order_id
+                WHERE o.code = ?
+                  AND s.department = ?
+                  AND s.status = 'WSTRZYMANA'
+                ORDER BY s.id DESC
+                LIMIT 1
+                """,
+                (code, department),
+            ).fetchone()
+            if row is None:
+                raise ValueError("Brak wstrzymanej sesji do wznowienia.")
+
+            session_id = int(row["id"])
+            order_id = int(row["order_id"])
+            rows = self._department_operation_rows(
+                db,
+                order_id=order_id,
+                department=department,
+            )
+            eligible = [
+                operation
+                for operation in rows
+                if self._row_available_to_process(operation) > 0
+                and int(operation["good_qty"]) < int(operation["planned_qty"])
+            ]
+            if not eligible:
+                raise ValueError(
+                    "Nie można wznowić sesji — brak dostępnych sztuk z poprzedniego etapu."
+                )
+
+            db.execute(
+                """
+                UPDATE production_sessions
+                SET status = 'AKTYWNA', paused_at = NULL
+                WHERE id = ?
+                """,
+                (session_id,),
+            )
+            for operation in eligible:
+                db.execute(
+                    """
+                    UPDATE operation_progress
+                    SET status = 'AKTYWNE', updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (now, int(operation["id"])),
+                )
+
+            self._audit_in_connection(
+                db,
+                actor=actor,
+                action="session_resumed",
+                entity_type="order",
+                entity_id=code,
+                payload={"session_id": session_id, "department": department},
+            )
+
+        session = self.get_department_session(code, department)
+        if session is None:
+            raise RuntimeError("Nie można odczytać wznowionej sesji.")
+        return session
+
+    def finish_production_session(
+        self,
+        code: str,
+        department: str,
+        *,
+        actor: str = "development-user",
+    ) -> int:
+        now = datetime.now(timezone.utc).isoformat()
+        with self._connect() as db:
+            row = db.execute(
+                """
+                SELECT s.id, s.order_id
+                FROM production_sessions s
+                JOIN orders o ON o.id = s.order_id
+                WHERE o.code = ?
+                  AND s.department = ?
+                  AND s.status IN ('AKTYWNA', 'WSTRZYMANA')
+                ORDER BY s.id DESC
+                LIMIT 1
+                """,
+                (code, department),
+            ).fetchone()
+            if row is None:
+                raise ValueError("Brak otwartej sesji do zakończenia.")
+
+            session_id = int(row["id"])
+            order_id = int(row["order_id"])
+
+            db.execute(
+                """
+                UPDATE production_sessions
+                SET status = 'ZAKOŃCZONA', ended_at = ?
+                WHERE id = ?
+                """,
+                (now, session_id),
+            )
+            db.execute(
+                """
+                UPDATE session_workers
+                SET left_at = COALESCE(left_at, ?)
+                WHERE session_id = ?
+                """,
+                (now, session_id),
+            )
+            db.execute(
+                """
+                UPDATE operation_progress
+                SET
+                    status = CASE
+                        WHEN good_qty >= planned_qty THEN 'GOTOWE'
+                        ELSE 'OCZEKUJE'
+                    END,
+                    updated_at = ?
+                WHERE department = ?
+                  AND order_item_id IN (
+                      SELECT id FROM order_items WHERE order_id = ?
+                  )
+                  AND status IN ('AKTYWNE', 'WSTRZYMANE')
+                """,
+                (now, department, order_id),
+            )
+
+            self._audit_in_connection(
+                db,
+                actor=actor,
+                action="session_finished",
+                entity_type="order",
+                entity_id=code,
+                payload={"session_id": session_id, "department": department},
+            )
+
+        return session_id
+
     def set_department_order_status(
         self,
         code: str,
@@ -1034,6 +1424,7 @@ class MetalboxStore:
         quantity: int,
         *,
         actor: str = "development-user",
+        session_id: int | None = None,
     ) -> dict:
         quantity = int(quantity)
         if quantity <= 0:
@@ -1112,6 +1503,7 @@ class MetalboxStore:
                     "department": department,
                     "quantity": quantity,
                     "rows": touched,
+                    "session_id": session_id,
                 },
             )
 
