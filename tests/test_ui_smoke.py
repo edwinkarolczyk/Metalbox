@@ -201,6 +201,43 @@ class UiSmokeTest(unittest.TestCase):
             self.assertGreaterEqual(page.rework_table.rowCount(), 1)
             page.close()
 
+    def test_update_check_auto_marks_matching_trigger(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            original = metalbox_app.DEV_UPDATE_STATE_FILE
+            try:
+                metalbox_app.DEV_UPDATE_STATE_FILE = Path(temp) / "update_state.json"
+                metalbox_app.save_dev_update_state(
+                    {
+                        "schema": 2,
+                        "status": "updated",
+                        "old_version": "0.1.13.2",
+                        "new_version": metalbox_app.APP_VERSION,
+                        "title": "Automatyczny analizator",
+                        "description": "Test triggera.",
+                        "ready_for_next": False,
+                        "changes": [
+                            {
+                                "id": "auto",
+                                "text": "Automatyczny punkt",
+                                "trigger": "test:auto",
+                                "checked": False,
+                                "checked_at": None,
+                                "note": "",
+                                "problem": False,
+                            }
+                        ],
+                    }
+                )
+
+                changed = metalbox_app.mark_update_check("test:auto")
+                self.assertTrue(changed)
+
+                state = metalbox_app.load_dev_update_state()
+                self.assertTrue(state["changes"][0]["checked"])
+                self.assertIsNotNone(state["changes"][0]["checked_at"])
+            finally:
+                metalbox_app.DEV_UPDATE_STATE_FILE = original
+
     def test_update_checklist_panel_constructs_and_persists(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             original = metalbox_app.DEV_UPDATE_STATE_FILE
