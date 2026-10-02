@@ -1,42 +1,112 @@
 {
   "schema": 1,
-  "version": "0.1.14",
-  "title": "Pełny obieg POPRAWKI",
-  "description": "Sprawdź cofnięcie sztuki do wcześniejszego etapu, naprawę, kontrolę i powrót do produkcji. Punkty zaliczają się automatycznie.",
+  "version": "0.1.15",
+  "title": "Widok pracownika + dokładny test POPRAWKI",
+  "description": "Wykonuj punkty po kolei. Każdy krok opisuje dokładnie co kliknąć i zalicza się automatycznie.",
   "checks": [
     {
+      "id": "panel-visible",
+      "text": "1. Uruchom Metalbox i sprawdź, że panel testów pojawił się na dole jako nakładka.",
+      "trigger": "update_panel:visible"
+    },
+    {
+      "id": "profile-open",
+      "text": "2. Kliknij w prawym górnym rogu przycisk PROFIL / rolę użytkownika.",
+      "trigger": "profile:open"
+    },
+    {
+      "id": "view-worker",
+      "text": "3. W Profilu kliknij „Pokaż widok pracownika”. Pasek ZLECENIA–USTAWIENIA ma zniknąć.",
+      "trigger": "view:worker"
+    },
+    {
+      "id": "worker-department",
+      "text": "4. Na pulpicie pracownika kliknij jedyny widoczny dział „Zgrzewarki”.",
+      "trigger": "department:open"
+    },
+    {
+      "id": "view-manager",
+      "text": "5. Wróć do Profilu i kliknij „Pokaż widok kierownika”. Pełny pasek zarządzania ma wrócić.",
+      "trigger": "view:manager"
+    },
+    {
+      "id": "quality-open",
+      "text": "6. Na pasku kierownika kliknij JAKOŚĆ.",
+      "trigger": "quality:open"
+    },
+    {
+      "id": "quality-dialog",
+      "text": "7. W module Jakość kliknij „Nowe zgłoszenie”.",
+      "trigger": "quality:dialog_open"
+    },
+    {
+      "id": "quality-order",
+      "text": "8. W polu „1. Zlecenie” rozwiń listę i wybierz ZL-740.",
+      "trigger": "quality:order_selected"
+    },
+    {
+      "id": "quality-department",
+      "text": "9. W polu „2. Dział zgłoszenia” rozwiń listę i wybierz Zgrzewarki.",
+      "trigger": "quality:department_selected"
+    },
+    {
+      "id": "quality-kind",
+      "text": "10. W polu „3. Typ” wybierz POPRAWKA.",
+      "trigger": "quality:kind_rework"
+    },
+    {
+      "id": "quality-target",
+      "text": "11. W polu „4. Cofnij do etapu” rozwiń listę i wybierz Giętarki. Pod spodem ma pojawić się opis trasy.",
+      "trigger": "quality:target_selected"
+    },
+    {
+      "id": "quality-qty",
+      "text": "12. Ustaw ilość poprawki na 1 szt. Jeśli już jest 1, zmień na 2 i z powrotem na 1.",
+      "trigger": "quality:quantity_set"
+    },
+    {
+      "id": "quality-reason",
+      "text": "13. W polu „6. Przyczyna” wpisz np. „Test poprawki” i kliknij poza pole.",
+      "trigger": "quality:reason_entered"
+    },
+    {
       "id": "rework-create",
-      "text": "Zgłoś POPRAWKĘ i wybierz wcześniejszy etap",
+      "text": "14. Kliknij „Zapisz zgłoszenie”. W module Jakość ma pojawić się nowa poprawka ze statusem DO_NAPRAWY.",
       "trigger": "rework:create"
     },
     {
       "id": "rework-start",
-      "text": "Rozpocznij naprawę poprawki",
+      "text": "15. Zaznacz nową poprawkę w tabeli „Poprawki w obiegu” i kliknij „Rozpocznij naprawę”.",
       "trigger": "rework:start"
     },
     {
       "id": "rework-repaired",
-      "text": "Oznacz poprawkę jako naprawioną",
+      "text": "16. Pozostaw tę poprawkę zaznaczoną i kliknij „Oznacz naprawione”.",
       "trigger": "rework:repaired"
     },
     {
       "id": "rework-accept",
-      "text": "Zaakceptuj poprawkę po kontroli",
+      "text": "17. Kliknij „Zaakceptuj poprawkę”. Status ma zmienić się na ZAMKNIĘTA.",
       "trigger": "rework:accept"
     },
     {
-      "id": "rework-history",
-      "text": "Otwórz historię ZL i sprawdź zmianę statusu poprawki",
+      "id": "orders-open",
+      "text": "18. Na górnym pasku kliknij ZLECENIA.",
+      "trigger": "page:orders"
+    },
+    {
+      "id": "order-open",
+      "text": "19. Otwórz ZL-740 z listy zleceń, a następnie kliknij „Historia”.",
       "trigger": "order:history"
     },
     {
-      "id": "analyzer-copy",
-      "text": "Kliknij Kopiuj raport — punkt ma być już OK w raporcie",
+      "id": "copy-report",
+      "text": "20. W dolnym panelu kliknij „Kopiuj raport”. W skopiowanym raporcie ten punkt ma już być OK.",
       "trigger": "update_panel:copy_report"
     },
     {
-      "id": "analyzer-ready",
-      "text": "Po zakończeniu kliknij Gotowy na następne zmiany",
+      "id": "ready-next",
+      "text": "21. Gdy wszystko sprawdzisz, kliknij „Gotowy na następne zmiany”.",
       "trigger": "update_panel:ready"
     }
   ]
