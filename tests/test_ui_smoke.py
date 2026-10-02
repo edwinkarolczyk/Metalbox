@@ -46,14 +46,51 @@ class UiSmokeTest(unittest.TestCase):
 
             dialog = metalbox_app.OrderEditorDialog(store)
             self.assertEqual(len(dialog.item_rows), 1)
+            self.assertIsNone(dialog.item_rows[0]["id"])
+            self.assertTrue(dialog.item_rows[0]["duplicate"].isEnabled())
             dialog.close()
+
+            created = store.create_order(
+                code="ZL-UI-18",
+                client="Test",
+                deadline="2026-11-10",
+                priority="NORMALNY",
+                status="NOWE",
+                items=[
+                    {"symbol": "A", "name": "Pierwszy", "quantity": 10},
+                    {"symbol": "B", "name": "Drugi", "quantity": 8},
+                ],
+            )
+            first_id = int(created["items"][0]["id"])
+            store.start_production_session(
+                "ZL-UI-18",
+                "Laser",
+                ["Dawid"],
+                order_item_id=first_id,
+            )
 
             edit_dialog = metalbox_app.OrderEditorDialog(
                 store,
-                order_code="ZL-740",
+                order_code="ZL-UI-18",
             )
-            self.assertTrue(edit_dialog.structure_locked)
-            self.assertGreaterEqual(len(edit_dialog.item_rows), 1)
+            self.assertEqual(len(edit_dialog.item_rows), 2)
+
+            started_row = edit_dialog.item_rows[0]
+            free_row = edit_dialog.item_rows[1]
+
+            self.assertTrue(started_row["started"])
+            self.assertFalse(started_row["symbol"].isEnabled())
+            self.assertFalse(started_row["name"].isEnabled())
+            self.assertTrue(started_row["quantity"].isEnabled())
+            self.assertFalse(started_row["remove"].isEnabled())
+            self.assertTrue(started_row["duplicate"].isEnabled())
+
+            self.assertFalse(free_row["started"])
+            self.assertTrue(free_row["symbol"].isEnabled())
+            self.assertTrue(free_row["name"].isEnabled())
+            self.assertTrue(free_row["quantity"].isEnabled())
+            self.assertTrue(free_row["remove"].isEnabled())
+            self.assertTrue(edit_dialog.add_item_button.isEnabled())
             edit_dialog.close()
 
     def test_session_workers_dialog_constructs(self) -> None:
