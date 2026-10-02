@@ -1088,8 +1088,9 @@ class MetalboxStore:
         *,
         actor: str = "development-user",
         note: str = "",
+        order_item_id: int | None = None,
     ) -> dict:
-        cleaned_workers = []
+        cleaned_workers: list[str] = []
         for worker in workers:
             worker = str(worker).strip()
             if worker and worker not in cleaned_workers:
@@ -1107,20 +1108,34 @@ class MetalboxStore:
                 raise ValueError(f"Nie znaleziono zlecenia {code}.")
             order_id = int(order["id"])
 
+            if order_item_id is not None:
+                item = db.execute(
+                    """
+                    SELECT id
+                    FROM order_items
+                    WHERE id = ? AND order_id = ?
+                    """,
+                    (int(order_item_id), order_id),
+                ).fetchone()
+                if item is None:
+                    raise ValueError("Wybrana pozycja nie należy do tego ZL.")
+
             existing = db.execute(
                 """
                 SELECT id
                 FROM production_sessions
                 WHERE order_id = ?
                   AND department = ?
+                  AND (? IS NULL OR order_item_id = ?)
                   AND status IN ('AKTYWNA', 'WSTRZYMANA')
                 LIMIT 1
                 """,
-                (order_id, department),
+                (order_id, department, order_item_id, order_item_id),
             ).fetchone()
             if existing is not None:
                 raise ValueError(
-                    f"Dla {code} w dziale {department} istnieje już otwarta sesja."
+                    f"Dla {code} w dziale {department} istnieje już otwarta sesja "
+                    "dla tej pozycji."
                 )
 
             rows = self._department_operation_rows(
@@ -1128,6 +1143,13 @@ class MetalboxStore:
                 order_id=order_id,
                 department=department,
             )
+            if order_item_id is not None:
+                rows = [
+                    row
+                    for row in rows
+                    if int(row["order_item_id"]) == int(order_item_id)
+                ]
+
             eligible = [
                 row
                 for row in rows
@@ -1142,11 +1164,24 @@ class MetalboxStore:
             cursor = db.execute(
                 """
                 INSERT INTO production_sessions(
-                    order_id, department, status, started_at, created_by, note
+                    order_id,
+                    order_item_id,
+                    department,
+                    status,
+                    started_at,
+                    created_by,
+                    note
                 )
-                VALUES (?, ?, 'AKTYWNA', ?, ?, ?)
+                VALUES (?, ?, ?, 'AKTYWNA', ?, ?, ?)
                 """,
-                (order_id, department, now, actor, note.strip()),
+                (
+                    order_id,
+                    order_item_id,
+                    department,
+                    now,
+                    actor,
+                    note.strip(),
+                ),
             )
             session_id = int(cursor.lastrowid)
 
@@ -1180,14 +1215,20 @@ class MetalboxStore:
                 payload={
                     "session_id": session_id,
                     "department": department,
+                    "order_item_id": order_item_id,
                     "workers": cleaned_workers,
                 },
             )
 
-        session = self.get_department_session(code, department)
+        session = self.get_department_session(
+            code,
+            department,
+            order_item_id,
+        )
         if session is None:
             raise RuntimeError("Sesja została utworzona, ale nie można jej odczytać.")
         return session
+
 
     def add_session_worker(
         self,
