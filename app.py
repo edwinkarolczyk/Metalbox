@@ -48,7 +48,7 @@ from PySide6.QtWidgets import (
 )
 
 APP_NAME = "Metalbox"
-APP_VERSION = "0.1.15.1"
+APP_VERSION = "0.1.16"
 LOCAL_DATA_ROOT = Path(
     os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
 ) / "Metalbox"
@@ -1398,14 +1398,17 @@ class QualityReportDialog(QDialog):
             self.order_combo.setEnabled(False)
         form.addRow("1. Zlecenie:", self.order_combo)
 
+        self.item_combo = QComboBox()
+        form.addRow("2. Pozycja / produkt:", self.item_combo)
+
         self.department_combo = QComboBox()
-        form.addRow("2. Dział zgłoszenia:", self.department_combo)
+        form.addRow("3. Dział zgłoszenia:", self.department_combo)
 
         self.kind_combo = QComboBox()
         self.kind_combo.addItems(["BRAK", "POPRAWKA", "ZŁOM"])
-        form.addRow("3. Typ:", self.kind_combo)
+        form.addRow("4. Typ:", self.kind_combo)
 
-        self.rework_target_label = QLabel("4. Cofnij do etapu:")
+        self.rework_target_label = QLabel("5. Cofnij do etapu:")
         self.rework_target_combo = QComboBox()
         form.addRow(self.rework_target_label, self.rework_target_combo)
 
@@ -1417,15 +1420,15 @@ class QualityReportDialog(QDialog):
         self.quantity_spin = QSpinBox()
         self.quantity_spin.setRange(1, 1_000_000)
         self.quantity_spin.setSuffix(" szt.")
-        form.addRow("5. Ilość:", self.quantity_spin)
+        form.addRow("6. Ilość:", self.quantity_spin)
 
         self.reason_edit = QLineEdit()
         self.reason_edit.setPlaceholderText("np. nieprawidłowy zgrzew, rysa, wymiar")
-        form.addRow("6. Przyczyna:", self.reason_edit)
+        form.addRow("7. Przyczyna:", self.reason_edit)
 
         self.note_edit = QLineEdit()
         self.note_edit.setPlaceholderText("Opcjonalna uwaga")
-        form.addRow("7. Uwagi:", self.note_edit)
+        form.addRow("8. Uwagi:", self.note_edit)
 
         self.capacity_label = QLabel()
         self.capacity_label.setObjectName("hint")
@@ -1458,12 +1461,14 @@ class QualityReportDialog(QDialog):
         footer.addWidget(self.save_button)
         root.addLayout(footer)
 
+        self._refresh_items_for_order()
         self._refresh_departments_for_order()
         if department:
             self.department_combo.setCurrentText(department)
             self.department_combo.setEnabled(False)
 
         self.order_combo.currentTextChanged.connect(self._on_order_changed)
+        self.item_combo.currentTextChanged.connect(self._on_item_changed)
         self.department_combo.currentTextChanged.connect(self._on_department_changed)
         self.kind_combo.currentTextChanged.connect(self._on_kind_changed)
         self.rework_target_combo.currentTextChanged.connect(
@@ -1481,16 +1486,61 @@ class QualityReportDialog(QDialog):
             str(self.department_combo.currentData() or "").strip(),
         )
 
+    def _selected_item_id(self) -> int | None:
+        value = self.item_combo.currentData()
+        if value in (None, ""):
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    def _refresh_items_for_order(self) -> None:
+        code = str(self.order_combo.currentData() or "").strip()
+        current = self._selected_item_id()
+
+        self.item_combo.blockSignals(True)
+        self.item_combo.clear()
+        self.item_combo.addItem("— wybierz pozycję produktu —", "")
+
+        if code:
+            order = self.store.get_order(code)
+            if order:
+                for item in order.get("items", []):
+                    item_id = int(item["id"])
+                    label = (
+                        f'{int(item["position_no"])}. {item["symbol"]} • '
+                        f'{item["name"]} • {int(item["quantity"])} szt.'
+                    )
+                    self.item_combo.addItem(label, item_id)
+
+        if current is not None:
+            index = self.item_combo.findData(current)
+            if index >= 0:
+                self.item_combo.setCurrentIndex(index)
+
+        self.item_combo.blockSignals(False)
+
     def _refresh_departments_for_order(self) -> None:
         code = str(self.order_combo.currentData() or "").strip()
+        item_id = self._selected_item_id()
         current = str(self.department_combo.currentData() or "").strip()
         departments: list[str] = []
 
-        if code:
+        if code and item_id is not None:
             for row in self.store.get_order_stage_progress(code):
                 name = str(row.get("department", "")).strip()
-                if name and name not in departments:
-                    departments.append(name)
+                if not name or name in departments:
+                    continue
+                try:
+                    self.store.get_item_department_capacity(
+                        code,
+                        item_id,
+                        name,
+                    )
+                except ValueError:
+                    continue
+                departments.append(name)
 
         self.department_combo.blockSignals(True)
         self.department_combo.clear()
@@ -1507,10 +1557,17 @@ class QualityReportDialog(QDialog):
         self.department_combo.blockSignals(False)
 
     def _on_order_changed(self, _text: str) -> None:
+        self._refresh_items_for_order()
         self._refresh_departments_for_order()
         self._refresh_context()
         if str(self.order_combo.currentData() or "").strip():
             mark_update_check("quality:order_selected")
+
+    def _on_item_changed(self, _text: str) -> None:
+        self._refresh_departments_for_order()
+        self._refresh_context()
+        if self._selected_item_id() is not None:
+            mark_update_check("quality:item_selected")
 
     def _on_department_changed(self, _text: str) -> None:
         self._refresh_context()
@@ -1567,13 +1624,15 @@ class QualityReportDialog(QDialog):
 
     def _update_save_state(self) -> None:
         code, department = self._context()
+        item_id = self._selected_item_id()
         kind = self.kind_combo.currentText().strip().upper()
 
         available = 0
-        if code and department:
+        if code and department and item_id is not None:
             try:
-                capacity = self.store.get_department_order_capacity(
+                capacity = self.store.get_item_department_capacity(
                     code,
+                    item_id,
                     department,
                 )
                 available = int(capacity["available_now"])
@@ -1589,6 +1648,7 @@ class QualityReportDialog(QDialog):
         enabled = (
             bool(code)
             and bool(department)
+            and item_id is not None
             and available > 0
             and target_ok
         )
@@ -1603,6 +1663,7 @@ class QualityReportDialog(QDialog):
 
     def _refresh_context(self) -> None:
         code, department = self._context()
+        item_id = self._selected_item_id()
         kind = self.kind_combo.currentText().strip().upper()
 
         is_rework = kind == "POPRAWKA"
@@ -1610,7 +1671,7 @@ class QualityReportDialog(QDialog):
         self.rework_target_combo.setVisible(is_rework)
         self.rework_help_label.setVisible(is_rework)
 
-        if not code or not department:
+        if not code or item_id is None or not department:
             self.capacity_label.setText("—")
             self.session_label.setText("—")
             self.rework_target_combo.clear()
@@ -1619,8 +1680,9 @@ class QualityReportDialog(QDialog):
             return
 
         try:
-            capacity = self.store.get_department_order_capacity(
+            capacity = self.store.get_item_department_capacity(
                 code,
+                item_id,
                 department,
             )
             available = int(capacity["available_now"])
@@ -1640,6 +1702,7 @@ class QualityReportDialog(QDialog):
             targets = self.store.get_rework_target_departments(
                 code,
                 department,
+                item_id,
             )
             self.rework_target_combo.addItem("— wybierz wcześniejszy etap —", "")
             for target in targets:
@@ -1665,11 +1728,12 @@ class QualityReportDialog(QDialog):
 
     def _save(self) -> None:
         code, department = self._context()
-        if not code or not department:
+        item_id = self._selected_item_id()
+        if not code or item_id is None or not department:
             QMessageBox.warning(
                 self,
                 "Zgłoszenie jakości",
-                "Wybierz ZL i dział.",
+                "Wybierz ZL, konkretną pozycję produktu i dział.",
             )
             return
 
@@ -1703,6 +1767,7 @@ class QualityReportDialog(QDialog):
                     if self.kind_combo.currentText() == "POPRAWKA"
                     else None
                 ),
+                order_item_id=item_id,
             )
             self.saved = True
             mark_update_check("quality:report")
