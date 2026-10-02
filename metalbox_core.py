@@ -1671,7 +1671,7 @@ class MetalboxStore:
 
             workers = db.execute(
                 """
-                SELECT worker_name, joined_at, left_at
+                SELECT employee_id, worker_name, joined_at, left_at
                 FROM session_workers
                 WHERE session_id = ?
                 ORDER BY id
@@ -1695,10 +1695,13 @@ class MetalboxStore:
         order_item_id: int | None = None,
     ) -> dict:
         cleaned_workers: list[str] = []
+        seen_workers: set[str] = set()
         for worker in workers:
             worker = str(worker).strip()
-            if worker and worker not in cleaned_workers:
+            key = worker.casefold()
+            if worker and key not in seen_workers:
                 cleaned_workers.append(worker)
+                seen_workers.add(key)
         if not cleaned_workers:
             raise ValueError("Podaj co najmniej jedną osobę w obsadzie.")
 
@@ -1765,6 +1768,24 @@ class MetalboxStore:
                     f"Brak dostępnych sztuk dla {code} w dziale {department}."
                 )
 
+            worker_records: list[tuple[int | None, str]] = []
+            for worker in cleaned_workers:
+                employee = self._resolve_employee_for_worker(db, worker)
+                if employee is not None and str(employee["status"]) != "AKTYWNY":
+                    raise ValueError(f"{employee['name']} ma nieaktywny profil pracownika.")
+                canonical_name = (
+                    str(employee["name"])
+                    if employee is not None
+                    else worker
+                )
+                employee_id = (
+                    int(employee["id"])
+                    if employee is not None
+                    else None
+                )
+                self._assert_worker_available(db, canonical_name)
+                worker_records.append((employee_id, canonical_name))
+
             cursor = db.execute(
                 """
                 INSERT INTO production_sessions(
@@ -1789,15 +1810,15 @@ class MetalboxStore:
             )
             session_id = int(cursor.lastrowid)
 
-            for worker in cleaned_workers:
+            for employee_id, worker_name in worker_records:
                 db.execute(
                     """
                     INSERT INTO session_workers(
-                        session_id, worker_name, joined_at
+                        session_id, employee_id, worker_name, joined_at
                     )
-                    VALUES (?, ?, ?)
+                    VALUES (?, ?, ?, ?)
                     """,
-                    (session_id, worker, now),
+                    (session_id, employee_id, worker_name, now),
                 )
 
             for row in eligible:
@@ -1820,7 +1841,7 @@ class MetalboxStore:
                     "session_id": session_id,
                     "department": department,
                     "order_item_id": order_item_id,
-                    "workers": cleaned_workers,
+                    "workers": [name for _employee_id, name in worker_records],
                 },
             )
 
@@ -1867,6 +1888,21 @@ class MetalboxStore:
                 raise ValueError("Brak otwartej sesji.")
 
             session_id = int(session["id"])
+            employee = self._resolve_employee_for_worker(db, worker_name)
+            if employee is not None and str(employee["status"]) != "AKTYWNY":
+                raise ValueError(f"{employee['name']} ma nieaktywny profil pracownika.")
+            if employee is not None:
+                worker_name = str(employee["name"])
+                employee_id = int(employee["id"])
+            else:
+                employee_id = None
+
+            self._assert_worker_available(
+                db,
+                worker_name,
+                exclude_session_id=session_id,
+            )
+
             exists = db.execute(
                 """
                 SELECT 1
@@ -1883,11 +1919,11 @@ class MetalboxStore:
             db.execute(
                 """
                 INSERT INTO session_workers(
-                    session_id, worker_name, joined_at
+                    session_id, employee_id, worker_name, joined_at
                 )
-                VALUES (?, ?, ?)
+                VALUES (?, ?, ?, ?)
                 """,
-                (session_id, worker_name, now),
+                (session_id, employee_id, worker_name, now),
             )
 
             self._audit_in_connection(
