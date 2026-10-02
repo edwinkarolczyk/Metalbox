@@ -2244,6 +2244,7 @@ class MetalboxStore:
         self,
         code: str,
         department: str,
+        order_item_id: int | None = None,
     ) -> dict:
         with self._connect() as db:
             order = db.execute(
