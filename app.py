@@ -2254,6 +2254,8 @@ class DepartmentPage(PageBase):
             "Szczegóły",
         ):
             btn = QPushButton(text)
+            btn.setProperty("orderCode", code)
+            btn.setProperty("orderItemId", item_id)
 
             if text in {"Rozpocznij", "Wznów"}:
                 btn.setObjectName("primary")
