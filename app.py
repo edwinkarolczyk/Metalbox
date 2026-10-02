@@ -1972,7 +1972,7 @@ class DepartmentPage(PageBase):
         super().__init__(
             department,
             go_home,
-            "Kolejka działu, sesje pracy i bieżąca produkcja z bazy Development.",
+            "Kolejka działu per konkretna pozycja produktu, sesje i bieżąca produkcja.",
         )
         self.department = department
         self.store = store
@@ -1982,7 +1982,7 @@ class DepartmentPage(PageBase):
         stats = QHBoxLayout()
         stats.setSpacing(sp(12))
         for key, title, note in [
-            ("active", "Aktywne", "zlecenia"),
+            ("active", "Aktywne", "pozycje"),
             ("waiting", "Oczekuje", "w kolejce"),
             ("paused", "Wstrzymane", "wymaga uwagi"),
             ("remaining_qty", "Do wykonania", "szt."),
@@ -2033,32 +2033,32 @@ class DepartmentPage(PageBase):
         configs = {
             "Laser": (
                 "Laser / półprodukty",
-                "Bieżące cięcie: dane z kolejki działu",
+                "Kolejka pokazuje teraz każdą pozycję produktu osobno.",
                 "Planowane: produkcja półproduktów również bez konkretnego ZL.",
             ),
             "Zgrzewarki": (
                 "Obsada i akord",
-                "Sesje pracy są już zapisywane w bazie Development.",
+                "Sesja i ilość są przypisane do konkretnej pozycji produktu.",
                 "Brygadzista zatwierdza dobre sztuki; stawki pieniężne pozostają ukryte.",
             ),
             "Malarnia": (
                 "Aktualny kolor",
-                "RAL zostanie podpięty z karty produktu.",
-                "Planowane: grupowanie po RAL, zużycie farby w kg i kolejka tylko z gotowych sztuk.",
+                "Pozycje są rozdzielone; RAL zostanie podpięty z karty produktu.",
+                "Planowane: grupowanie po RAL i zużycie farby w kg.",
             ),
             "Pakownia": (
                 "Pakowanie",
-                "Kolejka wysyłkowa będzie pobierana z gotowości ZL.",
-                "Planowane: sposób pakowania z karty produktu, palety, etykiety i gotowość wysyłki.",
+                "Gotowość będzie liczona per produkt i pozycja ZL.",
+                "Planowane: palety, etykiety i częściowe wysyłki.",
             ),
             "Magazyn": (
                 "Magazyn / bufory",
                 "Surowce • półprodukty • gotowe elementy",
-                "Planowane: bufor półproduktów, rezerwacje dla ZL i przekazania między działami.",
+                "Planowane: bufor półproduktów i rezerwacje dla pozycji ZL.",
             ),
             "Spawalnia": (
                 "Spawalnia",
-                "Sesje pracy są już dostępne na kartach ZL.",
+                "Sesje pracy i jakość są przypisane do konkretnego produktu.",
                 "Planowane: kontrola jakości i cofnięcia do naprawy.",
             ),
         }
@@ -2090,15 +2090,21 @@ class DepartmentPage(PageBase):
         layout.addWidget(button)
         return frame
 
-    def _order_card(
-        self,
-        code: str,
-        product: str,
-        total: int,
-        done: int,
-        status_text: str,
-        idx: int,
-    ) -> QFrame:
+    @staticmethod
+    def _product_label(row: dict) -> str:
+        return (
+            f'poz. {int(row["position_no"])} • '
+            f'{row["symbol"]} • {row["name"]}'
+        )
+
+    def _order_card(self, row: dict, idx: int) -> QFrame:
+        code = str(row["code"])
+        item_id = int(row["order_item_id"])
+        product = self._product_label(row)
+        total = int(row["planned_qty"])
+        done = int(row["good_qty"])
+        status_text = str(row["status"])
+
         frame = QFrame()
         frame.setObjectName("orderCard")
         frame.setMaximumWidth(sp(1540))
@@ -2136,17 +2142,22 @@ class DepartmentPage(PageBase):
 
         remaining = max(0, total - done)
         try:
-            capacity = self.store.get_department_order_capacity(
+            capacity = self.store.get_item_department_capacity(
                 code,
+                item_id,
                 self.department,
             )
             available_now = int(capacity["available_now"])
         except ValueError:
             available_now = 0
 
-        session = self.store.get_department_session(code, self.department)
+        session = self.store.get_department_session(
+            code,
+            self.department,
+            item_id,
+        )
         session_status = str(session["status"]) if session else ""
-        workers = []
+        workers: list[str] = []
         if session:
             workers = [
                 str(worker["worker_name"])
@@ -2157,7 +2168,7 @@ class DepartmentPage(PageBase):
         info_row = QHBoxLayout()
         info = QLabel(
             f"Pozostało: {remaining} szt. • dostępne teraz: {available_now} szt. • "
-            f"kolejność: {idx + 1}"
+            f"kolejność: {idx + 1} • pozycja ID {item_id}"
         )
         info.setObjectName("hint")
         info_row.addWidget(info)
@@ -2178,7 +2189,7 @@ class DepartmentPage(PageBase):
         box.addLayout(info_row)
 
         bottom = QHBoxLayout()
-        button_specs = (
+        for text in (
             "Rozpocznij",
             "Wstrzymaj",
             "Wznów",
@@ -2188,8 +2199,7 @@ class DepartmentPage(PageBase):
             "Zakończ sesję",
             "Problem",
             "Szczegóły",
-        )
-        for text in button_specs:
+        ):
             btn = QPushButton(text)
 
             if text in {"Rozpocznij", "Wznów"}:
@@ -2206,17 +2216,20 @@ class DepartmentPage(PageBase):
                     and available_now > 0
                 )
                 btn.clicked.connect(
-                    lambda checked=False, z=code: self._start_session(z)
+                    lambda checked=False, z=code, i=item_id, p=product:
+                    self._start_session(z, i, p)
                 )
             elif text == "Wstrzymaj":
                 btn.setEnabled(session_status == "AKTYWNA")
                 btn.clicked.connect(
-                    lambda checked=False, z=code: self._pause_session(z)
+                    lambda checked=False, z=code, i=item_id:
+                    self._pause_session(z, i)
                 )
             elif text == "Wznów":
                 btn.setEnabled(session_status == "WSTRZYMANA")
                 btn.clicked.connect(
-                    lambda checked=False, z=code: self._resume_session(z)
+                    lambda checked=False, z=code, i=item_id:
+                    self._resume_session(z, i)
                 )
             elif text == "Dodaj ilość":
                 btn.setEnabled(
@@ -2225,22 +2238,26 @@ class DepartmentPage(PageBase):
                     and available_now > 0
                 )
                 btn.clicked.connect(
-                    lambda checked=False, z=code, r=remaining: self._add_quantity(z, r)
+                    lambda checked=False, z=code, i=item_id, p=product:
+                    self._add_quantity(z, i, p)
                 )
             elif text == "Jakość":
                 btn.setEnabled(session is not None and available_now > 0)
                 btn.clicked.connect(
-                    lambda checked=False, z=code: self._report_quality(z)
+                    lambda checked=False, z=code, i=item_id:
+                    self._report_quality(z, i)
                 )
             elif text == "Obsada":
                 btn.setEnabled(session is not None)
                 btn.clicked.connect(
-                    lambda checked=False, z=code: self._manage_workers(z)
+                    lambda checked=False, z=code, i=item_id:
+                    self._manage_workers(z, i)
                 )
             elif text == "Zakończ sesję":
                 btn.setEnabled(session is not None)
                 btn.clicked.connect(
-                    lambda checked=False, z=code: self._finish_session(z)
+                    lambda checked=False, z=code, i=item_id:
+                    self._finish_session(z, i)
                 )
             elif text == "Problem":
                 btn.clicked.connect(
@@ -2248,7 +2265,7 @@ class DepartmentPage(PageBase):
                 )
             else:
                 btn.clicked.connect(
-                    lambda: mock_message(self, "Szczegóły zlecenia")
+                    lambda: mock_message(self, "Szczegóły pozycji ZL")
                 )
 
             bottom.addWidget(btn)
@@ -2282,33 +2299,31 @@ class DepartmentPage(PageBase):
             empty.setObjectName("panel")
             empty_layout = QVBoxLayout(empty)
             empty_layout.setContentsMargins(sp(18), sp(18), sp(18), sp(18))
-            empty_layout.addWidget(section_heading("Brak zleceń w kolejce"))
+            empty_layout.addWidget(section_heading("Brak pozycji w kolejce"))
             hint = QLabel(
-                "Dla tego działu nie ma obecnie pozycji w bazie Development."
+                "Dla tego działu nie ma obecnie pozycji produkcyjnych w bazie Development."
             )
             hint.setObjectName("hint")
             empty_layout.addWidget(hint)
             self.cards_layout.addWidget(empty)
         else:
-            for idx, order in enumerate(self.queue_rows):
+            for idx, row in enumerate(self.queue_rows):
                 self.cards_layout.addWidget(
-                    self._order_card(
-                        str(order["code"]),
-                        str(order["products"] or "—"),
-                        int(order["planned_qty"]),
-                        int(order["good_qty"]),
-                        str(order["status"]),
-                        idx,
-                    )
+                    self._order_card(row, idx)
                 )
 
         self.cards_layout.addStretch(1)
 
-    def _start_session(self, code: str) -> None:
+    def _start_session(
+        self,
+        code: str,
+        order_item_id: int,
+        product: str,
+    ) -> None:
         workers_text, ok = QInputDialog.getText(
             self,
             "Rozpocznij sesję",
-            f"{code} • {self.department}\n\n"
+            f"{code} • {product} • {self.department}\n\n"
             "Podaj obsadę. Kilka osób rozdziel przecinkiem:",
         )
         if not ok:
@@ -2333,63 +2348,73 @@ class DepartmentPage(PageBase):
                 self.department,
                 workers,
                 actor="development-user",
+                order_item_id=order_item_id,
             )
             app_log(
-                f"Sesja #{session['id']} rozpoczęta: "
-                f"{code} • {self.department} • {', '.join(workers)}"
+                f"Sesja #{session['id']} rozpoczęta: {code} • {product} • "
+                f"{self.department} • {', '.join(workers)}"
             )
-            mark_update_check("session:start")
+            mark_update_check("production:item_session_start")
             self.refresh_data()
         except ValueError as exc:
             QMessageBox.warning(self, "Nie można rozpocząć sesji", str(exc))
 
-    def _pause_session(self, code: str) -> None:
+    def _pause_session(self, code: str, order_item_id: int) -> None:
         try:
             session = self.store.pause_production_session(
                 code,
                 self.department,
                 actor="development-user",
+                order_item_id=order_item_id,
             )
             app_log(
-                f"Sesja #{session['id']} wstrzymana: {code} • {self.department}"
+                f"Sesja #{session['id']} wstrzymana: "
+                f"{code} • pozycja={order_item_id} • {self.department}"
             )
-            mark_update_check("session:pause")
+            mark_update_check("production:item_pause")
             self.refresh_data()
         except ValueError as exc:
             QMessageBox.warning(self, "Nie można wstrzymać sesji", str(exc))
 
-    def _resume_session(self, code: str) -> None:
+    def _resume_session(self, code: str, order_item_id: int) -> None:
         try:
             session = self.store.resume_production_session(
                 code,
                 self.department,
                 actor="development-user",
+                order_item_id=order_item_id,
             )
             app_log(
-                f"Sesja #{session['id']} wznowiona: {code} • {self.department}"
+                f"Sesja #{session['id']} wznowiona: "
+                f"{code} • pozycja={order_item_id} • {self.department}"
             )
-            mark_update_check("session:resume")
+            mark_update_check("production:item_resume")
             self.refresh_data()
         except ValueError as exc:
             QMessageBox.warning(self, "Nie można wznowić sesji", str(exc))
 
-    def _report_quality(self, code: str) -> None:
+    def _report_quality(self, code: str, order_item_id: int) -> None:
         dialog = QualityReportDialog(
             self.store,
             code=code,
             department=self.department,
+            order_item_id=order_item_id,
             parent=self,
         )
         if dialog.exec() == QDialog.Accepted and dialog.saved:
             self.refresh_data()
 
-    def _manage_workers(self, code: str) -> None:
-        session = self.store.get_department_session(code, self.department)
+    def _manage_workers(self, code: str, order_item_id: int) -> None:
+        session = self.store.get_department_session(
+            code,
+            self.department,
+            order_item_id,
+        )
         if session is None:
             QMessageBox.information(
                 self,
                 "Obsada",
-                "Najpierw rozpocznij sesję produkcyjną.",
+                "Najpierw rozpocznij sesję produkcyjną dla tej pozycji.",
             )
             return
 
@@ -2397,20 +2422,26 @@ class DepartmentPage(PageBase):
             self.store,
             code,
             self.department,
+            order_item_id,
             self,
         )
         dialog.exec()
         self.refresh_data()
 
-    def _finish_session(self, code: str) -> None:
-        session = self.store.get_department_session(code, self.department)
+    def _finish_session(self, code: str, order_item_id: int) -> None:
+        session = self.store.get_department_session(
+            code,
+            self.department,
+            order_item_id,
+        )
         if session is None:
             return
 
         answer = QMessageBox.question(
             self,
             "Zakończ sesję",
-            f"Zakończyć sesję #{session['id']} dla {code} • {self.department}?",
+            f"Zakończyć sesję #{session['id']} dla {code} • "
+            f"pozycja {order_item_id} • {self.department}?",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
         )
@@ -2422,31 +2453,40 @@ class DepartmentPage(PageBase):
                 code,
                 self.department,
                 actor="development-user",
+                order_item_id=order_item_id,
             )
             app_log(
-                f"Sesja #{session_id} zakończona: {code} • {self.department}"
+                f"Sesja #{session_id} zakończona: "
+                f"{code} • pozycja={order_item_id} • {self.department}"
             )
-            mark_update_check("session:finish")
+            mark_update_check("production:item_session_finish")
             self.refresh_data()
         except ValueError as exc:
             QMessageBox.warning(self, "Nie można zakończyć sesji", str(exc))
 
-    def _add_quantity(self, code: str, remaining: int) -> None:
-        if remaining <= 0:
-            return
-
-        session = self.store.get_department_session(code, self.department)
+    def _add_quantity(
+        self,
+        code: str,
+        order_item_id: int,
+        product: str,
+    ) -> None:
+        session = self.store.get_department_session(
+            code,
+            self.department,
+            order_item_id,
+        )
         if session is None or str(session["status"]) != "AKTYWNA":
             QMessageBox.information(
                 self,
                 "Brak aktywnej sesji",
-                "Najpierw rozpocznij lub wznów sesję produkcyjną.",
+                "Najpierw rozpocznij lub wznów sesję dla tej pozycji produktu.",
             )
             return
 
         try:
-            capacity = self.store.get_department_order_capacity(
+            capacity = self.store.get_item_department_capacity(
                 code,
+                order_item_id,
                 self.department,
             )
         except ValueError as exc:
@@ -2455,12 +2495,11 @@ class DepartmentPage(PageBase):
 
         available_now = int(capacity["available_now"])
         demand_remaining = int(capacity["remaining"])
-
         if available_now <= 0:
             QMessageBox.information(
                 self,
                 "Brak dostępnych sztuk",
-                f"{code} • {self.department}\n\n"
+                f"{code} • {product} • {self.department}\n\n"
                 "Poprzedni etap nie przekazał jeszcze kolejnych dobrych sztuk.",
             )
             return
@@ -2468,7 +2507,7 @@ class DepartmentPage(PageBase):
         quantity, ok = QInputDialog.getInt(
             self,
             "Dodaj wykonaną ilość",
-            f"{code} • {self.department}\n"
+            f"{code} • {product} • {self.department}\n"
             f"Sesja #{session['id']}\n"
             f"Dostępne teraz: {available_now} szt.\n"
             f"Pozostało wg planu: {demand_remaining} szt.\n\n"
@@ -2488,16 +2527,18 @@ class DepartmentPage(PageBase):
                 quantity,
                 actor="development-user",
                 session_id=int(session["id"]),
+                order_item_id=order_item_id,
             )
             app_log(
-                f"Dodano ilość: {code} • {self.department} • +{quantity} "
+                f"Dodano ilość: {code} • {product} • {self.department} • +{quantity} "
                 f"• sesja={session['id']} • postęp={result['progress']}% "
                 f"• gotowe={result['ready_percent']}%"
             )
-            mark_update_check("operation:quantity")
+            mark_update_check("production:item_quantity")
             self.refresh_data()
         except ValueError as exc:
             QMessageBox.warning(self, "Nie można dodać ilości", str(exc))
+
 
 
 class OrderEditorDialog(QDialog):
