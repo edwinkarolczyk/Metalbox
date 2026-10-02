@@ -48,7 +48,7 @@ from PySide6.QtWidgets import (
 )
 
 APP_NAME = "Metalbox"
-APP_VERSION = "0.1.18"
+APP_VERSION = "0.1.18.1"
 LOCAL_DATA_ROOT = Path(
     os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
 ) / "Metalbox"
@@ -193,13 +193,32 @@ def version_status_text() -> str:
     return f"DEV {APP_VERSION} • {last_update_age_text()}"
 
 
+UPDATE_CONTROL_TRIGGERS = {
+    "update_panel:copy_report",
+    "update_panel:ready",
+}
+
+
+def _is_update_control_item(item: dict) -> bool:
+    return str(item.get("trigger", "")).strip() in UPDATE_CONTROL_TRIGGERS
+
+
+def _functional_update_changes(state: dict) -> list[dict]:
+    changes = state.get("changes", [])
+    if not isinstance(changes, list):
+        return []
+    return [
+        item
+        for item in changes
+        if isinstance(item, dict) and not _is_update_control_item(item)
+    ]
+
+
 def format_update_test_report(state: dict) -> str:
     if not state:
         return "METALBOX — RAPORT TESTU AKTUALIZACJI\nBrak aktywnego raportu.\n"
 
-    changes = state.get("changes", [])
-    if not isinstance(changes, list):
-        changes = []
+    changes = _functional_update_changes(state)
 
     lines = [
         "METALBOX — RAPORT TESTU AKTUALIZACJI",
@@ -504,8 +523,8 @@ class UpdateChecklistPanel(QWidget):
         )
 
     def _progress_text(self) -> str:
-        changes = self.state.get("changes", [])
-        if not isinstance(changes, list) or not changes:
+        changes = _functional_update_changes(self.state)
+        if not changes:
             return "0 / 0"
 
         checked = sum(
@@ -541,7 +560,11 @@ class UpdateChecklistPanel(QWidget):
         if not isinstance(changes, list):
             changes = []
 
-        indexed = list(enumerate(changes))
+        indexed = [
+            pair
+            for pair in enumerate(changes)
+            if not _is_update_control_item(pair[1])
+        ]
         indexed.sort(
             key=lambda pair: (
                 0 if str(pair[1].get("note", "")).strip() else
@@ -658,7 +681,6 @@ class UpdateChecklistPanel(QWidget):
 
     def _copy_report(self) -> None:
         self.flush_notes()
-        mark_update_check("update_panel:copy_report")
         state = load_dev_update_state()
         QApplication.clipboard().setText(format_update_test_report(state))
         QMessageBox.information(
@@ -670,9 +692,7 @@ class UpdateChecklistPanel(QWidget):
     def _finish_cycle(self) -> None:
         self.flush_notes()
         state = load_dev_update_state()
-        changes = state.get("changes", [])
-        if not isinstance(changes, list):
-            changes = []
+        changes = _functional_update_changes(state)
 
         problems = sum(
             1 for item in changes if str(item.get("note", "")).strip()
@@ -681,8 +701,7 @@ class UpdateChecklistPanel(QWidget):
             1
             for item in changes
             if (
-                str(item.get("trigger", "")) != "update_panel:ready"
-                and not bool(item.get("checked", False))
+                not bool(item.get("checked", False))
                 and not str(item.get("note", "")).strip()
             )
         )
@@ -690,8 +709,8 @@ class UpdateChecklistPanel(QWidget):
         message = (
             f"Zakończyć test tej aktualizacji?\n\n"
             f"Oczekujące: {pending}\nUwagi / do poprawy: {problems}\n\n"
-            "Wynik i uwagi pozostaną zapisane lokalnie. "
-            "Następna aktualizacja utworzy nową checklistę."
+            "Po zatwierdzeniu wynik zostanie zapisany, a finalny raport "
+            "zostanie automatycznie skopiowany do schowka."
         )
         answer = QMessageBox.question(
             self,
@@ -703,19 +722,18 @@ class UpdateChecklistPanel(QWidget):
         if answer != QMessageBox.Yes:
             return
 
-        mark_update_check("update_panel:ready")
         state = load_dev_update_state()
-        changes = state.get("changes", [])
-        if not isinstance(changes, list):
-            changes = []
+        changes = _functional_update_changes(state)
         problems = sum(
             1 for item in changes if str(item.get("note", "")).strip()
         )
         pending = sum(
             1
             for item in changes
-            if not bool(item.get("checked", False))
-            and not str(item.get("note", "")).strip()
+            if (
+                not bool(item.get("checked", False))
+                and not str(item.get("note", "")).strip()
+            )
         )
 
         state["ready_for_next"] = True
@@ -723,9 +741,21 @@ class UpdateChecklistPanel(QWidget):
         state["completed_with_problems"] = problems
         state["completed_with_pending"] = pending
         save_dev_update_state(state)
+
+        final_report = format_update_test_report(state)
+        QApplication.clipboard().setText(final_report)
+
         app_log(
             f"Zakończono cykl testów aktualizacji: "
-            f"uwagi={problems}, oczekujące={pending}"
+            f"uwagi={problems}, oczekujące={pending}. "
+            "Finalny raport skopiowano do schowka."
+        )
+
+        QMessageBox.information(
+            self,
+            "Test zakończony",
+            "Test został zamknięty. Finalny raport z wynikiem "
+            "„Gotowy na następne zmiany: TAK” jest już w schowku.",
         )
 
         window = self.window()
