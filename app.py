@@ -4134,6 +4134,18 @@ class MainWindow(QMainWindow):
             )
 
     def open_page(self, page: QWidget) -> None:
+        if (
+            not self.view_state.management
+            and page in self._management_pages()
+        ):
+            QMessageBox.information(
+                self,
+                "Widok pracownika",
+                "Ten moduł jest dostępny tylko dla kierownika lub administratora.\n\n"
+                f"Twój widok: {self.view_state.role} • {self.view_state.department}",
+            )
+            return
+
         if hasattr(page, "refresh_data"):
             try:
                 page.refresh_data()
@@ -4149,10 +4161,23 @@ class MainWindow(QMainWindow):
             mark_update_check("alerts:open")
         elif page is self.quality_page:
             mark_update_check("quality:open")
+        elif page is self.user_profile_page:
+            mark_update_check("profile:open")
         app_log(f"Otwarty ekran: {page.__class__.__name__}")
         self._restart_inactivity_timer()
 
     def open_department(self, department: str) -> None:
+        if (
+            not self.view_state.management
+            and department != self.view_state.department
+        ):
+            QMessageBox.information(
+                self,
+                "Widok pracownika",
+                f"Masz przypisany dział: {self.view_state.department}.",
+            )
+            return
+
         mark_update_check("department:open")
         page = self.department_pages[department]
         if hasattr(page, "refresh_data"):
