@@ -952,6 +952,124 @@ class MetalboxStoreTests(unittest.TestCase):
             payload = event["payload"]
             self.assertEqual(int(payload["order_item_id"]), item_id)
 
+    def test_worker_cannot_be_assigned_to_two_open_sessions(self) -> None:
+        self.store.ensure_development_employees_seeded()
+        first = self.store.create_order(
+            code="ZL-W01",
+            client="Obsada",
+            deadline="2026-11-25",
+            priority="NORMALNY",
+            status="NOWE",
+            items=[{"symbol": "W-1", "name": "Pierwszy", "quantity": 5}],
+        )
+        second = self.store.create_order(
+            code="ZL-W02",
+            client="Obsada",
+            deadline="2026-11-25",
+            priority="NORMALNY",
+            status="NOWE",
+            items=[{"symbol": "W-2", "name": "Drugi", "quantity": 5}],
+        )
+        item_1 = int(first["items"][0]["id"])
+        item_2 = int(second["items"][0]["id"])
+
+        session = self.store.start_production_session(
+            "ZL-W01",
+            "Laser",
+            ["Dawid"],
+            order_item_id=item_1,
+        )
+        self.assertIsNotNone(session["workers"][0]["employee_id"])
+
+        with self.assertRaisesRegex(ValueError, "jest już przypisany"):
+            self.store.start_production_session(
+                "ZL-W02",
+                "Laser",
+                ["Dawid"],
+                order_item_id=item_2,
+            )
+
+    def test_worker_can_move_after_leaving_previous_session(self) -> None:
+        self.store.ensure_development_employees_seeded()
+        first = self.store.create_order(
+            code="ZL-W03",
+            client="Obsada",
+            deadline="2026-11-25",
+            priority="NORMALNY",
+            status="NOWE",
+            items=[{"symbol": "W-3", "name": "Pierwszy", "quantity": 5}],
+        )
+        second = self.store.create_order(
+            code="ZL-W04",
+            client="Obsada",
+            deadline="2026-11-25",
+            priority="NORMALNY",
+            status="NOWE",
+            items=[{"symbol": "W-4", "name": "Drugi", "quantity": 5}],
+        )
+        item_1 = int(first["items"][0]["id"])
+        item_2 = int(second["items"][0]["id"])
+
+        self.store.start_production_session(
+            "ZL-W03",
+            "Laser",
+            ["Dawid", "Marek"],
+            order_item_id=item_1,
+        )
+        self.store.remove_session_worker(
+            "ZL-W03",
+            "Laser",
+            "Dawid",
+            order_item_id=item_1,
+        )
+
+        moved = self.store.start_production_session(
+            "ZL-W04",
+            "Laser",
+            ["Dawid"],
+            order_item_id=item_2,
+        )
+        self.assertEqual(moved["workers"][0]["worker_name"], "Dawid")
+
+    def test_finished_session_closes_worker_time_and_history(self) -> None:
+        self.store.ensure_development_employees_seeded()
+        created = self.store.create_order(
+            code="ZL-W05",
+            client="Obsada",
+            deadline="2026-11-25",
+            priority="NORMALNY",
+            status="NOWE",
+            items=[{"symbol": "W-5", "name": "Historia", "quantity": 5}],
+        )
+        item_id = int(created["items"][0]["id"])
+        employees = self.store.list_employees(active_only=True)
+        dawid = next(row for row in employees if row["name"] == "Dawid")
+        employee_id = int(dawid["id"])
+
+        session = self.store.start_production_session(
+            "ZL-W05",
+            "Laser",
+            ["Dawid"],
+            order_item_id=item_id,
+        )
+        self.store.finish_production_session(
+            "ZL-W05",
+            "Laser",
+            order_item_id=item_id,
+        )
+
+        history = self.store.list_worker_work_log(employee_id=employee_id)
+        row = next(
+            entry
+            for entry in history
+            if int(entry["session_id"]) == int(session["id"])
+        )
+        self.assertEqual(int(row["employee_id"]), employee_id)
+        self.assertIsNotNone(row["left_at"])
+        self.assertGreaterEqual(int(row["duration_seconds"]), 0)
+        self.assertEqual(row["code"], "ZL-W05")
+        self.assertEqual(int(row["order_item_id"]), item_id)
+
     def test_status_change_is_audited(self) -> None:
         self.store.set_department_order_status(
             "ZL-740",
