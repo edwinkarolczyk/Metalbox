@@ -1939,6 +1939,7 @@ class MetalboxStore:
                 entity_id=code,
                 payload={
                     "department": department,
+                    "order_item_id": order_item_id,
                     "kind": kind,
                     "quantity": quantity,
                     "reason": reason,
@@ -1954,6 +1955,7 @@ class MetalboxStore:
             "quantity": quantity,
             "remaining_capacity": max(0, available_total - quantity),
             "rework_target_department": rework_target_department,
+            "order_item_id": order_item_id,
         }
 
     def get_rework_target_departments(
