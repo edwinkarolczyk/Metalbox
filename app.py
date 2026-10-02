@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
-from metalbox_core import MetalboxStore
+from metalbox_core import MetalboxStore, SCHEMA_VERSION
 
 from PySide6.QtCore import QEvent, Qt, QTimer
 from PySide6.QtGui import QColor
