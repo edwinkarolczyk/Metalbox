@@ -4400,6 +4400,11 @@ class MainWindow(QMainWindow):
         page = self.department_pages[department]
         if hasattr(page, "refresh_data"):
             page.refresh_data()
+        if (
+            getattr(page, "queue_rows", None)
+            and all("order_item_id" in row for row in page.queue_rows)
+        ):
+            mark_update_check("production:item_cards_visible")
         self.open_page(page)
 
     def open_order(self, code: str) -> None:
