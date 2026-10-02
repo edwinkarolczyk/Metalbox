@@ -1355,12 +1355,14 @@ class QualityReportDialog(QDialog):
         *,
         code: str | None = None,
         department: str | None = None,
+        order_item_id: int | None = None,
         parent=None,
     ):
         super().__init__(parent)
         self.store = store
         self.fixed_code = code
         self.fixed_department = department
+        self.fixed_order_item_id = order_item_id
         self.saved = False
 
         self.setWindowTitle("Zgłoszenie jakości")
@@ -1462,6 +1464,11 @@ class QualityReportDialog(QDialog):
         root.addLayout(footer)
 
         self._refresh_items_for_order()
+        if order_item_id is not None:
+            item_index = self.item_combo.findData(int(order_item_id))
+            if item_index >= 0:
+                self.item_combo.setCurrentIndex(item_index)
+                self.item_combo.setEnabled(False)
         self._refresh_departments_for_order()
         if department:
             self.department_combo.setCurrentText(department)
@@ -1715,7 +1722,11 @@ class QualityReportDialog(QDialog):
         self.rework_target_combo.setEnabled(bool(targets))
         self.rework_target_combo.blockSignals(False)
 
-        session = self.store.get_department_session(code, department)
+        session = self.store.get_department_session(
+            code,
+            department,
+            item_id,
+        )
         if session:
             self.session_label.setText(
                 f"#{session['id']} • {session['status']}"
@@ -1749,7 +1760,11 @@ class QualityReportDialog(QDialog):
             )
             return
 
-        session = self.store.get_department_session(code, department)
+        session = self.store.get_department_session(
+            code,
+            department,
+            item_id,
+        )
         session_id = int(session["id"]) if session else None
 
         try:
