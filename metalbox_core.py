@@ -9,6 +9,7 @@ from typing import Iterator
 
 
 SCHEMA_VERSION = 2
+DEFAULT_ROUTE = ("Laser", "Giętarki", "Zgrzewarki", "Malarnia", "Pakownia")
 
 
 class MetalboxStore:
@@ -432,6 +433,366 @@ class MetalboxStore:
             ).fetchall()
 
         return [dict(row) for row in rows]
+
+    @staticmethod
+    def _normalize_order_payload(
+        *,
+        code: str,
+        client: str,
+        deadline: str,
+        priority: str,
+        status: str,
+        items: list[dict],
+    ) -> dict:
+        code = code.strip().upper()
+        client = client.strip()
+        deadline = deadline.strip()
+        priority = priority.strip().upper()
+        status = status.strip().upper()
+
+        if not code:
+            raise ValueError("Numer ZL jest wymagany.")
+        if len(code) > 40:
+            raise ValueError("Numer ZL jest za długi.")
+        if not client:
+            raise ValueError("Klient jest wymagany.")
+        if priority not in {"NORMALNY", "WYSOKI"}:
+            raise ValueError("Nieprawidłowy priorytet.")
+        if status not in {"NOWE", "W TRAKCIE", "WSTRZYMANE", "ZAKOŃCZONE", "ANULOWANE"}:
+            raise ValueError("Nieprawidłowy status zlecenia.")
+
+        if deadline:
+            try:
+                datetime.strptime(deadline, "%Y-%m-%d")
+            except ValueError as exc:
+                raise ValueError("Termin musi mieć format RRRR-MM-DD.") from exc
+
+        cleaned_items: list[dict] = []
+        if not items:
+            raise ValueError("Zlecenie musi mieć co najmniej jedną pozycję.")
+
+        for index, item in enumerate(items, start=1):
+            symbol = str(item.get("symbol", "")).strip()
+            name = str(item.get("name", "")).strip()
+            try:
+                quantity = int(item.get("quantity", 0))
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"Pozycja {index}: ilość musi być liczbą całkowitą.") from exc
+
+            if not symbol:
+                raise ValueError(f"Pozycja {index}: symbol jest wymagany.")
+            if not name:
+                raise ValueError(f"Pozycja {index}: nazwa produktu jest wymagana.")
+            if quantity <= 0:
+                raise ValueError(f"Pozycja {index}: ilość musi być większa od zera.")
+
+            cleaned_items.append(
+                {
+                    "position_no": index,
+                    "symbol": symbol,
+                    "name": name,
+                    "quantity": quantity,
+                }
+            )
+
+        return {
+            "code": code,
+            "client": client,
+            "deadline": deadline,
+            "priority": priority,
+            "status": status,
+            "items": cleaned_items,
+        }
+
+    @staticmethod
+    def _insert_default_route(
+        db: sqlite3.Connection,
+        *,
+        order_item_id: int,
+        quantity: int,
+        now: str,
+    ) -> None:
+        for sequence_no, department in enumerate(DEFAULT_ROUTE, start=1):
+            db.execute(
+                """
+                INSERT INTO operation_progress(
+                    order_item_id,
+                    department,
+                    sequence_no,
+                    planned_qty,
+                    good_qty,
+                    reject_qty,
+                    rework_qty,
+                    status,
+                    updated_at
+                )
+                VALUES (?, ?, ?, ?, 0, 0, 0, 'OCZEKUJE', ?)
+                """,
+                (
+                    order_item_id,
+                    department,
+                    sequence_no,
+                    quantity,
+                    now,
+                ),
+            )
+
+    def create_order(
+        self,
+        *,
+        code: str,
+        client: str,
+        deadline: str,
+        priority: str,
+        status: str,
+        items: list[dict],
+        actor: str = "development-user",
+    ) -> dict:
+        payload = self._normalize_order_payload(
+            code=code,
+            client=client,
+            deadline=deadline,
+            priority=priority,
+            status=status,
+            items=items,
+        )
+        now = datetime.now(timezone.utc).isoformat()
+
+        with self._connect() as db:
+            exists = db.execute(
+                "SELECT 1 FROM orders WHERE code = ?",
+                (payload["code"],),
+            ).fetchone()
+            if exists is not None:
+                raise ValueError(f"Zlecenie {payload['code']} już istnieje.")
+
+            cursor = db.execute(
+                """
+                INSERT INTO orders(
+                    code, client, deadline, priority, status,
+                    progress, ready_percent, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, 0, 0, ?, ?)
+                """,
+                (
+                    payload["code"],
+                    payload["client"],
+                    payload["deadline"],
+                    payload["priority"],
+                    payload["status"],
+                    now,
+                    now,
+                ),
+            )
+            order_id = int(cursor.lastrowid)
+
+            for item in payload["items"]:
+                item_cursor = db.execute(
+                    """
+                    INSERT INTO order_items(
+                        order_id, position_no, symbol, name, quantity
+                    )
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        order_id,
+                        item["position_no"],
+                        item["symbol"],
+                        item["name"],
+                        item["quantity"],
+                    ),
+                )
+                self._insert_default_route(
+                    db,
+                    order_item_id=int(item_cursor.lastrowid),
+                    quantity=int(item["quantity"]),
+                    now=now,
+                )
+
+            self._audit_in_connection(
+                db,
+                actor=actor,
+                action="order_created",
+                entity_type="order",
+                entity_id=payload["code"],
+                payload={
+                    "client": payload["client"],
+                    "deadline": payload["deadline"],
+                    "priority": payload["priority"],
+                    "status": payload["status"],
+                    "items": payload["items"],
+                },
+            )
+
+        created = self.get_order(payload["code"])
+        if created is None:
+            raise RuntimeError("Zlecenie zostało zapisane, ale nie można go ponownie odczytać.")
+        return created
+
+    def order_has_production_activity(self, code: str) -> bool:
+        with self._connect() as db:
+            row = db.execute(
+                """
+                SELECT 1
+                FROM operation_progress op
+                JOIN order_items oi ON oi.id = op.order_item_id
+                JOIN orders o ON o.id = oi.order_id
+                WHERE o.code = ?
+                  AND (
+                      op.good_qty > 0
+                      OR op.reject_qty > 0
+                      OR op.rework_qty > 0
+                      OR op.status IN ('AKTYWNE', 'WSTRZYMANE', 'GOTOWE')
+                  )
+                LIMIT 1
+                """,
+                (code,),
+            ).fetchone()
+        return row is not None
+
+    def update_order(
+        self,
+        original_code: str,
+        *,
+        code: str,
+        client: str,
+        deadline: str,
+        priority: str,
+        status: str,
+        items: list[dict],
+        actor: str = "development-user",
+    ) -> dict:
+        payload = self._normalize_order_payload(
+            code=code,
+            client=client,
+            deadline=deadline,
+            priority=priority,
+            status=status,
+            items=items,
+        )
+        original_code = original_code.strip().upper()
+        now = datetime.now(timezone.utc).isoformat()
+
+        with self._connect() as db:
+            order = db.execute(
+                "SELECT id FROM orders WHERE code = ?",
+                (original_code,),
+            ).fetchone()
+            if order is None:
+                raise ValueError(f"Nie znaleziono zlecenia {original_code}.")
+            order_id = int(order["id"])
+
+            if payload["code"] != original_code:
+                collision = db.execute(
+                    "SELECT 1 FROM orders WHERE code = ?",
+                    (payload["code"],),
+                ).fetchone()
+                if collision is not None:
+                    raise ValueError(f"Zlecenie {payload['code']} już istnieje.")
+
+            activity = db.execute(
+                """
+                SELECT 1
+                FROM operation_progress op
+                JOIN order_items oi ON oi.id = op.order_item_id
+                WHERE oi.order_id = ?
+                  AND (
+                      op.good_qty > 0
+                      OR op.reject_qty > 0
+                      OR op.rework_qty > 0
+                      OR op.status IN ('AKTYWNE', 'WSTRZYMANE', 'GOTOWE')
+                  )
+                LIMIT 1
+                """,
+                (order_id,),
+            ).fetchone() is not None
+
+            existing_items = [
+                dict(row)
+                for row in db.execute(
+                    """
+                    SELECT position_no, symbol, name, quantity
+                    FROM order_items
+                    WHERE order_id = ?
+                    ORDER BY position_no
+                    """,
+                    (order_id,),
+                ).fetchall()
+            ]
+
+            structural_change = existing_items != payload["items"]
+            if activity and structural_change:
+                raise ValueError(
+                    "Nie można zmieniać pozycji ani ilości ZL po rozpoczęciu produkcji. "
+                    "Możesz nadal zmienić klienta, termin, priorytet lub status."
+                )
+
+            db.execute(
+                """
+                UPDATE orders
+                SET code = ?, client = ?, deadline = ?, priority = ?, status = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    payload["code"],
+                    payload["client"],
+                    payload["deadline"],
+                    payload["priority"],
+                    payload["status"],
+                    now,
+                    order_id,
+                ),
+            )
+
+            if structural_change:
+                db.execute(
+                    "DELETE FROM order_items WHERE order_id = ?",
+                    (order_id,),
+                )
+                for item in payload["items"]:
+                    item_cursor = db.execute(
+                        """
+                        INSERT INTO order_items(
+                            order_id, position_no, symbol, name, quantity
+                        )
+                        VALUES (?, ?, ?, ?, ?)
+                        """,
+                        (
+                            order_id,
+                            item["position_no"],
+                            item["symbol"],
+                            item["name"],
+                            item["quantity"],
+                        ),
+                    )
+                    self._insert_default_route(
+                        db,
+                        order_item_id=int(item_cursor.lastrowid),
+                        quantity=int(item["quantity"]),
+                        now=now,
+                    )
+
+            self._audit_in_connection(
+                db,
+                actor=actor,
+                action="order_updated",
+                entity_type="order",
+                entity_id=payload["code"],
+                payload={
+                    "previous_code": original_code,
+                    "client": payload["client"],
+                    "deadline": payload["deadline"],
+                    "priority": payload["priority"],
+                    "status": payload["status"],
+                    "structural_change": structural_change,
+                    "items": payload["items"],
+                },
+            )
+
+        updated = self.get_order(payload["code"])
+        if updated is None:
+            raise RuntimeError("Zlecenie zostało zmienione, ale nie można go ponownie odczytać.")
+        return updated
 
     def list_orders(
         self,
