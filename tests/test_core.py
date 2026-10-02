@@ -735,7 +735,7 @@ class MetalboxStoreTests(unittest.TestCase):
         ]
         self.assertTrue(matching)
         for event in matching:
-            payload = json.loads(event["payload_json"])
+            payload = event["payload"]
             self.assertEqual(int(payload["order_item_id"]), item_id)
 
     def test_status_change_is_audited(self) -> None:
