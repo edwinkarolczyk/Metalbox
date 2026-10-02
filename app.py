@@ -48,7 +48,7 @@ from PySide6.QtWidgets import (
 )
 
 APP_NAME = "Metalbox"
-APP_VERSION = "0.1.15"
+APP_VERSION = "0.1.15.1"
 LOCAL_DATA_ROOT = Path(
     os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
 ) / "Metalbox"
@@ -1524,6 +1524,7 @@ class QualityReportDialog(QDialog):
 
     def _on_rework_target_changed(self, target: str) -> None:
         self._refresh_rework_help()
+        self._update_save_state()
         if (
             str(self.rework_target_combo.currentData() or "").strip()
             and self.kind_combo.currentText() == "POPRAWKA"
@@ -1563,6 +1564,34 @@ class QualityReportDialog(QDialog):
             )
         self.rework_help_label.style().unpolish(self.rework_help_label)
         self.rework_help_label.style().polish(self.rework_help_label)
+
+    def _update_save_state(self) -> None:
+        code, department = self._context()
+        kind = self.kind_combo.currentText().strip().upper()
+
+        available = 0
+        if code and department:
+            try:
+                capacity = self.store.get_department_order_capacity(
+                    code,
+                    department,
+                )
+                available = int(capacity["available_now"])
+            except ValueError:
+                available = 0
+
+        target_ok = True
+        if kind == "POPRAWKA":
+            target_ok = bool(
+                str(self.rework_target_combo.currentData() or "").strip()
+            )
+
+        self.save_button.setEnabled(
+            bool(code)
+            and bool(department)
+            and available > 0
+            and target_ok
+        )
 
     def _refresh_context(self) -> None:
         code, department = self._context()
@@ -1623,13 +1652,7 @@ class QualityReportDialog(QDialog):
         else:
             self.session_label.setText("brak otwartej sesji")
 
-        self.save_button.setEnabled(
-            available > 0
-            and (
-                not is_rework
-                or bool(str(self.rework_target_combo.currentData() or "").strip())
-            )
-        )
+        self._update_save_state()
         self._refresh_rework_help()
 
     def _save(self) -> None:
