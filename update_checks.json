@@ -1,8 +1,8 @@
 {
   "schema": 1,
-  "version": "0.1.8.1",
-  "title": "Pierwszy działający przepływ produkcyjny — poprawka startu",
-  "description": "Sprawdź podstawowy przepływ ZL → dział → operacja → ilość → audyt. Punkty zaznaczają się automatycznie podczas używania programu.",
+  "version": "0.1.9",
+  "title": "Tworzenie i edycja zleceń",
+  "description": "Sprawdź nowy kreator ZL. Punkty zaznaczają się automatycznie po wykonaniu czynności.",
   "checks": [
     {
       "id": "orders-open",
@@ -10,38 +10,28 @@
       "trigger": "page:orders"
     },
     {
-      "id": "orders-search",
-      "text": "Wyszukaj ZL po numerze, kliencie, symbolu lub nazwie produktu",
-      "trigger": "orders:search"
+      "id": "order-create",
+      "text": "Utwórz nowe ZL z co najmniej jedną pozycją",
+      "trigger": "order:create"
+    },
+    {
+      "id": "order-update",
+      "text": "Edytuj istniejące ZL i zapisz zmianę",
+      "trigger": "order:update"
     },
     {
       "id": "order-open",
-      "text": "Otwórz szczegóły dowolnego ZL",
+      "text": "Otwórz szczegóły zapisanego ZL",
       "trigger": "order:open"
     },
     {
-      "id": "department-open",
-      "text": "Wejdź do dowolnego działu produkcyjnego",
-      "trigger": "department:open"
-    },
-    {
-      "id": "operation-status",
-      "text": "Rozpocznij, wstrzymaj albo wznów operację",
-      "trigger": "operation:status"
-    },
-    {
-      "id": "operation-quantity",
-      "text": "Dodaj wykonaną ilość i sprawdź przeliczenie postępu",
-      "trigger": "operation:quantity"
-    },
-    {
-      "id": "alerts-open",
-      "text": "Otwórz Alerty i sprawdź wygenerowane pozycje",
-      "trigger": "alerts:open"
+      "id": "orders-search",
+      "text": "Wyszukaj utworzone ZL po numerze lub produkcie",
+      "trigger": "orders:search"
     },
     {
       "id": "order-history",
-      "text": "Otwórz historię ZL i sprawdź zapisane zdarzenia",
+      "text": "Otwórz historię ZL i sprawdź wpis utworzenia/edycji",
       "trigger": "order:history"
     },
     {
