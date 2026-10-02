@@ -1399,27 +1399,33 @@ class MetalboxStore:
         department: str,
         *,
         actor: str = "development-user",
+        order_item_id: int | None = None,
     ) -> dict:
         now = datetime.now(timezone.utc).isoformat()
         with self._connect() as db:
             row = db.execute(
                 """
-                SELECT s.id, s.order_id
+                SELECT s.id, s.order_id, s.order_item_id
                 FROM production_sessions s
                 JOIN orders o ON o.id = s.order_id
                 WHERE o.code = ?
                   AND s.department = ?
+                  AND (? IS NULL OR s.order_item_id = ?)
                   AND s.status = 'AKTYWNA'
                 ORDER BY s.id DESC
                 LIMIT 1
                 """,
-                (code, department),
+                (code, department, order_item_id, order_item_id),
             ).fetchone()
             if row is None:
                 raise ValueError("Brak aktywnej sesji do wstrzymania.")
 
             session_id = int(row["id"])
-            order_id = int(row["order_id"])
+            selected_item_id = (
+                int(row["order_item_id"])
+                if row["order_item_id"] is not None
+                else order_item_id
+            )
 
             db.execute(
                 """
@@ -1429,19 +1435,33 @@ class MetalboxStore:
                 """,
                 (now, session_id),
             )
-            db.execute(
-                """
-                UPDATE operation_progress
-                SET status = 'WSTRZYMANE', updated_at = ?
-                WHERE department = ?
-                  AND order_item_id IN (
-                      SELECT id FROM order_items WHERE order_id = ?
-                  )
-                  AND good_qty < planned_qty
-                  AND status = 'AKTYWNE'
-                """,
-                (now, department, order_id),
-            )
+
+            if selected_item_id is None:
+                db.execute(
+                    """
+                    UPDATE operation_progress
+                    SET status = 'WSTRZYMANE', updated_at = ?
+                    WHERE department = ?
+                      AND order_item_id IN (
+                          SELECT id FROM order_items WHERE order_id = ?
+                      )
+                      AND good_qty < planned_qty
+                      AND status = 'AKTYWNE'
+                    """,
+                    (now, department, int(row["order_id"])),
+                )
+            else:
+                db.execute(
+                    """
+                    UPDATE operation_progress
+                    SET status = 'WSTRZYMANE', updated_at = ?
+                    WHERE department = ?
+                      AND order_item_id = ?
+                      AND good_qty < planned_qty
+                      AND status = 'AKTYWNE'
+                    """,
+                    (now, department, int(selected_item_id)),
+                )
 
             self._audit_in_connection(
                 db,
@@ -1449,13 +1469,22 @@ class MetalboxStore:
                 action="session_paused",
                 entity_type="order",
                 entity_id=code,
-                payload={"session_id": session_id, "department": department},
+                payload={
+                    "session_id": session_id,
+                    "department": department,
+                    "order_item_id": selected_item_id,
+                },
             )
 
-        session = self.get_department_session(code, department)
+        session = self.get_department_session(
+            code,
+            department,
+            selected_item_id,
+        )
         if session is None:
             raise RuntimeError("Nie można odczytać wstrzymanej sesji.")
         return session
+
 
     def resume_production_session(
         self,
@@ -1463,32 +1492,45 @@ class MetalboxStore:
         department: str,
         *,
         actor: str = "development-user",
+        order_item_id: int | None = None,
     ) -> dict:
         now = datetime.now(timezone.utc).isoformat()
         with self._connect() as db:
             row = db.execute(
                 """
-                SELECT s.id, s.order_id
+                SELECT s.id, s.order_id, s.order_item_id
                 FROM production_sessions s
                 JOIN orders o ON o.id = s.order_id
                 WHERE o.code = ?
                   AND s.department = ?
+                  AND (? IS NULL OR s.order_item_id = ?)
                   AND s.status = 'WSTRZYMANA'
                 ORDER BY s.id DESC
                 LIMIT 1
                 """,
-                (code, department),
+                (code, department, order_item_id, order_item_id),
             ).fetchone()
             if row is None:
                 raise ValueError("Brak wstrzymanej sesji do wznowienia.")
 
             session_id = int(row["id"])
-            order_id = int(row["order_id"])
+            selected_item_id = (
+                int(row["order_item_id"])
+                if row["order_item_id"] is not None
+                else order_item_id
+            )
             rows = self._department_operation_rows(
                 db,
-                order_id=order_id,
+                order_id=int(row["order_id"]),
                 department=department,
             )
+            if selected_item_id is not None:
+                rows = [
+                    operation
+                    for operation in rows
+                    if int(operation["order_item_id"]) == int(selected_item_id)
+                ]
+
             eligible = [
                 operation
                 for operation in rows
@@ -1524,13 +1566,22 @@ class MetalboxStore:
                 action="session_resumed",
                 entity_type="order",
                 entity_id=code,
-                payload={"session_id": session_id, "department": department},
+                payload={
+                    "session_id": session_id,
+                    "department": department,
+                    "order_item_id": selected_item_id,
+                },
             )
 
-        session = self.get_department_session(code, department)
+        session = self.get_department_session(
+            code,
+            department,
+            selected_item_id,
+        )
         if session is None:
             raise RuntimeError("Nie można odczytać wznowionej sesji.")
         return session
+
 
     def finish_production_session(
         self,
@@ -1538,27 +1589,33 @@ class MetalboxStore:
         department: str,
         *,
         actor: str = "development-user",
+        order_item_id: int | None = None,
     ) -> int:
         now = datetime.now(timezone.utc).isoformat()
         with self._connect() as db:
             row = db.execute(
                 """
-                SELECT s.id, s.order_id
+                SELECT s.id, s.order_id, s.order_item_id
                 FROM production_sessions s
                 JOIN orders o ON o.id = s.order_id
                 WHERE o.code = ?
                   AND s.department = ?
+                  AND (? IS NULL OR s.order_item_id = ?)
                   AND s.status IN ('AKTYWNA', 'WSTRZYMANA')
                 ORDER BY s.id DESC
                 LIMIT 1
                 """,
-                (code, department),
+                (code, department, order_item_id, order_item_id),
             ).fetchone()
             if row is None:
                 raise ValueError("Brak otwartej sesji do zakończenia.")
 
             session_id = int(row["id"])
-            order_id = int(row["order_id"])
+            selected_item_id = (
+                int(row["order_item_id"])
+                if row["order_item_id"] is not None
+                else order_item_id
+            )
 
             db.execute(
                 """
@@ -1576,23 +1633,41 @@ class MetalboxStore:
                 """,
                 (now, session_id),
             )
-            db.execute(
-                """
-                UPDATE operation_progress
-                SET
-                    status = CASE
-                        WHEN good_qty >= planned_qty THEN 'GOTOWE'
-                        ELSE 'OCZEKUJE'
-                    END,
-                    updated_at = ?
-                WHERE department = ?
-                  AND order_item_id IN (
-                      SELECT id FROM order_items WHERE order_id = ?
-                  )
-                  AND status IN ('AKTYWNE', 'WSTRZYMANE')
-                """,
-                (now, department, order_id),
-            )
+
+            if selected_item_id is None:
+                db.execute(
+                    """
+                    UPDATE operation_progress
+                    SET
+                        status = CASE
+                            WHEN good_qty >= planned_qty THEN 'GOTOWE'
+                            ELSE 'OCZEKUJE'
+                        END,
+                        updated_at = ?
+                    WHERE department = ?
+                      AND order_item_id IN (
+                          SELECT id FROM order_items WHERE order_id = ?
+                      )
+                      AND status IN ('AKTYWNE', 'WSTRZYMANE')
+                    """,
+                    (now, department, int(row["order_id"])),
+                )
+            else:
+                db.execute(
+                    """
+                    UPDATE operation_progress
+                    SET
+                        status = CASE
+                            WHEN good_qty >= planned_qty THEN 'GOTOWE'
+                            ELSE 'OCZEKUJE'
+                        END,
+                        updated_at = ?
+                    WHERE department = ?
+                      AND order_item_id = ?
+                      AND status IN ('AKTYWNE', 'WSTRZYMANE')
+                    """,
+                    (now, department, int(selected_item_id)),
+                )
 
             self._audit_in_connection(
                 db,
@@ -1600,10 +1675,15 @@ class MetalboxStore:
                 action="session_finished",
                 entity_type="order",
                 entity_id=code,
-                payload={"session_id": session_id, "department": department},
+                payload={
+                    "session_id": session_id,
+                    "department": department,
+                    "order_item_id": selected_item_id,
+                },
             )
 
         return session_id
+
 
     def set_department_order_status(
         self,
