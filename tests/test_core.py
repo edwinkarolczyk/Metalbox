@@ -267,6 +267,77 @@ class MetalboxStoreTests(unittest.TestCase):
         self.assertIn("session_resumed", actions)
         self.assertIn("session_finished", actions)
 
+    def test_session_workers_can_join_and_leave(self) -> None:
+        session = self.store.start_production_session(
+            "ZL-740",
+            "Zgrzewarki",
+            ["Dawid"],
+            actor="test-user",
+        )
+        self.assertEqual(len(session["workers"]), 1)
+
+        session = self.store.add_session_worker(
+            "ZL-740",
+            "Zgrzewarki",
+            "Marek",
+            actor="test-user",
+        )
+        active = [
+            worker
+            for worker in session["workers"]
+            if worker["left_at"] is None
+        ]
+        self.assertEqual(
+            [worker["worker_name"] for worker in active],
+            ["Dawid", "Marek"],
+        )
+
+        session = self.store.remove_session_worker(
+            "ZL-740",
+            "Zgrzewarki",
+            "Dawid",
+            actor="test-user",
+        )
+        active = [
+            worker
+            for worker in session["workers"]
+            if worker["left_at"] is None
+        ]
+        self.assertEqual(
+            [worker["worker_name"] for worker in active],
+            ["Marek"],
+        )
+
+        with self.assertRaises(ValueError):
+            self.store.remove_session_worker(
+                "ZL-740",
+                "Zgrzewarki",
+                "Marek",
+                actor="test-user",
+            )
+
+        events = self.store.list_audit_events(
+            entity_type="order",
+            entity_id="ZL-740",
+            limit=100,
+        )
+        actions = {event["action"] for event in events}
+        self.assertIn("session_worker_joined", actions)
+        self.assertIn("session_worker_left", actions)
+
+    def test_duplicate_active_worker_is_blocked(self) -> None:
+        self.store.start_production_session(
+            "ZL-740",
+            "Zgrzewarki",
+            ["Dawid"],
+        )
+        with self.assertRaises(ValueError):
+            self.store.add_session_worker(
+                "ZL-740",
+                "Zgrzewarki",
+                "Dawid",
+            )
+
     def test_cannot_start_second_open_session(self) -> None:
         self.store.start_production_session(
             "ZL-740",
