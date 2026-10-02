@@ -1791,6 +1791,12 @@ class MetalboxStore:
                 order_id=order_id,
                 department=department,
             )
+            if order_item_id is not None:
+                rows = [
+                    row
+                    for row in rows
+                    if int(row["order_item_id"]) == int(order_item_id)
+                ]
             if not rows:
                 raise ValueError(f"Brak operacji {department} dla {code}.")
 
