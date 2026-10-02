@@ -1631,7 +1631,6 @@ class MetalboxStore:
         *,
         actor: str = "development-user",
         session_id: int | None = None,
-        rework_target_department: str | None = None,
     ) -> dict:
         quantity = int(quantity)
         if quantity <= 0:
@@ -1765,6 +1764,7 @@ class MetalboxStore:
         note: str = "",
         actor: str = "development-user",
         session_id: int | None = None,
+        rework_target_department: str | None = None,
     ) -> dict:
         kind = kind.strip().upper()
         aliases = {
