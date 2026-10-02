@@ -307,21 +307,14 @@ class UiSmokeTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             db_path = Path(temp) / "department-items.sqlite3"
             store = MetalboxStore(db_path)
-            created = store.create_order(
-                code="ZL-UI-17",
-                client="UI",
-                deadline="2026-11-30",
-                priority="NORMALNY",
-                status="NOWE",
-                items=[
-                    {"symbol": "UI-A", "name": "Pierwszy produkt", "quantity": 5},
-                    {"symbol": "UI-B", "name": "Drugi produkt", "quantity": 7},
-                ],
-            )
+            self.assertTrue(store.seed_development_data())
+
+            created = store.get_order("ZL-740")
+            self.assertIsNotNone(created)
             item_ids = {int(item["id"]) for item in created["items"]}
 
             page = metalbox_app.DepartmentPage(
-                "Laser",
+                "Zgrzewarki",
                 lambda: None,
                 store,
             )
@@ -330,9 +323,9 @@ class UiSmokeTest(unittest.TestCase):
             rows = [
                 row
                 for row in page.queue_rows
-                if row["code"] == "ZL-UI-17"
+                if row["code"] == "ZL-740"
             ]
-            self.assertEqual(len(rows), 2)
+            self.assertEqual(len(rows), 5)
             self.assertEqual(
                 {int(row["order_item_id"]) for row in rows},
                 item_ids,
@@ -343,11 +336,19 @@ class UiSmokeTest(unittest.TestCase):
                 for label in page.findChildren(metalbox_app.QLabel)
             }
             self.assertTrue(
-                any("UI-A" in text and "Pierwszy produkt" in text for text in labels)
+                any("1.435.135" in text and "SC600 RP Sorta" in text for text in labels)
             )
             self.assertTrue(
-                any("UI-B" in text and "Drugi produkt" in text for text in labels)
+                any("1.325.68" in text and "SC400 RP Sorta" in text for text in labels)
             )
+
+            start_buttons = [
+                button
+                for button in page.findChildren(metalbox_app.QPushButton)
+                if button.text() == "Rozpocznij"
+            ]
+            self.assertEqual(len(start_buttons), 5)
+            self.assertTrue(any(button.isEnabled() for button in start_buttons))
             page.close()
 
     def test_update_checklist_panel_constructs_and_persists(self) -> None:
