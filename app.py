@@ -49,7 +49,7 @@ from PySide6.QtWidgets import (
 )
 
 APP_NAME = "Metalbox"
-APP_VERSION = "0.1.24.1"
+APP_VERSION = "0.1.24.2"
 LOCAL_DATA_ROOT = Path(
     os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
 ) / "Metalbox"
@@ -271,12 +271,19 @@ def format_update_test_report(state: dict) -> str:
 
     changes = _functional_update_changes(state)
 
+    has_blockers = any(
+        str(item.get("note", "")).strip()
+        or not bool(item.get("checked", False))
+        for item in changes
+    )
+    ready_for_next = bool(state.get("ready_for_next")) and not has_blockers
+
     lines = [
         "METALBOX — RAPORT TESTU AKTUALIZACJI",
         f"Wersja: {state.get('old_version', '—')} -> {state.get('new_version', APP_VERSION)}",
         f"Tytuł: {state.get('title', 'Zmiany po aktualizacji')}",
         f"Utworzono: {state.get('updated_at', '—')}",
-        f"Gotowy na następne zmiany: {'TAK' if state.get('ready_for_next') else 'NIE'}",
+        f"Gotowy na następne zmiany: {'TAK' if ready_for_next else 'NIE'}",
         f"Zakończono test: {state.get('completed_at', '—')}",
         "",
     ]
@@ -507,10 +514,10 @@ class UpdateChecklistPanel(QWidget):
         self.collapse_btn.clicked.connect(self._toggle_collapsed)
         header.addWidget(self.collapse_btn)
 
-        ready_btn = QPushButton("Gotowy na następne zmiany")
-        ready_btn.setObjectName("primary")
-        ready_btn.clicked.connect(self._finish_cycle)
-        header.addWidget(ready_btn)
+        self.ready_btn = QPushButton("Gotowy na następne zmiany")
+        self.ready_btn.setObjectName("primary")
+        self.ready_btn.clicked.connect(self._finish_cycle)
+        header.addWidget(self.ready_btn)
 
         root.addLayout(header)
 
@@ -606,6 +613,22 @@ class UpdateChecklistPanel(QWidget):
             f"TEST ZMIAN  {old_version} → {new_version}"
         )
         self.progress_label.setText(self._progress_text())
+
+        functional_changes = _functional_update_changes(state)
+        blockers = [
+            item
+            for item in functional_changes
+            if (
+                str(item.get("note", "")).strip()
+                or not bool(item.get("checked", False))
+            )
+        ]
+        self.ready_btn.setEnabled(not blockers)
+        self.ready_btn.setToolTip(
+            ""
+            if not blockers
+            else "Najpierw zakończ wszystkie oczekujące punkty i usuń uwagi."
+        )
 
         changes = state.get("changes", [])
         if not isinstance(changes, list):
@@ -758,6 +781,21 @@ class UpdateChecklistPanel(QWidget):
                 and not str(item.get("note", "")).strip()
             )
         )
+
+        if pending or problems:
+            QMessageBox.warning(
+                self,
+                "Test nie jest zakończony",
+                "Nie można oznaczyć aktualizacji jako gotowej.\n\n"
+                f"Oczekujące: {pending}\n"
+                f"Uwagi / do poprawy: {problems}\n\n"
+                "Zakończ wszystkie punkty testu i usuń uwagi przed przejściem dalej.",
+            )
+            app_log(
+                "Zablokowano zakończenie testu aktualizacji: "
+                f"uwagi={problems}, oczekujące={pending}."
+            )
+            return
 
         message = (
             f"Zakończyć test tej aktualizacji?\n\n"
