@@ -3558,6 +3558,305 @@ class OrderDetailPage(PageBase):
         )
 
 
+class PlanColumnMappingDialog(QDialog):
+    FIELD_LABELS = (
+        ("order_code", "Nr ZL"),
+        ("product", "Produkt (symbol + nazwa)"),
+        ("symbol", "Symbol"),
+        ("name", "Nazwa"),
+        ("quantity", "Ilość"),
+        ("shipping", "Termin / wysyłka"),
+        ("ral", "RAL"),
+    )
+
+    def __init__(
+        self,
+        snapshot_path: Path,
+        source_name: str,
+        parent=None,
+        *,
+        saved: dict | None = None,
+        reason: str = "",
+    ):
+        super().__init__(parent)
+        self.snapshot_path = Path(snapshot_path)
+        self.source_name = source_name
+        self.previews = inspect_plan_snapshot(self.snapshot_path, max_rows=60)
+        self.saved = dict(saved or {})
+        self.result_sheet_name = ""
+        self.result_header_row = 1
+        self.result_mapping: dict[str, int] = {}
+        self.remember_mapping = True
+
+        self.setWindowTitle("Metalbox — dopasuj kolumny planu")
+        self.setModal(True)
+        self.resize(sp(1080), sp(720))
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(sp(18), sp(18), sp(18), sp(18))
+        root.setSpacing(sp(10))
+
+        title = QLabel("Dopasuj kolumny planu Excel")
+        title.setObjectName("detailTitle")
+        root.addWidget(title)
+
+        info_text = (
+            "Wskaż arkusz, wiersz nagłówków i kolumny odpowiadające polom Metalbox. "
+            "Mapowanie dotyczy wyłącznie lokalnego snapshotu — oryginalny Excel pozostaje zamknięty."
+        )
+        if reason:
+            info_text += f"\n\nAutomatyczne rozpoznanie: {reason}"
+        info = QLabel(info_text)
+        info.setObjectName("hint")
+        info.setWordWrap(True)
+        root.addWidget(info)
+
+        top_form = QFormLayout()
+        self.sheet_combo = QComboBox()
+        for preview in self.previews:
+            suffix = " • aktywny" if preview.get("is_active") else ""
+            self.sheet_combo.addItem(
+                f'{preview["sheet_name"]}{suffix}',
+                preview["sheet_name"],
+            )
+        top_form.addRow("Arkusz:", self.sheet_combo)
+
+        self.header_spin = QSpinBox()
+        self.header_spin.setRange(1, 9999)
+        top_form.addRow("Wiersz nagłówków:", self.header_spin)
+        root.addLayout(top_form)
+
+        mapping_frame = QFrame()
+        mapping_frame.setObjectName("panel")
+        mapping_layout = QFormLayout(mapping_frame)
+        mapping_layout.setContentsMargins(sp(14), sp(12), sp(14), sp(12))
+        mapping_layout.setHorizontalSpacing(sp(18))
+        mapping_layout.setVerticalSpacing(sp(7))
+
+        self.mapping_combos: dict[str, QComboBox] = {}
+        for field, label in self.FIELD_LABELS:
+            combo = QComboBox()
+            self.mapping_combos[field] = combo
+            mapping_layout.addRow(f"{label}:", combo)
+        root.addWidget(mapping_frame)
+
+        hint = QLabel(
+            "Wymagane: wskaż co najmniej Produkt, Symbol albo Nazwę oraz kolumnę Ilość. "
+            "Jeżeli jedna kolumna zawiera np. „1.435.135 SC600 RP Sorta”, przypisz ją do „Produkt (symbol + nazwa)”."
+        )
+        hint.setObjectName("hint")
+        hint.setWordWrap(True)
+        root.addWidget(hint)
+
+        self.preview_table = QTableWidget()
+        self.preview_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.preview_table.setSelectionMode(QAbstractItemView.NoSelection)
+        self.preview_table.setMinimumHeight(sp(230))
+        self.preview_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeToContents
+        )
+        root.addWidget(self.preview_table, 1)
+
+        self.remember_check = QCheckBox(
+            f'Zapamiętaj mapowanie dla pliku „{source_name}”'
+        )
+        self.remember_check.setChecked(True)
+        root.addWidget(self.remember_check)
+
+        footer = QHBoxLayout()
+        footer.addStretch(1)
+        cancel = QPushButton("Anuluj")
+        cancel.clicked.connect(self.reject)
+        footer.addWidget(cancel)
+
+        apply_btn = QPushButton("Użyj mapowania")
+        apply_btn.setObjectName("primary")
+        apply_btn.clicked.connect(self._accept_mapping)
+        footer.addWidget(apply_btn)
+        root.addLayout(footer)
+
+        self.sheet_combo.currentIndexChanged.connect(self._sheet_changed)
+        self.header_spin.valueChanged.connect(self._refresh_columns)
+
+        saved_sheet = str(self.saved.get("sheet_name", ""))
+        saved_index = self.sheet_combo.findData(saved_sheet)
+        if saved_index >= 0:
+            self.sheet_combo.setCurrentIndex(saved_index)
+        else:
+            best_index = 0
+            best_rank = -1
+            for index, preview in enumerate(self.previews):
+                rank = int(preview.get("score", 0))
+                if "plan" in str(preview.get("sheet_name", "")).casefold():
+                    rank += 2
+                if rank > best_rank:
+                    best_rank = rank
+                    best_index = index
+            if self.sheet_combo.count():
+                self.sheet_combo.setCurrentIndex(best_index)
+
+        self._sheet_changed()
+
+        saved_header = int(self.saved.get("header_row", 0) or 0)
+        if saved_header > 0:
+            self.header_spin.setValue(saved_header)
+            self._refresh_columns()
+
+        saved_mapping = self.saved.get("mapping", {})
+        if isinstance(saved_mapping, dict):
+            self._apply_mapping(saved_mapping)
+
+    @staticmethod
+    def _column_name(index: int) -> str:
+        result = ""
+        value = int(index)
+        while value > 0:
+            value, remainder = divmod(value - 1, 26)
+            result = chr(ord("A") + remainder) + result
+        return result or "?"
+
+    def _current_preview(self) -> dict:
+        sheet_name = str(self.sheet_combo.currentData() or "")
+        for preview in self.previews:
+            if preview.get("sheet_name") == sheet_name:
+                return preview
+        return self.previews[0] if self.previews else {
+            "sheet_name": "",
+            "rows": [],
+            "header_row": 1,
+            "detected_mapping": {},
+        }
+
+    def _sheet_changed(self, *_args) -> None:
+        preview = self._current_preview()
+        rows = preview.get("rows", [])
+        max_row = max(1, len(rows))
+        self.header_spin.blockSignals(True)
+        self.header_spin.setRange(1, max_row)
+        self.header_spin.setValue(
+            max(1, min(int(preview.get("header_row", 1) or 1), max_row))
+        )
+        self.header_spin.blockSignals(False)
+        self._refresh_columns()
+        detected = preview.get("detected_mapping", {})
+        if isinstance(detected, dict):
+            self._apply_mapping(detected)
+
+    def _column_label(
+        self,
+        column: int,
+        rows: list[list],
+        header_index: int,
+    ) -> str:
+        header = ""
+        if 0 <= header_index < len(rows) and column - 1 < len(rows[header_index]):
+            header = str(rows[header_index][column - 1] or "").strip()
+
+        sample = ""
+        for row in rows[header_index + 1: header_index + 8]:
+            if column - 1 < len(row):
+                value = str(row[column - 1] or "").strip()
+                if value:
+                    sample = value
+                    break
+
+        header_text = header or "<brak nagłówka>"
+        label = f"{self._column_name(column)} — {header_text}"
+        if sample:
+            short = sample if len(sample) <= 55 else sample[:52] + "..."
+            label += f" | przykład: {short}"
+        return label
+
+    def _refresh_columns(self, *_args) -> None:
+        preview = self._current_preview()
+        rows = [list(row) for row in preview.get("rows", [])]
+        header_index = max(0, self.header_spin.value() - 1)
+        max_columns = max((len(row) for row in rows), default=0)
+
+        previous = {
+            field: int(combo.currentData() or 0)
+            for field, combo in self.mapping_combos.items()
+        }
+
+        for field, combo in self.mapping_combos.items():
+            combo.blockSignals(True)
+            combo.clear()
+            combo.addItem("— brak —", 0)
+            for column in range(1, max_columns + 1):
+                combo.addItem(
+                    self._column_label(column, rows, header_index),
+                    column,
+                )
+            column = previous.get(field, 0)
+            index = combo.findData(column)
+            if index >= 0:
+                combo.setCurrentIndex(index)
+            combo.blockSignals(False)
+
+        preview_start = max(0, header_index)
+        preview_rows = rows[preview_start: preview_start + 8]
+        preview_columns = min(max_columns, 14)
+        self.preview_table.setColumnCount(preview_columns)
+        self.preview_table.setRowCount(len(preview_rows))
+        self.preview_table.setHorizontalHeaderLabels(
+            [self._column_name(i) for i in range(1, preview_columns + 1)]
+        )
+        for row_index, row in enumerate(preview_rows):
+            for column_index in range(preview_columns):
+                value = row[column_index] if column_index < len(row) else ""
+                self.preview_table.setItem(
+                    row_index,
+                    column_index,
+                    QTableWidgetItem(str(value or "")),
+                )
+            self.preview_table.setRowHeight(row_index, sp(30))
+
+    def _apply_mapping(self, mapping: dict) -> None:
+        for field, column in mapping.items():
+            combo = self.mapping_combos.get(str(field))
+            if combo is None:
+                continue
+            try:
+                column = int(column)
+            except (TypeError, ValueError):
+                continue
+            index = combo.findData(column)
+            if index >= 0:
+                combo.setCurrentIndex(index)
+
+    def _accept_mapping(self) -> None:
+        mapping = {
+            field: int(combo.currentData() or 0)
+            for field, combo in self.mapping_combos.items()
+        }
+        mapping = {
+            field: column
+            for field, column in mapping.items()
+            if column > 0
+        }
+
+        if not any(mapping.get(field) for field in ("product", "symbol", "name")):
+            QMessageBox.warning(
+                self,
+                "Brak kolumny produktu",
+                "Wskaż kolumnę Produkt, Symbol albo Nazwa.",
+            )
+            return
+        if not mapping.get("quantity"):
+            QMessageBox.warning(
+                self,
+                "Brak kolumny ilości",
+                "Wskaż kolumnę Ilość.",
+            )
+            return
+
+        self.result_sheet_name = str(self.sheet_combo.currentData() or "")
+        self.result_header_row = int(self.header_spin.value())
+        self.result_mapping = mapping
+        self.remember_mapping = self.remember_check.isChecked()
+        self.accept()
+
+
 class PlannerPage(PageBase):
     def __init__(self, go_home: Callable, store: MetalboxStore):
         super().__init__(
@@ -3587,9 +3886,13 @@ class PlannerPage(PageBase):
         changes_btn.clicked.connect(self._show_changes)
         controls.addWidget(changes_btn)
 
+        mapping_btn = QPushButton("Dopasuj kolumny")
+        mapping_btn.clicked.connect(lambda: self._import_snapshot(force_mapping=True))
+        controls.addWidget(mapping_btn)
+
         import_btn = QPushButton("Import snapshot")
         import_btn.setObjectName("primary")
-        import_btn.clicked.connect(self._import_snapshot)
+        import_btn.clicked.connect(lambda: self._import_snapshot(force_mapping=False))
         controls.addWidget(import_btn)
 
         controls.addStretch(1)
@@ -3673,7 +3976,48 @@ class PlannerPage(PageBase):
             "status: PODGLĄD. Oryginalny Excel nie jest utrzymywany otwarty."
         )
 
-    def _import_snapshot(self) -> None:
+    def _manual_plan_mapping(
+        self,
+        snapshot_path: Path,
+        source_name: str,
+        *,
+        reason: str = "",
+    ):
+        saved = load_plan_column_mapping(source_name)
+        dialog = PlanColumnMappingDialog(
+            snapshot_path,
+            source_name,
+            self,
+            saved=saved,
+            reason=reason,
+        )
+        if dialog.exec() != QDialog.Accepted:
+            return None
+
+        parsed = read_plan_snapshot(
+            snapshot_path,
+            sheet_name=dialog.result_sheet_name,
+            header_row=dialog.result_header_row,
+            mapping=dialog.result_mapping,
+        )
+        if dialog.remember_mapping:
+            save_plan_column_mapping(
+                source_name,
+                {
+                    "sheet_name": dialog.result_sheet_name,
+                    "header_row": dialog.result_header_row,
+                    "mapping": dialog.result_mapping,
+                },
+            )
+        mark_update_check("planner:manual_mapping")
+        app_log(
+            "Plan Excel: zapisano ręczne mapowanie kolumn "
+            f"dla {source_name}: arkusz={dialog.result_sheet_name}, "
+            f"wiersz={dialog.result_header_row}, pola={sorted(dialog.result_mapping)}"
+        )
+        return parsed
+
+    def _import_snapshot(self, force_mapping: bool = False) -> None:
         filename, _filter = QFileDialog.getOpenFileName(
             self,
             "Wybierz plan produkcji Excel",
@@ -3695,7 +4039,54 @@ class PlannerPage(PageBase):
             snapshot_info = safe_snapshot(source, PLAN_SNAPSHOT_DIR)
             mark_update_check("planner:snapshot_created")
 
-            parsed = read_plan_snapshot(snapshot_info.path)
+            parsed = None
+            saved = load_plan_column_mapping(snapshot_info.source_name)
+
+            if force_mapping:
+                parsed = self._manual_plan_mapping(
+                    snapshot_info.path,
+                    snapshot_info.source_name,
+                    reason="Mapowanie ręczne wybrane przez użytkownika.",
+                )
+                if parsed is None:
+                    return
+            else:
+                if saved:
+                    try:
+                        parsed = read_plan_snapshot(
+                            snapshot_info.path,
+                            sheet_name=str(saved.get("sheet_name", "")),
+                            header_row=int(saved.get("header_row", 0) or 0),
+                            mapping=dict(saved.get("mapping", {})),
+                        )
+                        app_log(
+                            "Plan Excel: użyto zapamiętanego mapowania kolumn "
+                            f"dla {snapshot_info.source_name}."
+                        )
+                    except (TypeError, ValueError) as exc:
+                        app_log(
+                            "Zapamiętane mapowanie planu nie pasuje do pliku: "
+                            f"{exc}",
+                            "WARN",
+                        )
+                        parsed = None
+
+                if parsed is None:
+                    try:
+                        parsed = read_plan_snapshot(snapshot_info.path)
+                    except ValueError as auto_exc:
+                        app_log(
+                            f"Automatyczne rozpoznanie planu nieudane: {auto_exc}",
+                            "WARN",
+                        )
+                        parsed = self._manual_plan_mapping(
+                            snapshot_info.path,
+                            snapshot_info.source_name,
+                            reason=str(auto_exc),
+                        )
+                        if parsed is None:
+                            return
+
             mark_update_check("planner:snapshot_parsed")
 
             diff = compare_plan_rows(previous_rows, parsed.rows)
