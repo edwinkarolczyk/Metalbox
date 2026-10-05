@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialog,
+    QDoubleSpinBox,
     QFormLayout,
     QFrame,
     QGridLayout,
@@ -48,7 +49,7 @@ from PySide6.QtWidgets import (
 )
 
 APP_NAME = "Metalbox"
-APP_VERSION = "0.1.21.1"
+APP_VERSION = "0.1.22"
 LOCAL_DATA_ROOT = Path(
     os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
 ) / "Metalbox"
@@ -3852,15 +3853,117 @@ class ProductsPage(PageBase):
             self.open_product_callback(item.text())
 
 
+class ProductBomItemDialog(QDialog):
+    def __init__(self, store: MetalboxStore, parent_symbol: str, parent=None):
+        super().__init__(parent)
+        self.store = store
+        self.parent_symbol = parent_symbol
+        self.saved_item: dict | None = None
+        self.setWindowTitle("Metalbox — pozycja BOM")
+        self.setModal(True)
+        self.setMinimumWidth(sp(620))
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(sp(18), sp(18), sp(18), sp(18))
+        root.setSpacing(sp(12))
+
+        title = QLabel(f"BOM produktu {parent_symbol}")
+        title.setObjectName("detailTitle")
+        root.addWidget(title)
+
+        info = QLabel(
+            "Jeśli wpisany symbol istnieje już w katalogu produktów lub półproduktów, "
+            "Metalbox powiąże tę pozycję z istniejącą kartą. Jeśli nie istnieje, pozycja "
+            "BOM zostanie zachowana jako niezależny element do późniejszego uzupełnienia."
+        )
+        info.setObjectName("hint")
+        info.setWordWrap(True)
+        root.addWidget(info)
+
+        self.type_combo = QComboBox()
+        self.type_combo.addItems(
+            ["PÓŁPRODUKT", "DETAL", "ELEMENT KUPOWANY", "MATERIAŁ"]
+        )
+
+        self.symbol_edit = QLineEdit()
+        self.symbol_edit.setPlaceholderText("Symbol / oznaczenie")
+        self.name_edit = QLineEdit()
+        self.name_edit.setPlaceholderText("Nazwa elementu")
+
+        self.quantity_spin = QDoubleSpinBox()
+        self.quantity_spin.setDecimals(3)
+        self.quantity_spin.setRange(0.001, 1_000_000.0)
+        self.quantity_spin.setValue(1.0)
+
+        self.unit_combo = QComboBox()
+        self.unit_combo.addItems(["szt.", "kpl.", "kg", "m", "mm", "l"])
+
+        self.notes_edit = QLineEdit()
+        self.notes_edit.setPlaceholderText("Opcjonalne uwagi")
+
+        form = QFormLayout()
+        form.setHorizontalSpacing(sp(18))
+        form.setVerticalSpacing(sp(10))
+        form.addRow("Typ:", self.type_combo)
+        form.addRow("Symbol:", self.symbol_edit)
+        form.addRow("Nazwa:", self.name_edit)
+        form.addRow("Ilość na 1 komplet:", self.quantity_spin)
+        form.addRow("Jednostka:", self.unit_combo)
+        form.addRow("Uwagi:", self.notes_edit)
+        root.addLayout(form)
+
+        footer = QHBoxLayout()
+        footer.addStretch(1)
+
+        cancel = QPushButton("Anuluj")
+        cancel.clicked.connect(self.reject)
+        footer.addWidget(cancel)
+
+        save = QPushButton("Dodaj do BOM")
+        save.setObjectName("primary")
+        save.clicked.connect(self._save)
+        footer.addWidget(save)
+        root.addLayout(footer)
+
+    def _save(self) -> None:
+        try:
+            item = self.store.add_product_bom_item(
+                self.parent_symbol,
+                item_type=self.type_combo.currentText(),
+                symbol=self.symbol_edit.text(),
+                name=self.name_edit.text(),
+                quantity_per_set=self.quantity_spin.value(),
+                unit=self.unit_combo.currentText(),
+                notes=self.notes_edit.text(),
+            )
+        except ValueError as exc:
+            QMessageBox.warning(self, "Nie można dodać pozycji BOM", str(exc))
+            return
+        except Exception as exc:
+            app_log(f"Błąd zapisu pozycji BOM: {exc}", "ERROR")
+            QMessageBox.critical(
+                self,
+                "Błąd zapisu",
+                "Nie udało się zapisać pozycji BOM. Szczegóły zapisano w logu.",
+            )
+            return
+
+        self.saved_item = item
+        mark_update_check("product:bom_item_add")
+        self.accept()
+
+
 class ProductDetailPage(PageBase):
     def __init__(self, go_home: Callable, store: MetalboxStore):
         super().__init__(
             "Karta produktu",
             go_home,
-            "Cyfrowa teczka produktu — dane, technologia, dokumentacja, pakowanie i historia.",
+            "Cyfrowa teczka produktu — dane, BOM, technologia, dokumentacja i historia.",
         )
         self.store = store
         self.symbol = ""
+        self.current_product: dict | None = None
+        self.tab_buttons: dict[str, QPushButton] = {}
 
         top = QHBoxLayout()
         self.symbol_label = QLabel("—")
@@ -3879,7 +3982,8 @@ class ProductDetailPage(PageBase):
         self.root.addLayout(top)
 
         summary = QHBoxLayout()
-        summary.addWidget(card("Trasa", "—", "uzupełnij technologię", 280))
+        self.bom_summary_card = card("BOM", "0", "pozycji na komplet", 220)
+        summary.addWidget(self.bom_summary_card)
         summary.addWidget(card("Norma", "—", "uczenie z historii", 220))
         summary.addWidget(card("Ostatnia produkcja", "—", "brak danych", 220))
         summary.addWidget(card("Dokumentacja", "—", "PDF / rysunki / zdjęcia", 230))
@@ -3904,18 +4008,31 @@ class ProductDetailPage(PageBase):
         for idx, text in enumerate(tab_names):
             btn = QPushButton(text)
             btn.setFixedHeight(sp(34))
-            if text == "Dane":
-                btn.setObjectName("primary")
-            btn.clicked.connect(lambda checked=False, t=text: mock_message(self, f"Karta produktu — {t}"))
+            self.tab_buttons[text] = btn
+            if text in {"Dane", "BOM"}:
+                btn.clicked.connect(
+                    lambda checked=False, t=text: self._show_tab(t)
+                )
+            else:
+                btn.clicked.connect(
+                    lambda checked=False, t=text: mock_message(
+                        self, f"Karta produktu — {t}"
+                    )
+                )
             tabs.addWidget(btn, idx // 6, idx % 6)
         tabs.setColumnStretch(6, 1)
         self.root.addLayout(tabs)
 
-        details = QFrame()
-        details.setObjectName("panel")
-        details.setMaximumWidth(sp(1280))
-        dl = QGridLayout(details)
-        dl.setContentsMargins(sp(16), sp(14), sp(16), sp(14))
+        self.data_panel = QFrame()
+        self.data_panel.setObjectName("panel")
+        self.data_panel.setMaximumWidth(sp(1280))
+        data_layout = QVBoxLayout(self.data_panel)
+        data_layout.setContentsMargins(sp(16), sp(14), sp(16), sp(14))
+        data_layout.addWidget(section_heading("Dane produktu"))
+
+        details = QGridLayout()
+        details.setHorizontalSpacing(sp(16))
+        details.setVerticalSpacing(sp(10))
         self.detail_values: dict[str, QLabel] = {}
         fields = [
             "Symbol",
@@ -3936,29 +4053,186 @@ class ProductDetailPage(PageBase):
             value.setObjectName("orderDetails")
             value.setWordWrap(True)
             self.detail_values[name] = value
-            dl.addWidget(label, idx // 2, (idx % 2) * 2)
-            dl.addWidget(value, idx // 2, (idx % 2) * 2 + 1)
-        self.root.addWidget(details, alignment=Qt.AlignLeft)
+            details.addWidget(label, idx // 2, (idx % 2) * 2)
+            details.addWidget(value, idx // 2, (idx % 2) * 2 + 1)
+        data_layout.addLayout(details)
 
-        note = QLabel(
+        ral_note = QLabel(
             "RAL nie jest przechowywany na karcie produktu. "
             "Kolor należy do konkretnego planu / zlecenia produkcyjnego."
         )
-        note.setObjectName("hint")
-        note.setWordWrap(True)
-        self.root.addWidget(note)
+        ral_note.setObjectName("hint")
+        ral_note.setWordWrap(True)
+        data_layout.addWidget(ral_note)
+        self.root.addWidget(self.data_panel, alignment=Qt.AlignLeft)
+
+        self.bom_panel = QFrame()
+        self.bom_panel.setObjectName("panel")
+        self.bom_panel.setMaximumWidth(sp(1320))
+        bom_layout = QVBoxLayout(self.bom_panel)
+        bom_layout.setContentsMargins(sp(16), sp(14), sp(16), sp(14))
+        bom_layout.setSpacing(sp(10))
+
+        bom_header = QHBoxLayout()
+        bom_header.addWidget(
+            section_heading(
+                "BOM — struktura produktu",
+                "Pozycje i ilości potrzebne na wykonanie 1 kompletu.",
+            )
+        )
+        bom_header.addStretch(1)
+
+        self.add_bom_button = QPushButton("Dodaj pozycję BOM")
+        self.add_bom_button.setObjectName("primary")
+        self.add_bom_button.clicked.connect(self._add_bom_item)
+        bom_header.addWidget(self.add_bom_button)
+
+        self.delete_bom_button = QPushButton("Usuń z BOM")
+        self.delete_bom_button.setObjectName("dangerGhost")
+        self.delete_bom_button.clicked.connect(self._delete_bom_item)
+        bom_header.addWidget(self.delete_bom_button)
+        bom_layout.addLayout(bom_header)
+
+        self.bom_table = compact_table(
+            ["Lp.", "Typ", "Symbol", "Nazwa", "Ilość / komplet", "Jedn.", "Powiązanie"],
+            [],
+            [55, 150, 160, 300, 140, 80, 150],
+            310,
+        )
+        bom_layout.addWidget(self.bom_table)
+
+        bom_hint = QLabel(
+            "Półprodukt istniejący w katalogu jest wiązany automatycznie po symbolu. "
+            "Plan produkcji będzie później mnożył ilość z BOM przez ilość zamówioną."
+        )
+        bom_hint.setObjectName("hint")
+        bom_hint.setWordWrap(True)
+        bom_layout.addWidget(bom_hint)
+        self.root.addWidget(self.bom_panel, alignment=Qt.AlignLeft)
 
         self.root.addStretch(1)
+        self._show_tab("Dane")
+
+    def _show_tab(self, tab: str) -> None:
+        is_bom = tab == "BOM"
+        self.data_panel.setVisible(not is_bom)
+        self.bom_panel.setVisible(is_bom)
+
+        for name, button in self.tab_buttons.items():
+            button.setObjectName("primary" if name == tab else "")
+            button.style().unpolish(button)
+            button.style().polish(button)
+
+        if is_bom:
+            self._refresh_bom()
+            mark_update_check("product:bom_open")
+
+    @staticmethod
+    def _format_bom_quantity(value: float) -> str:
+        number = float(value)
+        if number.is_integer():
+            return str(int(number))
+        return f"{number:.3f}".rstrip("0").rstrip(".")
+
+    def _refresh_bom(self) -> None:
+        if not self.symbol or self.current_product is None:
+            self.bom_table.setRowCount(0)
+            self.add_bom_button.setEnabled(False)
+            self.delete_bom_button.setEnabled(False)
+            return
+
+        rows = self.store.list_product_bom(self.symbol)
+        self.bom_table.setRowCount(len(rows))
+        for row_index, row in enumerate(rows):
+            linked = (
+                "Karta produktu"
+                if row.get("child_product_id") is not None
+                else "Tylko BOM"
+            )
+            values = [
+                row_index + 1,
+                row["item_type"],
+                row["symbol"],
+                row["name"],
+                self._format_bom_quantity(row["quantity_per_set"]),
+                row["unit"],
+                linked,
+            ]
+            self.bom_table.setRowHeight(row_index, sp(38))
+            for column_index, value in enumerate(values):
+                item = QTableWidgetItem(str(value))
+                if column_index == 0:
+                    item.setData(Qt.UserRole, int(row["id"]))
+                self.bom_table.setItem(row_index, column_index, item)
+
+        self.add_bom_button.setEnabled(True)
+        self.delete_bom_button.setEnabled(bool(rows))
+
+        label = self.bom_summary_card.findChild(QLabel, "cardValue")
+        if label is not None:
+            label.setText(str(len(rows)))
+
+    def _add_bom_item(self) -> None:
+        if not self.symbol or self.current_product is None:
+            return
+
+        dialog = ProductBomItemDialog(self.store, self.symbol, self)
+        if dialog.exec() != QDialog.Accepted:
+            return
+        self._refresh_bom()
+
+    def _delete_bom_item(self) -> None:
+        row = self.bom_table.currentRow()
+        if row < 0:
+            QMessageBox.information(
+                self,
+                "BOM",
+                "Najpierw zaznacz pozycję BOM do usunięcia.",
+            )
+            return
+
+        id_item = self.bom_table.item(row, 0)
+        symbol_item = self.bom_table.item(row, 2)
+        if id_item is None:
+            return
+        bom_item_id = id_item.data(Qt.UserRole)
+        if bom_item_id is None:
+            return
+
+        symbol = symbol_item.text() if symbol_item is not None else "wybraną pozycję"
+        answer = QMessageBox.question(
+            self,
+            "Usuń pozycję BOM",
+            f"Czy usunąć {symbol} z BOM produktu {self.symbol}?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+
+        try:
+            self.store.delete_product_bom_item(
+                self.symbol,
+                int(bom_item_id),
+            )
+        except ValueError as exc:
+            QMessageBox.warning(self, "Nie można usunąć pozycji BOM", str(exc))
+            return
+
+        mark_update_check("product:bom_item_delete")
+        self._refresh_bom()
 
     def set_product(self, symbol: str) -> None:
         self.symbol = str(symbol or "").strip()
         product = self.store.get_product(self.symbol)
+        self.current_product = product
         if product is None:
             self.symbol_label.setText(self.symbol or "—")
             self.name_label.setText("Nie znaleziono produktu")
             self.status_label.setText("BRAK")
             for value in self.detail_values.values():
                 value.setText("—")
+            self._refresh_bom()
             return
 
         self.symbol_label.setText(str(product["symbol"]))
@@ -3978,6 +4252,9 @@ class ProductDetailPage(PageBase):
         }
         for name, value in values.items():
             self.detail_values[name].setText(str(value))
+
+        self._refresh_bom()
+        self._show_tab("Dane")
 
 
 class AlertsPage(PageBase):
