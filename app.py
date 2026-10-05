@@ -51,7 +51,7 @@ from PySide6.QtWidgets import (
 )
 
 APP_NAME = "Metalbox"
-APP_VERSION = "0.1.25.1"
+APP_VERSION = "0.1.25.2"
 LOCAL_DATA_ROOT = Path(
     os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
 ) / "Metalbox"
