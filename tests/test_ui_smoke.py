@@ -231,6 +231,11 @@ class UiSmokeTest(unittest.TestCase):
             self.assertIn("obsada: Dawid, Marek", dialog.session_label.text())
             self.assertNotIn("Sebastian", reporters)
             self.assertGreater(dialog.reason_combo.count(), 1)
+            self.assertFalse(dialog.save_button.isEnabled())
+            dawid_index = dialog.reporter_combo.findText("Dawid")
+            self.assertGreaterEqual(dawid_index, 1)
+            dialog.reporter_combo.setCurrentIndex(dawid_index)
+            self.qt_app.processEvents()
             self.assertTrue(dialog.save_button.isEnabled())
             dialog.close()
 
@@ -373,21 +378,35 @@ class UiSmokeTest(unittest.TestCase):
             store.seed_development_data()
             store.ensure_development_progress_seeded()
             store.ensure_development_employees_seeded()
+
+            order = store.get_order("ZL-740")
+            self.assertIsNotNone(order)
+            selected = next(
+                item
+                for item in order["items"]
+                if store.get_item_department_capacity(
+                    "ZL-740",
+                    int(item["id"]),
+                    "Zgrzewarki",
+                )["available_now"] > 0
+            )
+            item_id = int(selected["id"])
             session = store.start_production_session(
                 "ZL-740",
                 "Zgrzewarki",
                 ["Dawid"],
+                order_item_id=item_id,
             )
 
             dialog = metalbox_app.QualityReportDialog(
                 store,
                 code="ZL-740",
                 department="Zgrzewarki",
+                order_item_id=item_id,
             )
             self.assertGreater(dialog.item_combo.count(), 1)
-            dialog.item_combo.setCurrentIndex(1)
             self.qt_app.processEvents()
-            self.assertIsNotNone(dialog._selected_item_id())
+            self.assertEqual(dialog._selected_item_id(), item_id)
             self.assertEqual(dialog.department_combo.currentText(), "Zgrzewarki")
 
             dialog.kind_combo.setCurrentText("POPRAWKA")
