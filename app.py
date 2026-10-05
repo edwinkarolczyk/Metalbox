@@ -49,7 +49,7 @@ from PySide6.QtWidgets import (
 )
 
 APP_NAME = "Metalbox"
-APP_VERSION = "0.1.24"
+APP_VERSION = "0.1.24.1"
 LOCAL_DATA_ROOT = Path(
     os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
 ) / "Metalbox"
@@ -4271,9 +4271,18 @@ class ProductDetailPage(PageBase):
         bom_layout.addLayout(bom_header)
 
         self.bom_table = compact_table(
-            ["Lp.", "Typ", "Symbol", "Nazwa", "Ilość / komplet", "Jedn.", "Powiązanie"],
+            [
+                "Lp.",
+                "Typ",
+                "Symbol",
+                "Nazwa",
+                "Ilość / komplet",
+                "Jedn.",
+                "Powiązanie",
+                "Akcja",
+            ],
             [],
-            [55, 150, 160, 300, 140, 80, 150],
+            [55, 140, 150, 270, 130, 75, 135, 170],
             310,
         )
         bom_layout.addWidget(self.bom_table)
@@ -4411,12 +4420,39 @@ class ProductDetailPage(PageBase):
                     item.setData(Qt.UserRole, int(row["id"]))
                 self.bom_table.setItem(row_index, column_index, item)
 
+            if (
+                row.get("child_product_id") is not None
+                and str(row.get("linked_kind") or "").upper() == "PÓŁPRODUKT"
+            ):
+                open_button = QPushButton("Otwórz półprodukt")
+                open_button.clicked.connect(
+                    lambda checked=False, symbol=str(row["symbol"]): self._open_bom_product(symbol)
+                )
+                self.bom_table.setCellWidget(row_index, 7, open_button)
+            else:
+                self.bom_table.setItem(row_index, 7, QTableWidgetItem("—"))
+
         self.add_bom_button.setEnabled(True)
         self.delete_bom_button.setEnabled(bool(rows))
 
         label = self.bom_summary_card.findChild(QLabel, "cardValue")
         if label is not None:
             label.setText(str(len(rows)))
+
+    def _open_bom_product(self, symbol: str) -> None:
+        product = self.store.get_product(symbol)
+        if product is None:
+            QMessageBox.warning(
+                self,
+                "Nie można otworzyć półproduktu",
+                f"Nie znaleziono karty półproduktu {symbol}.",
+            )
+            return
+
+        self.set_product(symbol)
+        self._show_tab("Dane")
+        mark_update_check("product:bom_child_open")
+        app_log(f"Otwarta karta półproduktu z BOM: {symbol}")
 
     def _add_bom_item(self) -> None:
         if not self.symbol or self.current_product is None:
