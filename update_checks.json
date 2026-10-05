@@ -1,8 +1,8 @@
 {
   "schema": 1,
-  "version": "0.1.24",
-  "title": "Produkty — edycja i weryfikacja",
-  "description": "Sprawdź poprawianie istniejącej karty produktu oraz filtrowanie rekordów wymagających weryfikacji. Symbol istniejącego produktu pozostaje niezmienny.",
+  "version": "0.1.24.1",
+  "title": "Produkty — edycja, weryfikacja i przejście BOM → półprodukt",
+  "description": "Odbiór łączony 0.1.24 + poprawka nawigacji: sprawdź edycję karty produktu, filtr weryfikacji oraz bezpośrednie przejście z BOM do karty powiązanego półproduktu.",
   "checks": [
     {
       "id": "product-edit-open",
@@ -23,6 +23,11 @@
       "id": "product-verification-close",
       "text": "4. Otwórz produkt DO WERYFIKACJI, zmień status na AKTYWNY i zapisz. Po włączeniu filtra „Do weryfikacji” ten produkt nie może już być widoczny.",
       "trigger": "product:verification_closed"
+    },
+    {
+      "id": "bom-child-open",
+      "text": "5. Otwórz kartę produktu → BOM. Przy powiązanej pozycji typu PÓŁPRODUKT kliknij „Otwórz półprodukt”. Metalbox ma przejść bezpośrednio do jego karty, skąd można wejść w Technologię.",
+      "trigger": "product:bom_child_open"
     }
   ]
 }
