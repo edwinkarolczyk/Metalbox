@@ -49,7 +49,7 @@ from PySide6.QtWidgets import (
 )
 
 APP_NAME = "Metalbox"
-APP_VERSION = "0.1.22"
+APP_VERSION = "0.1.23"
 LOCAL_DATA_ROOT = Path(
     os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
 ) / "Metalbox"
@@ -3955,6 +3955,103 @@ class ProductBomItemDialog(QDialog):
         self.accept()
 
 
+class ProductOperationDialog(QDialog):
+    def __init__(self, store: MetalboxStore, product_symbol: str, parent=None):
+        super().__init__(parent)
+        self.store = store
+        self.product_symbol = product_symbol
+        self.saved_operation: dict | None = None
+        self.setWindowTitle("Metalbox — operacja technologiczna")
+        self.setModal(True)
+        self.setMinimumWidth(sp(640))
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(sp(18), sp(18), sp(18), sp(18))
+        root.setSpacing(sp(12))
+
+        title = QLabel(f"Technologia produktu {product_symbol}")
+        title.setObjectName("detailTitle")
+        root.addWidget(title)
+
+        info = QLabel(
+            "Dodaj kolejny etap procesu. Kolejność operacji można później zmieniać "
+            "przyciskami W górę / W dół."
+        )
+        info.setObjectName("hint")
+        info.setWordWrap(True)
+        root.addWidget(info)
+
+        self.department_combo = QComboBox()
+        self.department_combo.addItem("— wybierz dział —", "")
+        for department in DEPARTMENTS:
+            self.department_combo.addItem(department, department)
+
+        self.operation_edit = QLineEdit()
+        self.operation_edit.setPlaceholderText("np. Cięcie laserem, Gięcie, Zgrzewanie")
+
+        self.setup_spin = QDoubleSpinBox()
+        self.setup_spin.setDecimals(2)
+        self.setup_spin.setRange(0, 100000)
+        self.setup_spin.setSuffix(" min")
+
+        self.unit_time_spin = QDoubleSpinBox()
+        self.unit_time_spin.setDecimals(4)
+        self.unit_time_spin.setRange(0, 100000)
+        self.unit_time_spin.setSuffix(" min/szt.")
+
+        self.notes_edit = QLineEdit()
+        self.notes_edit.setPlaceholderText("Opcjonalne uwagi technologiczne")
+
+        form = QFormLayout()
+        form.setHorizontalSpacing(sp(18))
+        form.setVerticalSpacing(sp(10))
+        form.addRow("Dział:", self.department_combo)
+        form.addRow("Operacja:", self.operation_edit)
+        form.addRow("Przygotowanie:", self.setup_spin)
+        form.addRow("Czas na sztukę:", self.unit_time_spin)
+        form.addRow("Uwagi:", self.notes_edit)
+        root.addLayout(form)
+
+        footer = QHBoxLayout()
+        footer.addStretch(1)
+
+        cancel = QPushButton("Anuluj")
+        cancel.clicked.connect(self.reject)
+        footer.addWidget(cancel)
+
+        save = QPushButton("Dodaj operację")
+        save.setObjectName("primary")
+        save.clicked.connect(self._save)
+        footer.addWidget(save)
+        root.addLayout(footer)
+
+    def _save(self) -> None:
+        try:
+            operation = self.store.add_product_operation(
+                self.product_symbol,
+                department=str(self.department_combo.currentData() or ""),
+                operation_name=self.operation_edit.text(),
+                setup_minutes=self.setup_spin.value(),
+                minutes_per_unit=self.unit_time_spin.value(),
+                notes=self.notes_edit.text(),
+            )
+        except ValueError as exc:
+            QMessageBox.warning(self, "Nie można dodać operacji", str(exc))
+            return
+        except Exception as exc:
+            app_log(f"Błąd zapisu operacji technologicznej: {exc}", "ERROR")
+            QMessageBox.critical(
+                self,
+                "Błąd zapisu",
+                "Nie udało się zapisać operacji. Szczegóły zapisano w logu.",
+            )
+            return
+
+        self.saved_operation = operation
+        mark_update_check("product:operation_add")
+        self.accept()
+
+
 class ProductDetailPage(PageBase):
     def __init__(self, go_home: Callable, store: MetalboxStore):
         super().__init__(
@@ -3986,7 +4083,8 @@ class ProductDetailPage(PageBase):
         summary = QHBoxLayout()
         self.bom_summary_card = card("BOM", "0", "pozycji na komplet", 220)
         summary.addWidget(self.bom_summary_card)
-        summary.addWidget(card("Norma", "—", "uczenie z historii", 220))
+        self.route_summary_card = card("Technologia", "0", "operacji", 220)
+        summary.addWidget(self.route_summary_card)
         summary.addWidget(card("Ostatnia produkcja", "—", "brak danych", 220))
         summary.addWidget(card("Dokumentacja", "—", "PDF / rysunki / zdjęcia", 230))
         summary.addStretch(1)
@@ -4011,7 +4109,7 @@ class ProductDetailPage(PageBase):
             btn = QPushButton(text)
             btn.setFixedHeight(sp(34))
             self.tab_buttons[text] = btn
-            if text in {"Dane", "BOM"}:
+            if text in {"Dane", "BOM", "Technologia"}:
                 btn.clicked.connect(
                     lambda checked=False, t=text: self._show_tab(t)
                 )
@@ -4112,13 +4210,79 @@ class ProductDetailPage(PageBase):
         bom_layout.addWidget(bom_hint)
         self.root.addWidget(self.bom_panel, alignment=Qt.AlignLeft)
 
+        self.technology_panel = QFrame()
+        self.technology_panel.setObjectName("panel")
+        self.technology_panel.setMaximumWidth(sp(1360))
+        technology_layout = QVBoxLayout(self.technology_panel)
+        technology_layout.setContentsMargins(sp(16), sp(14), sp(16), sp(14))
+        technology_layout.setSpacing(sp(10))
+
+        technology_header = QHBoxLayout()
+        technology_header.addWidget(
+            section_heading(
+                "Technologia — kolejność operacji",
+                "Trasa produktu lub półproduktu przez działy produkcyjne.",
+            )
+        )
+        technology_header.addStretch(1)
+
+        self.add_operation_button = QPushButton("Dodaj operację")
+        self.add_operation_button.setObjectName("primary")
+        self.add_operation_button.clicked.connect(self._add_operation)
+        technology_header.addWidget(self.add_operation_button)
+
+        self.move_operation_up_button = QPushButton("W górę")
+        self.move_operation_up_button.clicked.connect(
+            lambda: self._move_operation(-1)
+        )
+        technology_header.addWidget(self.move_operation_up_button)
+
+        self.move_operation_down_button = QPushButton("W dół")
+        self.move_operation_down_button.clicked.connect(
+            lambda: self._move_operation(1)
+        )
+        technology_header.addWidget(self.move_operation_down_button)
+
+        self.delete_operation_button = QPushButton("Usuń operację")
+        self.delete_operation_button.setObjectName("dangerGhost")
+        self.delete_operation_button.clicked.connect(self._delete_operation)
+        technology_header.addWidget(self.delete_operation_button)
+        technology_layout.addLayout(technology_header)
+
+        self.operation_table = compact_table(
+            [
+                "Lp.",
+                "Dział",
+                "Operacja",
+                "Przygotowanie",
+                "min/szt.",
+                "Uwagi",
+            ],
+            [],
+            [55, 150, 280, 135, 110, 330],
+            310,
+        )
+        technology_layout.addWidget(self.operation_table)
+
+        technology_hint = QLabel(
+            "Czasy są opcjonalne. Gdy je uzupełnisz, Metalbox będzie mógł później "
+            "policzyć obciążenie działów dla ilości z planu produkcji."
+        )
+        technology_hint.setObjectName("hint")
+        technology_hint.setWordWrap(True)
+        technology_layout.addWidget(technology_hint)
+        self.root.addWidget(self.technology_panel, alignment=Qt.AlignLeft)
+
         self.root.addStretch(1)
         self._show_tab("Dane")
 
     def _show_tab(self, tab: str) -> None:
+        is_data = tab == "Dane"
         is_bom = tab == "BOM"
-        self.data_panel.setVisible(not is_bom)
+        is_technology = tab == "Technologia"
+        self.data_panel.setVisible(is_data)
         self.bom_panel.setVisible(is_bom)
+        self.technology_panel.setVisible(is_technology)
 
         for name, button in self.tab_buttons.items():
             button.setObjectName("primary" if name == tab else "")
@@ -4128,6 +4292,9 @@ class ProductDetailPage(PageBase):
         if is_bom:
             self._refresh_bom()
             mark_update_check("product:bom_open")
+        elif is_technology:
+            self._refresh_operations()
+            mark_update_check("product:technology_open")
 
     @staticmethod
     def _format_bom_quantity(value: float) -> str:
@@ -4224,6 +4391,138 @@ class ProductDetailPage(PageBase):
         mark_update_check("product:bom_item_delete")
         self._refresh_bom()
 
+    @staticmethod
+    def _format_minutes(value: float) -> str:
+        number = float(value)
+        if number == 0:
+            return "—"
+        if number.is_integer():
+            return f"{int(number)} min"
+        return f"{number:.2f}".rstrip("0").rstrip(".") + " min"
+
+    @staticmethod
+    def _format_unit_minutes(value: float) -> str:
+        number = float(value)
+        if number == 0:
+            return "—"
+        return f"{number:.4f}".rstrip("0").rstrip(".")
+
+    def _selected_operation_id(self) -> int | None:
+        row = self.operation_table.currentRow()
+        if row < 0:
+            return None
+        item = self.operation_table.item(row, 0)
+        if item is None:
+            return None
+        value = item.data(Qt.UserRole)
+        return int(value) if value is not None else None
+
+    def _refresh_operations(self) -> None:
+        if not self.symbol or self.current_product is None:
+            self.operation_table.setRowCount(0)
+            self.add_operation_button.setEnabled(False)
+            self.move_operation_up_button.setEnabled(False)
+            self.move_operation_down_button.setEnabled(False)
+            self.delete_operation_button.setEnabled(False)
+            return
+
+        rows = self.store.list_product_operations(self.symbol)
+        self.operation_table.setRowCount(len(rows))
+        for row_index, row in enumerate(rows):
+            values = [
+                row["sequence_no"],
+                row["department"],
+                row["operation_name"],
+                self._format_minutes(row["setup_minutes"]),
+                self._format_unit_minutes(row["minutes_per_unit"]),
+                row["notes"] or "—",
+            ]
+            self.operation_table.setRowHeight(row_index, sp(38))
+            for column_index, value in enumerate(values):
+                item = QTableWidgetItem(str(value))
+                if column_index == 0:
+                    item.setData(Qt.UserRole, int(row["id"]))
+                self.operation_table.setItem(row_index, column_index, item)
+
+        enabled = bool(rows)
+        self.add_operation_button.setEnabled(True)
+        self.move_operation_up_button.setEnabled(enabled)
+        self.move_operation_down_button.setEnabled(enabled)
+        self.delete_operation_button.setEnabled(enabled)
+
+        label = self.route_summary_card.findChild(QLabel, "cardValue")
+        if label is not None:
+            label.setText(str(len(rows)))
+
+    def _add_operation(self) -> None:
+        if not self.symbol or self.current_product is None:
+            return
+
+        dialog = ProductOperationDialog(self.store, self.symbol, self)
+        if dialog.exec() != QDialog.Accepted:
+            return
+        self._refresh_operations()
+
+    def _delete_operation(self) -> None:
+        operation_id = self._selected_operation_id()
+        if operation_id is None:
+            QMessageBox.information(
+                self,
+                "Technologia",
+                "Najpierw zaznacz operację do usunięcia.",
+            )
+            return
+
+        answer = QMessageBox.question(
+            self,
+            "Usuń operację",
+            "Czy usunąć zaznaczoną operację z technologii?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+
+        try:
+            self.store.delete_product_operation(
+                self.symbol,
+                operation_id,
+            )
+        except ValueError as exc:
+            QMessageBox.warning(self, "Nie można usunąć operacji", str(exc))
+            return
+
+        mark_update_check("product:operation_delete")
+        self._refresh_operations()
+
+    def _move_operation(self, direction: int) -> None:
+        operation_id = self._selected_operation_id()
+        if operation_id is None:
+            QMessageBox.information(
+                self,
+                "Technologia",
+                "Najpierw zaznacz operację do przesunięcia.",
+            )
+            return
+
+        try:
+            rows = self.store.move_product_operation(
+                self.symbol,
+                operation_id,
+                direction,
+            )
+        except ValueError as exc:
+            QMessageBox.warning(self, "Nie można zmienić kolejności", str(exc))
+            return
+
+        mark_update_check("product:operation_move")
+        self._refresh_operations()
+
+        for row_index, row in enumerate(rows):
+            if int(row["id"]) == operation_id:
+                self.operation_table.selectRow(row_index)
+                break
+
     def set_product(self, symbol: str) -> None:
         self.symbol = str(symbol or "").strip()
         product = self.store.get_product(self.symbol)
@@ -4235,6 +4534,7 @@ class ProductDetailPage(PageBase):
             for value in self.detail_values.values():
                 value.setText("—")
             self._refresh_bom()
+            self._refresh_operations()
             return
 
         self.symbol_label.setText(str(product["symbol"]))
@@ -4256,6 +4556,7 @@ class ProductDetailPage(PageBase):
             self.detail_values[name].setText(str(value))
 
         self._refresh_bom()
+        self._refresh_operations()
         self._show_tab("Dane")
 
 
