@@ -51,7 +51,7 @@ from PySide6.QtWidgets import (
 )
 
 APP_NAME = "Metalbox"
-APP_VERSION = "0.1.25.3"
+APP_VERSION = "0.1.26"
 LOCAL_DATA_ROOT = Path(
     os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
 ) / "Metalbox"
@@ -3857,6 +3857,221 @@ class PlanColumnMappingDialog(QDialog):
         self.accept()
 
 
+class PlanApprovalDialog(QDialog):
+    def __init__(self, store: MetalboxStore, snapshot_id: int, parent=None):
+        super().__init__(parent)
+        self.store = store
+        self.snapshot_id = int(snapshot_id)
+        self.preview = self.store.get_plan_acceptance_preview(self.snapshot_id)
+        self.accepted_summary: dict | None = None
+
+        self.setWindowTitle("Metalbox — zmiany planu do akceptacji")
+        self.setModal(True)
+        self.resize(sp(1320), sp(760))
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(sp(18), sp(18), sp(18), sp(18))
+        root.setSpacing(sp(10))
+
+        title = QLabel("Zmiany Excel → plan Metalbox")
+        title.setObjectName("detailTitle")
+        root.addWidget(title)
+
+        info = QLabel(
+            "To jest kontrolowany etap po snapshotcie. Akceptacja aktualizuje wyłącznie "
+            "wewnętrzny zaakceptowany plan Metalbox. Nie tworzy i nie modyfikuje jeszcze "
+            "zleceń produkcyjnych. Excel pozostaje nadrzędnym źródłem podczas pilotażu."
+        )
+        info.setObjectName("hint")
+        info.setWordWrap(True)
+        root.addWidget(info)
+
+        summary = QHBoxLayout()
+        summary.addWidget(
+            card(
+                "Zmiany do akceptacji",
+                str(self.preview["total_changes"]),
+                "nowe + zmienione + usunięte",
+                240,
+            )
+        )
+        summary.addWidget(
+            card(
+                "Dopasowane produkty",
+                str(self.preview["matched_count"]),
+                "symbol istnieje w katalogu",
+                240,
+            )
+        )
+        summary.addWidget(
+            card(
+                "Do weryfikacji",
+                str(self.preview["review_count"]),
+                "brak karty produktu",
+                240,
+            )
+        )
+        summary.addStretch(1)
+        root.addLayout(summary)
+
+        self.table = compact_table(
+            [
+                "Zmiana",
+                "Nr ZL",
+                "Symbol",
+                "Nazwa",
+                "Ilość",
+                "Termin",
+                "RAL",
+                "Produkt",
+                "Szczegóły",
+            ],
+            [],
+            [110, 110, 160, 260, 90, 120, 90, 150, 330],
+            390,
+        )
+        root.addWidget(self.table)
+
+        footer_note = QLabel(
+            "DOPASOWANY = symbol istnieje już w katalogu produktów. "
+            "DO WERYFIKACJI = Metalbox nie tworzy produktu automatycznie; pozycja zostaje "
+            "w planie do późniejszego uzupełnienia. RAL pozostaje przy pozycji planu."
+        )
+        footer_note.setObjectName("hint")
+        footer_note.setWordWrap(True)
+        root.addWidget(footer_note)
+
+        footer = QHBoxLayout()
+        footer.addStretch(1)
+
+        cancel = QPushButton("Zamknij")
+        cancel.clicked.connect(self.reject)
+        footer.addWidget(cancel)
+
+        self.accept_button = QPushButton("Zaakceptuj zmiany")
+        self.accept_button.setObjectName("primary")
+        self.accept_button.clicked.connect(self._accept_changes)
+        footer.addWidget(self.accept_button)
+        root.addLayout(footer)
+
+        self._render()
+        mark_update_check("planner:approval_open")
+
+    @staticmethod
+    def _format_quantity(value: object) -> str:
+        if value is None:
+            return "—"
+        number = float(value)
+        if number.is_integer():
+            return str(int(number))
+        return f"{number:.3f}".rstrip("0").rstrip(".")
+
+    @staticmethod
+    def _display_value(value: object) -> str:
+        if value in (None, ""):
+            return "—"
+        return str(value)
+
+    def _change_details(self, item: dict) -> str:
+        change_type = str(item.get("change_type", ""))
+        if change_type == "NOWY":
+            return "Nowa pozycja z Excel"
+        if change_type == "USUNIĘTY":
+            return "Pozycja zniknęła z bieżącego snapshotu"
+
+        parts: list[str] = []
+        for change in item.get("changes", {}).values():
+            parts.append(
+                f'{change["label"]}: '
+                f'{self._display_value(change.get("before"))} → '
+                f'{self._display_value(change.get("after"))}'
+            )
+        return " • ".join(parts) or "Zmiana danych"
+
+    def _render(self) -> None:
+        items = (
+            list(self.preview.get("added", []))
+            + list(self.preview.get("changed", []))
+            + list(self.preview.get("removed", []))
+        )
+        items.sort(
+            key=lambda row: (
+                int(row.get("row_no", 0)),
+                str(row.get("change_type", "")),
+            )
+        )
+
+        self.table.setRowCount(len(items))
+        for row_index, item in enumerate(items):
+            values = [
+                item.get("change_type") or "—",
+                item.get("order_code") or "—",
+                item.get("symbol") or "—",
+                item.get("name") or "—",
+                self._format_quantity(item.get("quantity")),
+                item.get("shipping") or "—",
+                item.get("ral") or "—",
+                item.get("product_match_status") or "—",
+                self._change_details(item),
+            ]
+            self.table.setRowHeight(row_index, sp(38))
+            for column_index, value in enumerate(values):
+                table_item = QTableWidgetItem(str(value))
+                self.table.setItem(row_index, column_index, table_item)
+
+        self.accept_button.setEnabled(bool(items))
+        if not items:
+            self.accept_button.setToolTip("Brak zmian względem zaakceptowanego planu.")
+
+    def _accept_changes(self) -> None:
+        total = int(self.preview.get("total_changes", 0))
+        if total <= 0:
+            return
+
+        answer = QMessageBox.question(
+            self,
+            "Zaakceptuj zmiany planu",
+            f"Zaakceptować {total} zmian do wewnętrznego planu Metalbox?\n\n"
+            "To NIE utworzy ani nie zmieni zleceń produkcyjnych. "
+            "Excel nadal pozostaje nadrzędnym źródłem podczas pilotażu.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+
+        try:
+            summary = self.store.accept_plan_snapshot(self.snapshot_id)
+        except Exception as exc:
+            app_log(f"Błąd akceptacji planu: {exc}", "ERROR")
+            QMessageBox.critical(
+                self,
+                "Nie udało się zaakceptować planu",
+                "Nie udało się zapisać zaakceptowanego planu. "
+                "Szczegóły zapisano w logu.",
+            )
+            return
+
+        self.accepted_summary = summary
+        mark_update_check("planner:approval_accept")
+        app_log(
+            "Zaakceptowano snapshot planu: "
+            f"id={self.snapshot_id}, wiersze={summary['row_count']}, "
+            f"dopasowane={summary['matched_count']}, "
+            f"do_weryfikacji={summary['review_count']}, "
+            "zlecenia_zmienione=nie"
+        )
+        QMessageBox.information(
+            self,
+            "Plan zaakceptowany",
+            f'Zaakceptowano {summary["row_count"]} pozycji planu.\n'
+            f'Dopasowane produkty: {summary["matched_count"]}\n'
+            f'Do weryfikacji: {summary["review_count"]}\n\n'
+            "Nie utworzono ani nie zmieniono zleceń produkcyjnych.",
+        )
+        self.accept()
+
+
 class PlannerPage(PageBase):
     def __init__(self, go_home: Callable, store: MetalboxStore):
         super().__init__(
@@ -3879,7 +4094,7 @@ class PlannerPage(PageBase):
         controls.addWidget(week_btn)
 
         approval_btn = QPushButton("Do akceptacji")
-        approval_btn.clicked.connect(self._show_changes)
+        approval_btn.clicked.connect(self._open_approval)
         controls.addWidget(approval_btn)
 
         changes_btn = QPushButton("Zmiany Excel")
@@ -3918,11 +4133,13 @@ class PlannerPage(PageBase):
         self.rows_card = card("Pozycje snapshotu", "0", "wierszy planu", 230)
         self.added_card = card("Nowe", "0", "od poprzedniego snapshotu", 230)
         self.changed_card = card("Zmienione", "0", "od poprzedniego snapshotu", 230)
-        self.removed_card = card("Usunięte", "0", "od poprzedniego snapshotu", 230)
+        self.removed_card = card("Usunięte", "0", "od poprzedniego snapshotu", 220)
+        self.approval_card = card("Do akceptacji", "0", "względem zaakceptowanego planu", 240)
         lower.addWidget(self.rows_card)
         lower.addWidget(self.added_card)
         lower.addWidget(self.changed_card)
         lower.addWidget(self.removed_card)
+        lower.addWidget(self.approval_card)
         lower.addStretch(1)
         self.root.addLayout(lower)
 
@@ -3970,10 +4187,13 @@ class PlannerPage(PageBase):
         rows = self.store.list_plan_snapshot_rows(int(snapshot["id"]))
         self.current_diff = {"added": [], "changed": [], "removed": []}
         self._render_rows(rows, self.current_diff)
+        approval = self.store.get_plan_acceptance_preview(int(snapshot["id"]))
+        self._set_card_value(self.approval_card, approval["total_changes"])
         self.snapshot_info.setText(
             f'Ostatni snapshot: {snapshot["source_name"]} • '
             f'{snapshot["row_count"]} pozycji • arkusz {snapshot["sheet_name"]} • '
-            "status: PODGLĄD. Oryginalny Excel nie jest utrzymywany otwarty."
+            f'status: {snapshot["status"]}. '
+            "Oryginalny Excel nie jest utrzymywany otwarty."
         )
 
     def _manual_plan_mapping(
@@ -4120,6 +4340,8 @@ class PlannerPage(PageBase):
         self.current_snapshot = snapshot
         self.current_diff = diff
         self._render_rows(parsed.rows, diff)
+        approval = self.store.get_plan_acceptance_preview(int(snapshot["id"]))
+        self._set_card_value(self.approval_card, approval["total_changes"])
         self.snapshot_info.setText(
             f'Snapshot lokalny: {snapshot_info.path.name} • źródło: {snapshot_info.source_name} • '
             f'{len(parsed.rows)} pozycji • arkusz {parsed.sheet_name} • '
@@ -4177,6 +4399,25 @@ class PlannerPage(PageBase):
         self._set_card_value(self.added_card, len(diff.get("added", [])))
         self._set_card_value(self.changed_card, len(diff.get("changed", [])))
         self._set_card_value(self.removed_card, len(diff.get("removed", [])))
+
+    def _open_approval(self) -> None:
+        snapshot = self.store.get_latest_plan_snapshot()
+        if snapshot is None:
+            QMessageBox.information(
+                self,
+                "Do akceptacji",
+                "Najpierw utwórz snapshot planu.",
+            )
+            return
+
+        dialog = PlanApprovalDialog(
+            self.store,
+            int(snapshot["id"]),
+            self,
+        )
+        result = dialog.exec()
+        if result == QDialog.Accepted and dialog.accepted_summary is not None:
+            self._load_latest_snapshot()
 
     def _show_changes(self) -> None:
         if self.current_snapshot is None:
