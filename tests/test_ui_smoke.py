@@ -600,6 +600,58 @@ class UiSmokeTest(unittest.TestCase):
             finally:
                 metalbox_app.DEV_UPDATE_STATE_FILE = original
 
+    def test_pending_update_cannot_look_ready(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            original = metalbox_app.DEV_UPDATE_STATE_FILE
+            try:
+                metalbox_app.DEV_UPDATE_STATE_FILE = Path(temp) / "update_state.json"
+                metalbox_app.save_dev_update_state(
+                    {
+                        "schema": 2,
+                        "status": "updated",
+                        "old_version": "0.1.24.1",
+                        "new_version": metalbox_app.APP_VERSION,
+                        "title": "Test blokady",
+                        "description": "Oczekujący punkt blokuje odbiór.",
+                        "ready_for_next": True,
+                        "changes": [
+                            {
+                                "id": "done",
+                                "text": "Punkt wykonany",
+                                "trigger": "test:done",
+                                "checked": True,
+                                "checked_at": "2026-10-05T08:00:00",
+                                "note": "",
+                                "problem": False,
+                            },
+                            {
+                                "id": "pending",
+                                "text": "Punkt oczekujący",
+                                "trigger": "test:pending",
+                                "checked": False,
+                                "checked_at": None,
+                                "note": "",
+                                "problem": False,
+                            },
+                        ],
+                    }
+                )
+
+                report = metalbox_app.format_update_test_report(
+                    metalbox_app.load_dev_update_state()
+                )
+                self.assertIn("Gotowy na następne zmiany: NIE", report)
+
+                state = metalbox_app.load_dev_update_state()
+                state["ready_for_next"] = False
+                metalbox_app.save_dev_update_state(state)
+
+                panel = metalbox_app.UpdateChecklistPanel()
+                self.assertFalse(panel.ready_btn.isEnabled())
+                panel.close()
+            finally:
+                metalbox_app.DEV_UPDATE_STATE_FILE = original
+
     def test_finish_cycle_copies_final_report_and_ignores_control_rows(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             original = metalbox_app.DEV_UPDATE_STATE_FILE
