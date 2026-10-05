@@ -4,9 +4,9 @@ Wyspecjalizowany system do zarządzania produkcją Metalbox sp. z o.o.
 
 ## Aktualny stan
 
-**0.0.6 — maksymalna wydmuszka UI + Launcher/Updater**
+**0.1.24 — działający rdzeń Development + edytowalne karty produktów**
 
-Metalbox jest nadal makietą interfejsu bez właściwej logiki produkcyjnej, ale od tej wersji posiada docelowy mechanizm dystrybucji i aktualizacji.
+Metalbox nie jest już samą makietą UI. W gałęzi Development działa rzeczywisty zapis danych produkcyjnych, pracownicy i obsada, rejestracja pracy oraz jakości, katalog produktów z surowymi podpowiedziami źródłowymi, BOM, kolejność operacji technologicznych i edycja kart produktów z audytem. Aktualny etap przygotowuje dane pod realne zlecenia i pilotaż równoległy z firmowym Excelem.
 
 ## Metalbox Launcher
 
