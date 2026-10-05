@@ -215,6 +215,42 @@ class MetalboxStoreTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "już istnieje"):
             self.store.create_product(symbol="test.1", name="Duplikat")
 
+    def test_product_can_be_edited_and_filtered_for_verification(self) -> None:
+        self.store.create_product(
+            symbol="VERIFY.1",
+            name="Nazwa robocza",
+            status="DO WERYFIKACJI",
+        )
+        self.store.create_product(
+            symbol="ACTIVE.1",
+            name="Produkt aktywny",
+            status="AKTYWNY",
+        )
+
+        pending = self.store.list_products(status="DO WERYFIKACJI")
+        self.assertEqual([row["symbol"] for row in pending], ["VERIFY.1"])
+
+        updated = self.store.update_product(
+            "VERIFY.1",
+            name="Nazwa poprawiona",
+            kind="PÓŁPRODUKT",
+            client_variant="Wariant A",
+            material="DC01",
+            dimensions="100x200",
+            quantity_per_set=3,
+            department="Giętarki",
+            technology="Laser → Gięcie",
+            notes="Po weryfikacji",
+            status="AKTYWNY",
+        )
+
+        self.assertEqual(updated["symbol"], "VERIFY.1")
+        self.assertEqual(updated["name"], "Nazwa poprawiona")
+        self.assertEqual(updated["kind"], "PÓŁPRODUKT")
+        self.assertEqual(updated["quantity_per_set"], 3)
+        self.assertEqual(updated["status"], "AKTYWNY")
+        self.assertEqual(self.store.list_products(status="DO WERYFIKACJI"), [])
+
     def test_product_bom_add_link_calculate_and_delete(self) -> None:
         self.store.create_product(symbol="PARENT.1", name="Produkt główny")
         child = self.store.create_product(
