@@ -3950,6 +3950,8 @@ class ProductBomItemDialog(QDialog):
 
         self.saved_item = item
         mark_update_check("product:bom_item_add")
+        if item.get("child_product_id") is not None:
+            mark_update_check("product:bom_item_linked")
         self.accept()
 
 
