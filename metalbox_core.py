@@ -780,6 +780,97 @@ class MetalboxStore:
             raise RuntimeError("Produkt został zapisany, ale nie można go odczytać.")
         return product
 
+    def update_product(
+        self,
+        symbol: str,
+        *,
+        name: str,
+        kind: str = "PRODUKT",
+        client_variant: str = "",
+        material: str = "",
+        dimensions: str = "",
+        quantity_per_set: int = 1,
+        department: str = "",
+        technology: str = "",
+        notes: str = "",
+        status: str = "AKTYWNY",
+        actor: str = "development-user",
+    ) -> dict:
+        existing = self.get_product(symbol)
+        if existing is None:
+            raise ValueError(f"Nie znaleziono produktu {symbol}.")
+
+        name = str(name or "").strip()
+        kind = str(kind or "PRODUKT").strip().upper()
+        status = str(status or "AKTYWNY").strip().upper()
+        quantity_per_set = int(quantity_per_set)
+
+        if not name:
+            raise ValueError("Nazwa produktu jest wymagana.")
+        if kind not in {"PRODUKT", "PÓŁPRODUKT"}:
+            raise ValueError("Typ musi być PRODUKT albo PÓŁPRODUKT.")
+        if status not in {"AKTYWNY", "DO WERYFIKACJI", "NIEAKTYWNY"}:
+            raise ValueError("Nieprawidłowy status produktu.")
+        if quantity_per_set < 1:
+            raise ValueError("Ilość na komplet musi być większa od zera.")
+
+        fields = {
+            "name": name,
+            "kind": kind,
+            "client_variant": str(client_variant or "").strip(),
+            "material": str(material or "").strip(),
+            "dimensions": str(dimensions or "").strip(),
+            "quantity_per_set": quantity_per_set,
+            "department": str(department or "").strip(),
+            "technology": str(technology or "").strip(),
+            "notes": str(notes or "").strip(),
+            "status": status,
+        }
+        before = {key: existing[key] for key in fields}
+        now = datetime.now(timezone.utc).isoformat()
+
+        with self._connect() as db:
+            db.execute(
+                """
+                UPDATE products
+                SET name = ?, kind = ?, client_variant = ?, material = ?,
+                    dimensions = ?, quantity_per_set = ?, department = ?,
+                    technology = ?, notes = ?, status = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    fields["name"],
+                    fields["kind"],
+                    fields["client_variant"],
+                    fields["material"],
+                    fields["dimensions"],
+                    fields["quantity_per_set"],
+                    fields["department"],
+                    fields["technology"],
+                    fields["notes"],
+                    fields["status"],
+                    now,
+                    int(existing["id"]),
+                ),
+            )
+            self._audit_in_connection(
+                db,
+                actor=actor,
+                action="product_updated",
+                entity_type="product",
+                entity_id=str(existing["id"]),
+                payload={
+                    "symbol": existing["symbol"],
+                    "before": before,
+                    "after": fields,
+                },
+            )
+
+        product = self.get_product(str(existing["symbol"]))
+        if product is None:
+            raise RuntimeError("Produkt został zaktualizowany, ale nie można go odczytać.")
+        return product
+
     def get_product(self, symbol: str) -> dict | None:
         with self._connect() as db:
             row = db.execute(
@@ -800,11 +891,13 @@ class MetalboxStore:
         *,
         search: str = "",
         kind: str = "",
+        status: str = "",
     ) -> list[dict]:
         clauses: list[str] = []
         params: list[object] = []
         search = str(search or "").strip()
         kind = str(kind or "").strip().upper()
+        status = str(status or "").strip().upper()
 
         if search:
             clauses.append("(symbol LIKE ? OR name LIKE ? OR client_variant LIKE ?)")
@@ -813,6 +906,9 @@ class MetalboxStore:
         if kind:
             clauses.append("kind = ?")
             params.append(kind)
+        if status:
+            clauses.append("status = ?")
+            params.append(status)
 
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         with self._connect() as db:
