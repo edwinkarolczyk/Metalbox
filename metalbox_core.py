@@ -1384,6 +1384,126 @@ class MetalboxStore:
             result.append(item)
         return result
 
+    def create_plan_snapshot(
+        self,
+        *,
+        source_name: str,
+        snapshot_path: str,
+        sha256: str,
+        size_bytes: int,
+        sheet_name: str,
+        header_row: int,
+        rows: list[dict],
+        actor: str = "development-user",
+    ) -> dict:
+        created_at = datetime.now(timezone.utc).isoformat()
+        with self._connect() as db:
+            cursor = db.execute(
+                """
+                INSERT INTO plan_snapshots(
+                    source_name, snapshot_path, sha256, size_bytes,
+                    sheet_name, header_row, row_count, status, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'PODGLĄD', ?)
+                """,
+                (
+                    str(source_name or "").strip(),
+                    str(snapshot_path or "").strip(),
+                    str(sha256 or "").strip(),
+                    int(size_bytes),
+                    str(sheet_name or "").strip(),
+                    int(header_row),
+                    len(rows),
+                    created_at,
+                ),
+            )
+            snapshot_id = int(cursor.lastrowid)
+            for row in rows:
+                db.execute(
+                    """
+                    INSERT INTO plan_snapshot_rows(
+                        snapshot_id, row_key, row_no, order_code, symbol, name,
+                        quantity, shipping, ral, raw_json
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        snapshot_id,
+                        str(row.get("row_key", "")),
+                        int(row.get("row_no", 0)),
+                        str(row.get("order_code", "") or ""),
+                        str(row.get("symbol", "") or ""),
+                        str(row.get("name", "") or ""),
+                        row.get("quantity"),
+                        str(row.get("shipping", "") or ""),
+                        str(row.get("ral", "") or ""),
+                        json.dumps(row, ensure_ascii=False, default=str),
+                    ),
+                )
+
+            self._audit_in_connection(
+                db,
+                actor=actor,
+                action="plan_snapshot_created",
+                entity_type="plan_snapshot",
+                entity_id=str(snapshot_id),
+                payload={
+                    "source_name": source_name,
+                    "sha256": sha256,
+                    "row_count": len(rows),
+                    "sheet_name": sheet_name,
+                    "header_row": int(header_row),
+                },
+            )
+
+        snapshot = self.get_plan_snapshot(snapshot_id)
+        if snapshot is None:
+            raise RuntimeError("Snapshot planu został zapisany, ale nie można go odczytać.")
+        return snapshot
+
+    def get_plan_snapshot(self, snapshot_id: int) -> dict | None:
+        with self._connect() as db:
+            row = db.execute(
+                """
+                SELECT
+                    id, source_name, snapshot_path, sha256, size_bytes,
+                    sheet_name, header_row, row_count, status, created_at
+                FROM plan_snapshots
+                WHERE id = ?
+                """,
+                (int(snapshot_id),),
+            ).fetchone()
+        return dict(row) if row is not None else None
+
+    def get_latest_plan_snapshot(self) -> dict | None:
+        with self._connect() as db:
+            row = db.execute(
+                """
+                SELECT
+                    id, source_name, snapshot_path, sha256, size_bytes,
+                    sheet_name, header_row, row_count, status, created_at
+                FROM plan_snapshots
+                ORDER BY id DESC
+                LIMIT 1
+                """
+            ).fetchone()
+        return dict(row) if row is not None else None
+
+    def list_plan_snapshot_rows(self, snapshot_id: int) -> list[dict]:
+        with self._connect() as db:
+            rows = db.execute(
+                """
+                SELECT
+                    id, snapshot_id, row_key, row_no, order_code, symbol, name,
+                    quantity, shipping, ral
+                FROM plan_snapshot_rows
+                WHERE snapshot_id = ?
+                ORDER BY row_no, id
+                """,
+                (int(snapshot_id),),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def create_employee(
         self,
         *,
