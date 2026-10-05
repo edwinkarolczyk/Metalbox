@@ -1,27 +1,37 @@
 {
   "schema": 1,
   "version": "0.1.23",
-  "title": "Produkty — technologia i kolejność operacji",
-  "description": "Sprawdź trasę technologiczną produktu/półproduktu, zmianę kolejności etapów oraz opcjonalne czasy przygotowania i czasu na sztukę.",
+  "title": "Produkty — BOM i technologia",
+  "description": "Odbiór łączony po 0.1.21.1: sprawdź strukturę BOM oraz trasę technologiczną produktu/półproduktu, żeby nie pominąć etapu 0.1.22.",
   "checks": [
     {
+      "id": "bom-open",
+      "text": "1. Otwórz PRODUKTY → kartę produktu → „BOM”. Ma być tabela BOM oraz przyciski dodawania i usuwania pozycji.",
+      "trigger": "product:bom_open"
+    },
+    {
+      "id": "bom-add",
+      "text": "2. Dodaj pozycję BOM z symbolem, nazwą, typem i ilością na komplet. Po zapisie ma pojawić się w tabeli.",
+      "trigger": "product:bom_item_add"
+    },
+    {
       "id": "technology-open",
-      "text": "1. Otwórz kartę produktu → kliknij „Technologia”. Ma pojawić się tabela operacji oraz przyciski „Dodaj operację”, „W górę”, „W dół” i „Usuń operację”.",
+      "text": "3. Kliknij „Technologia”. Ma być tabela operacji oraz „Dodaj operację”, „W górę”, „W dół” i „Usuń operację”.",
       "trigger": "product:technology_open"
     },
     {
       "id": "technology-add",
-      "text": "2. Dodaj operację, wybierz dział (np. Laser), nazwę operacji i opcjonalnie czasy. Po zapisie etap ma pojawić się w tabeli.",
+      "text": "4. Dodaj operację, np. Laser → Cięcie. Opcjonalnie wpisz czas przygotowania i min/szt. Po zapisie etap ma pojawić się w tabeli.",
       "trigger": "product:operation_add"
     },
     {
       "id": "technology-move",
-      "text": "3. Dodaj co najmniej dwie operacje, zaznacz drugą i użyj „W górę”. Kolejność ma się zmienić i zostać zapisana.",
+      "text": "5. Dodaj drugą operację i zmień kolejność przyciskiem „W górę” lub „W dół”. Kolejność ma zostać zapisana.",
       "trigger": "product:operation_move"
     },
     {
       "id": "technology-delete",
-      "text": "4. Zaznacz operację i kliknij „Usuń operację”. Po potwierdzeniu etap ma zniknąć, a numeracja ma pozostać ciągła.",
+      "text": "6. Usuń jedną operację. Po potwierdzeniu ma zniknąć, a numeracja pozostać ciągła.",
       "trigger": "product:operation_delete"
     }
   ]
