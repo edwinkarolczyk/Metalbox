@@ -1,38 +1,28 @@
 {
   "schema": 1,
-  "version": "0.1.23",
-  "title": "Produkty — BOM i technologia",
-  "description": "Odbiór łączony po 0.1.21.1: sprawdź strukturę BOM oraz trasę technologiczną produktu/półproduktu, żeby nie pominąć etapu 0.1.22.",
+  "version": "0.1.24",
+  "title": "Produkty — edycja i weryfikacja",
+  "description": "Sprawdź poprawianie istniejącej karty produktu oraz filtrowanie rekordów wymagających weryfikacji. Symbol istniejącego produktu pozostaje niezmienny.",
   "checks": [
     {
-      "id": "bom-open",
-      "text": "1. Otwórz PRODUKTY → kartę produktu → „BOM”. Ma być tabela BOM oraz przyciski dodawania i usuwania pozycji.",
-      "trigger": "product:bom_open"
+      "id": "product-edit-open",
+      "text": "1. Otwórz PRODUKTY → kartę produktu → „Edytuj dane”. Formularz ma wczytać bieżące dane, a pole Symbol ma być tylko do odczytu.",
+      "trigger": "product:edit_open"
     },
     {
-      "id": "bom-add",
-      "text": "2. Dodaj pozycję BOM z symbolem, nazwą, typem i ilością na komplet. Po zapisie ma pojawić się w tabeli.",
-      "trigger": "product:bom_item_add"
+      "id": "product-edit-save",
+      "text": "2. Zmień np. nazwę, materiał, wymiary lub uwagi i kliknij „Zapisz zmiany”. Po powrocie karta ma pokazać nowe wartości.",
+      "trigger": "product:update"
     },
     {
-      "id": "technology-open",
-      "text": "3. Kliknij „Technologia”. Ma być tabela operacji oraz „Dodaj operację”, „W górę”, „W dół” i „Usuń operację”.",
-      "trigger": "product:technology_open"
+      "id": "product-verification-filter",
+      "text": "3. W PRODUKTACH kliknij „Do weryfikacji”. Lista ma pokazać wyłącznie produkty ze statusem DO WERYFIKACJI; ponowne kliknięcie przywraca pełną listę.",
+      "trigger": "product:verification_filter"
     },
     {
-      "id": "technology-add",
-      "text": "4. Dodaj operację, np. Laser → Cięcie. Opcjonalnie wpisz czas przygotowania i min/szt. Po zapisie etap ma pojawić się w tabeli.",
-      "trigger": "product:operation_add"
-    },
-    {
-      "id": "technology-move",
-      "text": "5. Dodaj drugą operację i zmień kolejność przyciskiem „W górę” lub „W dół”. Kolejność ma zostać zapisana.",
-      "trigger": "product:operation_move"
-    },
-    {
-      "id": "technology-delete",
-      "text": "6. Usuń jedną operację. Po potwierdzeniu ma zniknąć, a numeracja pozostać ciągła.",
-      "trigger": "product:operation_delete"
+      "id": "product-verification-close",
+      "text": "4. Otwórz produkt DO WERYFIKACJI, zmień status na AKTYWNY i zapisz. Po włączeniu filtra „Do weryfikacji” ten produkt nie może już być widoczny.",
+      "trigger": "product:update"
     }
   ]
 }
