@@ -3768,6 +3768,12 @@ class ProductEditorDialog(QDialog):
         mark_update_check(
             "product:update" if self.original_product is not None else "product:create"
         )
+        if (
+            self.original_product is not None
+            and str(self.original_product.get("status", "")).upper() == "DO WERYFIKACJI"
+            and str(product.get("status", "")).upper() == "AKTYWNY"
+        ):
+            mark_update_check("product:verification_closed")
         self.accept()
 
 
