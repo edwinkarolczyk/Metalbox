@@ -48,7 +48,7 @@ from PySide6.QtWidgets import (
 )
 
 APP_NAME = "Metalbox"
-APP_VERSION = "0.1.21"
+APP_VERSION = "0.1.21.1"
 LOCAL_DATA_ROOT = Path(
     os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
 ) / "Metalbox"
@@ -66,8 +66,25 @@ DEV_UPDATE_STATE_FILE = DEV_ROOT / "update_state.json"
 DEV_SOURCE_STATE_FILE = DEV_ROOT / "source_state.json"
 INSTALLED_STATE_FILE = LOCAL_DATA_ROOT / "installed.json"
 DEV_VIEW_STATE_FILE = CONFIG_DIR / "dev_view.json"
-BUNDLE_ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
-PRODUCT_HINTS_FILE = BUNDLE_ROOT / "data" / "product_hints_foldery.txt"
+
+
+def resource_file(*parts: str) -> Path:
+    """Zwraca plik zasobu zarówno dla źródeł MetalboxDev, jak i gotowego EXE."""
+    source_root = Path(__file__).resolve().parent
+    source_candidate = source_root.joinpath(*parts)
+    if source_candidate.exists():
+        return source_candidate
+
+    frozen_root = getattr(sys, "_MEIPASS", None)
+    if frozen_root:
+        frozen_candidate = Path(frozen_root).joinpath(*parts)
+        if frozen_candidate.exists():
+            return frozen_candidate
+
+    return source_candidate
+
+
+PRODUCT_HINTS_FILE = resource_file("data", "product_hints_foldery.txt")
 
 # Tylko na czas developmentu. Ustaw False przed wersją produkcyjną,
 # aby całkowicie ukryć przycisk szybkiego zamykania aplikacji.
