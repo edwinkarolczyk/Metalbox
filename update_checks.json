@@ -22,7 +22,7 @@
     {
       "id": "product-verification-close",
       "text": "4. Otwórz produkt DO WERYFIKACJI, zmień status na AKTYWNY i zapisz. Po włączeniu filtra „Do weryfikacji” ten produkt nie może już być widoczny.",
-      "trigger": "product:update"
+      "trigger": "product:verification_closed"
     }
   ]
 }
