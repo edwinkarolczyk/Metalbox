@@ -1,28 +1,28 @@
 {
   "schema": 1,
-  "version": "0.1.22",
-  "title": "Produkty — BOM produktu",
-  "description": "Sprawdź prawdziwą zakładkę BOM na karcie produktu: dodawanie pozycji, automatyczne powiązanie istniejącego półproduktu oraz usuwanie z audytem.",
+  "version": "0.1.23",
+  "title": "Produkty — technologia i kolejność operacji",
+  "description": "Sprawdź trasę technologiczną produktu/półproduktu, zmianę kolejności etapów oraz opcjonalne czasy przygotowania i czasu na sztukę.",
   "checks": [
     {
-      "id": "bom-open",
-      "text": "1. Otwórz PRODUKTY → wejdź w kartę produktu → kliknij „BOM”. Ma pojawić się tabela BOM oraz przyciski „Dodaj pozycję BOM” i „Usuń z BOM”.",
-      "trigger": "product:bom_open"
+      "id": "technology-open",
+      "text": "1. Otwórz kartę produktu → kliknij „Technologia”. Ma pojawić się tabela operacji oraz przyciski „Dodaj operację”, „W górę”, „W dół” i „Usuń operację”.",
+      "trigger": "product:technology_open"
     },
     {
-      "id": "bom-add",
-      "text": "2. Dodaj pozycję BOM z typem np. DETAL lub MATERIAŁ, podaj symbol, nazwę, ilość na 1 komplet i jednostkę. Po zapisie pozycja ma pojawić się w tabeli.",
-      "trigger": "product:bom_item_add"
+      "id": "technology-add",
+      "text": "2. Dodaj operację, wybierz dział (np. Laser), nazwę operacji i opcjonalnie czasy. Po zapisie etap ma pojawić się w tabeli.",
+      "trigger": "product:operation_add"
     },
     {
-      "id": "bom-link",
-      "text": "3. Dodaj jako PÓŁPRODUKT symbol, który istnieje już w katalogu produktów/półproduktów. W kolumnie „Powiązanie” ma być „Karta produktu”.",
-      "trigger": "product:bom_item_linked"
+      "id": "technology-move",
+      "text": "3. Dodaj co najmniej dwie operacje, zaznacz drugą i użyj „W górę”. Kolejność ma się zmienić i zostać zapisana.",
+      "trigger": "product:operation_move"
     },
     {
-      "id": "bom-delete",
-      "text": "4. Zaznacz dowolną pozycję BOM i kliknij „Usuń z BOM”. Po potwierdzeniu pozycja ma zniknąć z tabeli.",
-      "trigger": "product:bom_item_delete"
+      "id": "technology-delete",
+      "text": "4. Zaznacz operację i kliknij „Usuń operację”. Po potwierdzeniu etap ma zniknąć, a numeracja ma pozostać ciągła.",
+      "trigger": "product:operation_delete"
     }
   ]
 }
