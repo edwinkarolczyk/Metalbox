@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Iterator
 
 
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 DEFAULT_ROUTE = ("Laser", "Giętarki", "Zgrzewarki", "Malarnia", "Pakownia")
 QUALITY_REASON_CODES = (
     "NIEZGODNY_WYMIAR",
@@ -259,6 +259,28 @@ class MetalboxStore:
 
                 CREATE INDEX IF NOT EXISTS idx_plan_snapshot_rows_snapshot
                     ON plan_snapshot_rows(snapshot_id, row_no);
+
+                CREATE TABLE IF NOT EXISTS accepted_plan_items (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    row_key TEXT NOT NULL UNIQUE,
+                    source_snapshot_id INTEGER REFERENCES plan_snapshots(id) ON DELETE SET NULL,
+                    row_no INTEGER NOT NULL,
+                    order_code TEXT NOT NULL DEFAULT '',
+                    symbol TEXT NOT NULL DEFAULT '',
+                    name TEXT NOT NULL DEFAULT '',
+                    quantity REAL,
+                    shipping TEXT NOT NULL DEFAULT '',
+                    ral TEXT NOT NULL DEFAULT '',
+                    product_id INTEGER REFERENCES products(id) ON DELETE SET NULL,
+                    product_match_status TEXT NOT NULL DEFAULT 'DO WERYFIKACJI',
+                    accepted_at TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_accepted_plan_order
+                    ON accepted_plan_items(order_code, row_no);
+
+                CREATE INDEX IF NOT EXISTS idx_accepted_plan_product
+                    ON accepted_plan_items(product_id, product_match_status);
 
                 CREATE TABLE IF NOT EXISTS session_workers (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1503,6 +1525,277 @@ class MetalboxStore:
                 (int(snapshot_id),),
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def list_accepted_plan_items(self) -> list[dict]:
+        with self._connect() as db:
+            rows = db.execute(
+                """
+                SELECT
+                    api.id,
+                    api.row_key,
+                    api.source_snapshot_id,
+                    api.row_no,
+                    api.order_code,
+                    api.symbol,
+                    api.name,
+                    api.quantity,
+                    api.shipping,
+                    api.ral,
+                    api.product_id,
+                    api.product_match_status,
+                    api.accepted_at,
+                    p.name AS matched_product_name,
+                    p.kind AS matched_product_kind,
+                    p.status AS matched_product_status
+                FROM accepted_plan_items api
+                LEFT JOIN products p ON p.id = api.product_id
+                ORDER BY api.row_no, api.id
+                """
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    @staticmethod
+    def _plan_row_changed_fields(before: dict, after: dict) -> dict:
+        labels = {
+            "order_code": "Nr ZL",
+            "symbol": "Symbol",
+            "name": "Nazwa",
+            "quantity": "Ilość",
+            "shipping": "Termin / wysyłka",
+            "ral": "RAL",
+        }
+        result: dict[str, dict] = {}
+        for field, label in labels.items():
+            if before.get(field) != after.get(field):
+                result[field] = {
+                    "label": label,
+                    "before": before.get(field),
+                    "after": after.get(field),
+                }
+        return result
+
+    def get_plan_acceptance_preview(self, snapshot_id: int) -> dict:
+        snapshot = self.get_plan_snapshot(snapshot_id)
+        if snapshot is None:
+            raise ValueError("Nie znaleziono snapshotu planu.")
+
+        with self._connect() as db:
+            current_rows = [
+                dict(row)
+                for row in db.execute(
+                    """
+                    SELECT
+                        row_key, row_no, order_code, symbol, name,
+                        quantity, shipping, ral
+                    FROM plan_snapshot_rows
+                    WHERE snapshot_id = ?
+                    ORDER BY row_no, id
+                    """,
+                    (int(snapshot_id),),
+                ).fetchall()
+            ]
+            accepted_rows = [
+                dict(row)
+                for row in db.execute(
+                    """
+                    SELECT
+                        row_key, row_no, order_code, symbol, name,
+                        quantity, shipping, ral, product_id,
+                        product_match_status
+                    FROM accepted_plan_items
+                    ORDER BY row_no, id
+                    """
+                ).fetchall()
+            ]
+            products = {
+                str(row["symbol"]).strip().casefold(): dict(row)
+                for row in db.execute(
+                    """
+                    SELECT id, symbol, name, kind, status
+                    FROM products
+                    """
+                ).fetchall()
+            }
+
+        accepted_by_key = {
+            str(row["row_key"]): row
+            for row in accepted_rows
+        }
+        current_by_key = {
+            str(row["row_key"]): row
+            for row in current_rows
+        }
+
+        matched_count = 0
+        review_count = 0
+        for row in current_rows:
+            product = products.get(str(row.get("symbol") or "").strip().casefold())
+            if product is None:
+                row["product_id"] = None
+                row["product_match_status"] = "DO WERYFIKACJI"
+                row["matched_product_name"] = ""
+                review_count += 1
+            else:
+                row["product_id"] = int(product["id"])
+                row["product_match_status"] = "DOPASOWANY"
+                row["matched_product_name"] = str(product["name"])
+                matched_count += 1
+
+        added: list[dict] = []
+        changed: list[dict] = []
+        removed: list[dict] = []
+
+        for row in current_rows:
+            key = str(row["row_key"])
+            before = accepted_by_key.get(key)
+            if before is None:
+                item = dict(row)
+                item["change_type"] = "NOWY"
+                item["changes"] = {}
+                added.append(item)
+                continue
+
+            delta = self._plan_row_changed_fields(before, row)
+            if delta:
+                item = dict(row)
+                item["change_type"] = "ZMIENIONY"
+                item["changes"] = delta
+                item["before"] = before
+                changed.append(item)
+
+        for row in accepted_rows:
+            if str(row["row_key"]) not in current_by_key:
+                item = dict(row)
+                item["change_type"] = "USUNIĘTY"
+                item["changes"] = {}
+                removed.append(item)
+
+        return {
+            "snapshot": snapshot,
+            "added": added,
+            "changed": changed,
+            "removed": removed,
+            "total_changes": len(added) + len(changed) + len(removed),
+            "matched_count": matched_count,
+            "review_count": review_count,
+            "row_count": len(current_rows),
+        }
+
+    def accept_plan_snapshot(
+        self,
+        snapshot_id: int,
+        *,
+        actor: str = "development-user",
+    ) -> dict:
+        preview = self.get_plan_acceptance_preview(snapshot_id)
+        snapshot = preview["snapshot"]
+        now = datetime.now(timezone.utc).isoformat()
+
+        with self._connect() as db:
+            rows = [
+                dict(row)
+                for row in db.execute(
+                    """
+                    SELECT
+                        row_key, row_no, order_code, symbol, name,
+                        quantity, shipping, ral
+                    FROM plan_snapshot_rows
+                    WHERE snapshot_id = ?
+                    ORDER BY row_no, id
+                    """,
+                    (int(snapshot_id),),
+                ).fetchall()
+            ]
+            products = {
+                str(row["symbol"]).strip().casefold(): dict(row)
+                for row in db.execute(
+                    "SELECT id, symbol, name FROM products"
+                ).fetchall()
+            }
+
+            db.execute("DELETE FROM accepted_plan_items")
+            matched_count = 0
+            review_count = 0
+
+            for row in rows:
+                product = products.get(
+                    str(row.get("symbol") or "").strip().casefold()
+                )
+                product_id = int(product["id"]) if product is not None else None
+                product_match_status = (
+                    "DOPASOWANY" if product is not None else "DO WERYFIKACJI"
+                )
+                if product is not None:
+                    matched_count += 1
+                else:
+                    review_count += 1
+
+                db.execute(
+                    """
+                    INSERT INTO accepted_plan_items(
+                        row_key, source_snapshot_id, row_no, order_code,
+                        symbol, name, quantity, shipping, ral,
+                        product_id, product_match_status, accepted_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        str(row["row_key"]),
+                        int(snapshot_id),
+                        int(row["row_no"]),
+                        str(row.get("order_code") or ""),
+                        str(row.get("symbol") or ""),
+                        str(row.get("name") or ""),
+                        row.get("quantity"),
+                        str(row.get("shipping") or ""),
+                        str(row.get("ral") or ""),
+                        product_id,
+                        product_match_status,
+                        now,
+                    ),
+                )
+
+            db.execute(
+                """
+                UPDATE plan_snapshots
+                SET status = 'ARCHIWALNY'
+                WHERE status = 'ZAAKCEPTOWANY' AND id <> ?
+                """,
+                (int(snapshot_id),),
+            )
+            db.execute(
+                "UPDATE plan_snapshots SET status = 'ZAAKCEPTOWANY' WHERE id = ?",
+                (int(snapshot_id),),
+            )
+
+            self._audit_in_connection(
+                db,
+                actor=actor,
+                action="plan_snapshot_accepted",
+                entity_type="plan_snapshot",
+                entity_id=str(snapshot_id),
+                payload={
+                    "source_name": snapshot["source_name"],
+                    "row_count": len(rows),
+                    "added": len(preview["added"]),
+                    "changed": len(preview["changed"]),
+                    "removed": len(preview["removed"]),
+                    "matched_count": matched_count,
+                    "review_count": review_count,
+                    "orders_changed": False,
+                },
+            )
+
+        return {
+            "snapshot_id": int(snapshot_id),
+            "row_count": len(rows),
+            "added": len(preview["added"]),
+            "changed": len(preview["changed"]),
+            "removed": len(preview["removed"]),
+            "matched_count": matched_count,
+            "review_count": review_count,
+            "orders_changed": False,
+        }
 
     def create_employee(
         self,
