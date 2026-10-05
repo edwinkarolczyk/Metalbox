@@ -1,12 +1,12 @@
 {
   "schema": 1,
-  "version": "0.1.25",
-  "title": "Planista — bezpieczny snapshot planu Excel",
-  "description": "Sprawdź pierwszy etap importu planu: źródłowy Excel ma być tylko skopiowany, zamknięty i dopiero lokalny snapshot ma być analizowany oraz porównywany z poprzednim stanem. Ten etap nie zmienia jeszcze zleceń.",
+  "version": "0.1.25.1",
+  "title": "Planista — bezpieczny snapshot Excel bez openpyxl",
+  "description": "Hotfix 0.1.25: MetalboxDev nie wymaga już biblioteki openpyxl. Import .xlsx/.xlsm działa na wbudowanych modułach Pythona, zachowując zasadę: kopiowanie źródła → zamknięcie → parsowanie lokalnego snapshotu.",
   "checks": [
     {
       "id": "planner-snapshot-created",
-      "text": "1. Wejdź w PLANISTA → „Import snapshot” i wybierz plan .xlsx/.xlsm. Metalbox ma utworzyć lokalny snapshot bez pozostawiania oryginalnego Excela otwartego.",
+      "text": "1. Wejdź w PLANISTA → „Import snapshot” i wybierz plan .xlsx/.xlsm. Aplikacja ma działać bez błędu „No module named openpyxl” i utworzyć lokalny snapshot.",
       "trigger": "planner:snapshot_created"
     },
     {
@@ -16,7 +16,7 @@
     },
     {
       "id": "planner-snapshot-compared",
-      "text": "3. Metalbox ma pokazać liczbę pozycji NOWY / ZMIENIONY / USUNIĘTY względem poprzedniego snapshotu. Zmiany pozostają tylko podglądem i nie aktualizują jeszcze zleceń.",
+      "text": "3. Metalbox ma pokazać liczbę pozycji NOWY / ZMIENIONY / USUNIĘTY względem poprzedniego snapshotu. Zmiany są tylko podglądem i nie aktualizują jeszcze zleceń.",
       "trigger": "planner:snapshot_compared"
     }
   ]
