@@ -20,7 +20,7 @@ PKG_REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
 
 HEADER_ALIASES = {
     "order_code": {
-        "nr zl", "nr zlecenia", "zlecenie", "zl", "numer zl",
+        "nr zl", "nr zlec", "nr zlecenia", "zlecenie", "zl", "numer zl", "numer zlecenia",
         "nr zlecenia produkcyjnego",
     },
     "symbol": {
@@ -37,7 +37,7 @@ HEADER_ALIASES = {
         "ilosc", "ilość", "qty", "szt", "szt.", "ilosc szt", "ilość szt",
     },
     "shipping": {
-        "wysylka", "wysyłka", "termin", "data wysylki", "data wysyłki",
+        "wysylka", "wysyłka", "termin", "termin realizacji", "data realizacji", "data wysylki", "data wysyłki",
         "termin wysylki", "termin wysyłki",
     },
     "ral": {
@@ -63,8 +63,10 @@ class ParsedPlan:
 
 
 def _normalize_header(value: object) -> str:
-    text = str(value or "").strip().casefold()
-    return re.sub(r"\s+", " ", text)
+    text = str(value or "").replace("\xa0", " ").strip().casefold()
+    text = re.sub(r"[.:;,]+", " ", text)
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
 
 
 def safe_snapshot(source: Path, snapshot_dir: Path) -> SnapshotInfo:
@@ -136,7 +138,7 @@ def _read_shared_strings(archive: zipfile.ZipFile) -> list[str]:
     return result
 
 
-def _workbook_sheet(archive: zipfile.ZipFile) -> tuple[str, str]:
+def _workbook_sheets(archive: zipfile.ZipFile) -> list[tuple[str, str, bool]]:
     workbook = _xml_root(archive, "xl/workbook.xml")
     sheets_node = workbook.find(f"{{{MAIN_NS}}}sheets")
     if sheets_node is None:
@@ -156,28 +158,34 @@ def _workbook_sheet(archive: zipfile.ZipFile) -> tuple[str, str]:
             except ValueError:
                 active_index = 0
     active_index = max(0, min(active_index, len(sheets) - 1))
-    selected = sheets[active_index]
-
-    rel_id = selected.attrib.get(f"{{{DOC_REL_NS}}}id")
-    if not rel_id:
-        raise ValueError("Nie można ustalić pliku aktywnego arkusza.")
 
     rels = _xml_root(archive, "xl/_rels/workbook.xml.rels")
-    target = ""
-    for rel in rels.findall(f"{{{PKG_REL_NS}}}Relationship"):
-        if rel.attrib.get("Id") == rel_id:
-            target = rel.attrib.get("Target", "")
-            break
-    if not target:
-        raise ValueError("Nie znaleziono relacji aktywnego arkusza.")
+    targets = {
+        rel.attrib.get("Id", ""): rel.attrib.get("Target", "")
+        for rel in rels.findall(f"{{{PKG_REL_NS}}}Relationship")
+    }
 
-    if target.startswith("/"):
-        sheet_path = target.lstrip("/")
-    else:
-        sheet_path = posixpath.normpath(posixpath.join("xl", target))
+    result: list[tuple[str, str, bool]] = []
+    for index, sheet in enumerate(sheets):
+        rel_id = sheet.attrib.get(f"{{{DOC_REL_NS}}}id", "")
+        target = targets.get(rel_id, "")
+        if not target:
+            continue
+        if target.startswith("/"):
+            sheet_path = target.lstrip("/")
+        else:
+            sheet_path = posixpath.normpath(posixpath.join("xl", target))
+        result.append(
+            (
+                str(sheet.attrib.get("name", f"Arkusz {index + 1}")),
+                sheet_path,
+                index == active_index,
+            )
+        )
 
-    return str(selected.attrib.get("name", "Arkusz")), sheet_path
-
+    if not result:
+        raise ValueError("Nie znaleziono relacji do arkuszy skoroszytu.")
+    return result
 
 def _column_index(reference: str) -> int:
     match = re.match(r"^([A-Za-z]+)", reference or "")
@@ -292,50 +300,48 @@ def _cell_value(
     return number
 
 
-def _sheet_rows(snapshot_path: Path) -> tuple[str, list[tuple[object, ...]]]:
-    try:
-        archive = zipfile.ZipFile(snapshot_path, "r")
-    except (OSError, zipfile.BadZipFile) as exc:
-        raise ValueError("Wybrany plik nie jest prawidłowym plikiem Excel .xlsx/.xlsm.") from exc
+def _read_sheet_rows(
+    archive: zipfile.ZipFile,
+    sheet_path: str,
+    shared_strings: list[str],
+    date_styles: set[int],
+) -> list[tuple[object, ...]]:
+    root = _xml_root(archive, sheet_path)
+    sheet_data = root.find(f"{{{MAIN_NS}}}sheetData")
+    if sheet_data is None:
+        return []
 
-    with archive:
-        shared_strings = _read_shared_strings(archive)
-        date_styles = _date_style_indexes(archive)
-        sheet_name, sheet_path = _workbook_sheet(archive)
+    result: list[tuple[object, ...]] = []
+    for row in sheet_data.findall(f"{{{MAIN_NS}}}row"):
+        values: dict[int, object] = {}
+        max_column = 0
+        for cell in row.findall(f"{{{MAIN_NS}}}c"):
+            column = _column_index(cell.attrib.get("r", ""))
+            if column <= 0:
+                continue
+            values[column] = _cell_value(cell, shared_strings, date_styles)
+            max_column = max(max_column, column)
 
-        root = _xml_root(archive, sheet_path)
-        sheet_data = root.find(f"{{{MAIN_NS}}}sheetData")
-        if sheet_data is None:
-            return sheet_name, []
-
-        result: list[tuple[object, ...]] = []
-        for row in sheet_data.findall(f"{{{MAIN_NS}}}row"):
-            values: dict[int, object] = {}
-            max_column = 0
-            for cell in row.findall(f"{{{MAIN_NS}}}c"):
-                column = _column_index(cell.attrib.get("r", ""))
-                if column <= 0:
-                    continue
-                values[column] = _cell_value(cell, shared_strings, date_styles)
-                max_column = max(max_column, column)
-
-            if max_column == 0:
-                result.append(tuple())
-            else:
-                result.append(
-                    tuple(values.get(column, "") for column in range(1, max_column + 1))
-                )
-
-        return sheet_name, result
+        if max_column == 0:
+            result.append(tuple())
+        else:
+            result.append(
+                tuple(values.get(column, "") for column in range(1, max_column + 1))
+            )
+    return result
 
 
-def _detect_header_row(
+def _header_candidate(
     rows: list[tuple[object, ...]],
-    max_scan_rows: int = 80,
-) -> tuple[int, dict[str, int]]:
+    max_scan_rows: int = 120,
+) -> tuple[int, dict[str, int], int]:
     best_row = 0
     best_mapping: dict[str, int] = {}
     best_score = 0
+    normalized_aliases = {
+        field: {_normalize_header(alias) for alias in aliases}
+        for field, aliases in HEADER_ALIASES.items()
+    }
 
     for row_no, row in enumerate(rows[:max_scan_rows], start=1):
         mapping: dict[str, int] = {}
@@ -343,7 +349,7 @@ def _detect_header_row(
             normalized = _normalize_header(value)
             if not normalized:
                 continue
-            for field, aliases in HEADER_ALIASES.items():
+            for field, aliases in normalized_aliases.items():
                 if normalized in aliases and field not in mapping:
                     mapping[field] = column_index
 
@@ -352,20 +358,82 @@ def _detect_header_row(
             score += 1
         if "symbol" in mapping or "product" in mapping:
             score += 2
+        if "order_code" in mapping:
+            score += 1
+
         if score > best_score:
             best_score = score
             best_row = row_no
             best_mapping = mapping
 
-    if best_score < 3 or not (
-        "symbol" in best_mapping or "product" in best_mapping
-    ):
-        raise ValueError(
-            "Nie rozpoznano nagłówków planu. Potrzebny jest co najmniej produkt/symbol "
-            "oraz dodatkowe kolumny, np. ilość lub numer ZL."
-        )
+    return best_row, best_mapping, best_score
 
-    return best_row, best_mapping
+
+def _sheet_rows(
+    snapshot_path: Path,
+) -> tuple[str, list[tuple[object, ...]], int, dict[str, int]]:
+    try:
+        archive = zipfile.ZipFile(snapshot_path, "r")
+    except (OSError, zipfile.BadZipFile) as exc:
+        raise ValueError(
+            "Wybrany plik nie jest prawidłowym plikiem Excel .xlsx/.xlsm."
+        ) from exc
+
+    with archive:
+        shared_strings = _read_shared_strings(archive)
+        date_styles = _date_style_indexes(archive)
+        workbook_sheets = _workbook_sheets(archive)
+
+        candidates = []
+        for sheet_name, sheet_path, is_active in workbook_sheets:
+            rows = _read_sheet_rows(
+                archive,
+                sheet_path,
+                shared_strings,
+                date_styles,
+            )
+            header_row, mapping, semantic_score = _header_candidate(rows)
+            name_bonus = 2 if "plan" in _normalize_header(sheet_name) else 0
+            candidates.append(
+                (
+                    semantic_score + name_bonus,
+                    semantic_score,
+                    is_active,
+                    sheet_name,
+                    rows,
+                    header_row,
+                    mapping,
+                )
+            )
+
+        candidates.sort(key=lambda item: (item[0], item[2]), reverse=True)
+        (
+            _rank_score,
+            semantic_score,
+            _active,
+            sheet_name,
+            rows,
+            header_row,
+            mapping,
+        ) = candidates[0]
+
+        if semantic_score < 3 or not (
+            "symbol" in mapping or "product" in mapping
+        ):
+            detected = ", ".join(sorted(mapping)) or "brak"
+            sheet_names = ", ".join(
+                name for name, _path, _active in workbook_sheets
+            )
+            raise ValueError(
+                "Nie rozpoznano nagłówków planu. "
+                f"Arkusze: {sheet_names}. "
+                f"Najlepszy kandydat: {sheet_name}, wiersz {header_row or '—'}, "
+                f"rozpoznane pola: {detected}. "
+                "Obsługiwane są m.in. Nr zlec., Produkt, Ilość:, "
+                "Termin realizacji:/Data wysyłki oraz RAL."
+            )
+
+        return sheet_name, rows, header_row, mapping
 
 
 def _cell(row: tuple[object, ...], column_index: int | None) -> object:
@@ -411,8 +479,7 @@ def _split_product(product_text: str) -> tuple[str, str]:
 def read_plan_snapshot(snapshot_path: Path) -> ParsedPlan:
     """Parsuje wyłącznie lokalny snapshot; nigdy plik źródłowy."""
     snapshot_path = Path(snapshot_path)
-    sheet_name, worksheet_rows = _sheet_rows(snapshot_path)
-    header_row, mapping = _detect_header_row(worksheet_rows)
+    sheet_name, worksheet_rows, header_row, mapping = _sheet_rows(snapshot_path)
 
     result: list[dict] = []
     last_order_code = ""
