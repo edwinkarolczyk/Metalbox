@@ -262,6 +262,82 @@ class MetalboxStoreTests(unittest.TestCase):
             ["BLACHA.1"],
         )
 
+    def test_product_operations_route_order_and_load(self) -> None:
+        self.store.create_product(symbol="TECH.1", name="Produkt technologiczny")
+
+        laser = self.store.add_product_operation(
+            "TECH.1",
+            department="Laser",
+            operation_name="Cięcie",
+            setup_minutes=30,
+            minutes_per_unit=0.5,
+        )
+        bending = self.store.add_product_operation(
+            "TECH.1",
+            department="Giętarki",
+            operation_name="Gięcie",
+            setup_minutes=15,
+            minutes_per_unit=0.25,
+        )
+        welding = self.store.add_product_operation(
+            "TECH.1",
+            department="Zgrzewarki",
+            operation_name="Zgrzewanie",
+            minutes_per_unit=0.75,
+        )
+
+        route = self.store.list_product_operations("TECH.1")
+        self.assertEqual(
+            [row["department"] for row in route],
+            ["Laser", "Giętarki", "Zgrzewarki"],
+        )
+
+        self.store.move_product_operation(
+            "TECH.1",
+            int(welding["id"]),
+            -1,
+        )
+        moved = self.store.list_product_operations("TECH.1")
+        self.assertEqual(
+            [row["department"] for row in moved],
+            ["Laser", "Zgrzewarki", "Giętarki"],
+        )
+        self.assertEqual(
+            [row["sequence_no"] for row in moved],
+            [1, 2, 3],
+        )
+
+        load = self.store.calculate_operation_load("TECH.1", 100)
+        by_department = {row["department"]: row for row in load}
+        self.assertEqual(by_department["Laser"]["load_minutes"], 80.0)
+        self.assertEqual(by_department["Giętarki"]["load_minutes"], 40.0)
+        self.assertEqual(by_department["Zgrzewarki"]["load_minutes"], 75.0)
+
+        self.store.delete_product_operation(
+            "TECH.1",
+            int(laser["id"]),
+        )
+        final_route = self.store.list_product_operations("TECH.1")
+        self.assertEqual(
+            [row["sequence_no"] for row in final_route],
+            [1, 2],
+        )
+
+    def test_product_operation_requires_department_and_name(self) -> None:
+        self.store.create_product(symbol="TECH.2", name="Produkt")
+        with self.assertRaisesRegex(ValueError, "Dział"):
+            self.store.add_product_operation(
+                "TECH.2",
+                department="",
+                operation_name="Cięcie",
+            )
+        with self.assertRaisesRegex(ValueError, "Nazwa operacji"):
+            self.store.add_product_operation(
+                "TECH.2",
+                department="Laser",
+                operation_name="",
+            )
+
     def test_product_bom_blocks_duplicate_and_self_reference(self) -> None:
         self.store.create_product(symbol="PARENT.2", name="Produkt")
 
