@@ -49,7 +49,7 @@ from PySide6.QtWidgets import (
 )
 
 APP_NAME = "Metalbox"
-APP_VERSION = "0.1.23"
+APP_VERSION = "0.1.24"
 LOCAL_DATA_ROOT = Path(
     os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
 ) / "Metalbox"
@@ -3294,6 +3294,12 @@ class OrderDetailPage(PageBase):
         top.addWidget(self.priority_label)
         top.addStretch(1)
 
+        self.edit_data_button = QPushButton("Edytuj dane")
+        self.edit_data_button.clicked.connect(self._edit_product)
+        self.edit_data_button.setEnabled(False)
+        top.addWidget(self.edit_data_button)
+        top.addSpacing(sp(8))
+
         self.status_label = QLabel("—")
         self.status_label.setObjectName("statusPill")
         top.addWidget(self.status_label)
@@ -3549,10 +3555,16 @@ class PlannerPage(PageBase):
 
 
 class ProductEditorDialog(QDialog):
-    def __init__(self, store: MetalboxStore, parent=None):
+    def __init__(
+        self,
+        store: MetalboxStore,
+        parent=None,
+        product: dict | None = None,
+    ):
         super().__init__(parent)
         self.store = store
         self.product: dict | None = None
+        self.original_product = dict(product) if product is not None else None
         self.selected_hint_id: int | None = None
         self.setWindowTitle("Metalbox — nowy produkt")
         self.setModal(True)
@@ -3568,7 +3580,11 @@ class ProductEditorDialog(QDialog):
         root.setContentsMargins(sp(18), sp(18), sp(18), sp(18))
         root.setSpacing(sp(12))
 
-        title = QLabel("Dodaj produkt")
+        title = QLabel(
+            f'Edytuj produkt {self.original_product["symbol"]}'
+            if self.original_product is not None
+            else "Dodaj produkt"
+        )
         title.setObjectName("detailTitle")
         root.addWidget(title)
 
@@ -3649,13 +3665,39 @@ class ProductEditorDialog(QDialog):
         no_ral.setWordWrap(True)
         root.addWidget(no_ral)
 
+        if self.original_product is not None:
+            product_data = self.original_product
+            info.setText(
+                "Edycja karty zapisuje zmianę w audycie. "
+                "Symbol jest identyfikatorem produktu i w tym widoku pozostaje bez zmian."
+            )
+            self.hint_combo.setEnabled(False)
+            self.symbol_edit.setText(str(product_data["symbol"]))
+            self.symbol_edit.setReadOnly(True)
+            self.name_edit.setText(str(product_data["name"]))
+            self.kind_combo.setCurrentText(str(product_data["kind"]))
+            self.client_edit.setText(str(product_data["client_variant"] or ""))
+            self.material_edit.setText(str(product_data["material"] or ""))
+            self.dimensions_edit.setText(str(product_data["dimensions"] or ""))
+            self.quantity_spin.setValue(int(product_data["quantity_per_set"]))
+            department_index = self.department_combo.findData(
+                str(product_data["department"] or "")
+            )
+            if department_index >= 0:
+                self.department_combo.setCurrentIndex(department_index)
+            self.technology_edit.setText(str(product_data["technology"] or ""))
+            self.notes_edit.setText(str(product_data["notes"] or ""))
+            self.status_combo.setCurrentText(str(product_data["status"]))
+
         footer = QHBoxLayout()
         footer.addStretch(1)
         cancel = QPushButton("Anuluj")
         cancel.clicked.connect(self.reject)
         footer.addWidget(cancel)
 
-        save = QPushButton("Zapisz produkt")
+        save = QPushButton(
+            "Zapisz zmiany" if self.original_product is not None else "Zapisz produkt"
+        )
         save.setObjectName("primary")
         save.clicked.connect(self._save)
         footer.addWidget(save)
@@ -3687,20 +3729,35 @@ class ProductEditorDialog(QDialog):
 
     def _save(self) -> None:
         try:
-            product = self.store.create_product(
-                symbol=self.symbol_edit.text(),
-                name=self.name_edit.text(),
-                kind=self.kind_combo.currentText(),
-                client_variant=self.client_edit.text(),
-                material=self.material_edit.text(),
-                dimensions=self.dimensions_edit.text(),
-                quantity_per_set=self.quantity_spin.value(),
-                department=str(self.department_combo.currentData() or ""),
-                technology=self.technology_edit.text(),
-                notes=self.notes_edit.text(),
-                status=self.status_combo.currentText(),
-                hint_id=self.selected_hint_id,
-            )
+            if self.original_product is not None:
+                product = self.store.update_product(
+                    str(self.original_product["symbol"]),
+                    name=self.name_edit.text(),
+                    kind=self.kind_combo.currentText(),
+                    client_variant=self.client_edit.text(),
+                    material=self.material_edit.text(),
+                    dimensions=self.dimensions_edit.text(),
+                    quantity_per_set=self.quantity_spin.value(),
+                    department=str(self.department_combo.currentData() or ""),
+                    technology=self.technology_edit.text(),
+                    notes=self.notes_edit.text(),
+                    status=self.status_combo.currentText(),
+                )
+            else:
+                product = self.store.create_product(
+                    symbol=self.symbol_edit.text(),
+                    name=self.name_edit.text(),
+                    kind=self.kind_combo.currentText(),
+                    client_variant=self.client_edit.text(),
+                    material=self.material_edit.text(),
+                    dimensions=self.dimensions_edit.text(),
+                    quantity_per_set=self.quantity_spin.value(),
+                    department=str(self.department_combo.currentData() or ""),
+                    technology=self.technology_edit.text(),
+                    notes=self.notes_edit.text(),
+                    status=self.status_combo.currentText(),
+                    hint_id=self.selected_hint_id,
+                )
         except ValueError as exc:
             QMessageBox.warning(self, "Nie można zapisać produktu", str(exc))
             return
@@ -3714,7 +3771,9 @@ class ProductEditorDialog(QDialog):
             return
 
         self.product = product
-        mark_update_check("product:create")
+        mark_update_check(
+            "product:update" if self.original_product is not None else "product:create"
+        )
         self.accept()
 
 
@@ -3732,6 +3791,7 @@ class ProductsPage(PageBase):
         )
         self.store = store
         self.open_product_callback = open_product
+        self.verify_only = False
 
         controls = QHBoxLayout()
         self.search = QLineEdit()
@@ -3749,9 +3809,9 @@ class ProductsPage(PageBase):
         import_btn.clicked.connect(lambda: mock_message(self, "Import katalogów 2014–2016"))
         controls.addWidget(import_btn)
 
-        verify_btn = QPushButton("Do weryfikacji")
-        verify_btn.clicked.connect(lambda: mock_message(self, "Do weryfikacji"))
-        controls.addWidget(verify_btn)
+        self.verify_btn = QPushButton("Do weryfikacji")
+        self.verify_btn.clicked.connect(self._toggle_verification)
+        controls.addWidget(self.verify_btn)
 
         semi_btn = QPushButton("Półprodukty")
         semi_btn.clicked.connect(lambda: mock_message(self, "Półprodukty"))
@@ -3810,7 +3870,10 @@ class ProductsPage(PageBase):
         self._refresh_table()
 
     def _refresh_table(self, *_args) -> None:
-        rows = self.store.list_products(search=self.search.text().strip())
+        rows = self.store.list_products(
+            search=self.search.text().strip(),
+            status="DO WERYFIKACJI" if self.verify_only else "",
+        )
         self.table.setRowCount(len(rows))
         for row_index, row in enumerate(rows):
             values = [
@@ -3832,6 +3895,14 @@ class ProductsPage(PageBase):
             f'{stats["unique_names"]} unikalnych nazw • '
             f'{stats["used_rows"]} wykorzystanych'
         )
+
+    def _toggle_verification(self) -> None:
+        self.verify_only = not self.verify_only
+        self.verify_btn.setObjectName("primary" if self.verify_only else "")
+        self.verify_btn.style().unpolish(self.verify_btn)
+        self.verify_btn.style().polish(self.verify_btn)
+        mark_update_check("product:verification_filter")
+        self._refresh_table()
 
     def _new_product(self) -> None:
         dialog = ProductEditorDialog(self.store, self)
@@ -4523,11 +4594,25 @@ class ProductDetailPage(PageBase):
                 self.operation_table.selectRow(row_index)
                 break
 
+    def _edit_product(self) -> None:
+        if self.current_product is None:
+            return
+        dialog = ProductEditorDialog(
+            self.store,
+            self,
+            product=self.current_product,
+        )
+        if dialog.exec() != QDialog.Accepted:
+            return
+        if dialog.product is not None:
+            self.set_product(str(dialog.product["symbol"]))
+
     def set_product(self, symbol: str) -> None:
         self.symbol = str(symbol or "").strip()
         product = self.store.get_product(self.symbol)
         self.current_product = product
         if product is None:
+            self.edit_data_button.setEnabled(False)
             self.symbol_label.setText(self.symbol or "—")
             self.name_label.setText("Nie znaleziono produktu")
             self.status_label.setText("BRAK")
@@ -4537,6 +4622,7 @@ class ProductDetailPage(PageBase):
             self._refresh_operations()
             return
 
+        self.edit_data_button.setEnabled(True)
         self.symbol_label.setText(str(product["symbol"]))
         self.name_label.setText(str(product["name"]))
         self.status_label.setText(str(product["status"]))
