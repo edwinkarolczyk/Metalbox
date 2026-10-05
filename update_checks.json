@@ -1,13 +1,23 @@
 {
   "schema": 1,
-  "version": "0.1.24.2",
-  "title": "Panel testów — blokada przedwczesnego zakończenia",
-  "description": "Sprawdź poprawkę mechanizmu odbioru. Aktualizacja nie może być oznaczona jako gotowa, jeśli choć jeden punkt testu nadal oczekuje albo ma uwagę.",
+  "version": "0.1.25",
+  "title": "Planista — bezpieczny snapshot planu Excel",
+  "description": "Sprawdź pierwszy etap importu planu: źródłowy Excel ma być tylko skopiowany, zamknięty i dopiero lokalny snapshot ma być analizowany oraz porównywany z poprzednim stanem. Ten etap nie zmienia jeszcze zleceń.",
   "checks": [
     {
-      "id": "strict-ready",
-      "text": "1. Panel testów ma blokować przycisk „Gotowy na następne zmiany”, dopóki ten punkt jest oczekujący. Po sprawdzeniu zaznacz ten punkt jako OK — wtedy przycisk może się uaktywnić.",
-      "trigger": ""
+      "id": "planner-snapshot-created",
+      "text": "1. Wejdź w PLANISTA → „Import snapshot” i wybierz plan .xlsx/.xlsm. Metalbox ma utworzyć lokalny snapshot bez pozostawiania oryginalnego Excela otwartego.",
+      "trigger": "planner:snapshot_created"
+    },
+    {
+      "id": "planner-snapshot-parsed",
+      "text": "2. Po imporcie tabela ma pokazać rozpoznane pozycje planu: Nr ZL, symbol/nazwa, ilość, wysyłkę i RAL, jeśli występują w Excelu.",
+      "trigger": "planner:snapshot_parsed"
+    },
+    {
+      "id": "planner-snapshot-compared",
+      "text": "3. Metalbox ma pokazać liczbę pozycji NOWY / ZMIENIONY / USUNIĘTY względem poprzedniego snapshotu. Zmiany pozostają tylko podglądem i nie aktualizują jeszcze zleceń.",
+      "trigger": "planner:snapshot_compared"
     }
   ]
 }
