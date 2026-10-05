@@ -4597,6 +4597,7 @@ class ProductDetailPage(PageBase):
     def _edit_product(self) -> None:
         if self.current_product is None:
             return
+        mark_update_check("product:edit_open")
         dialog = ProductEditorDialog(
             self.store,
             self,
