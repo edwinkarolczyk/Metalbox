@@ -13,6 +13,7 @@ py -m PyInstaller ^
   --windowed ^
   --name Metalbox ^
   --collect-all PySide6 ^
+  --add-data "data\product_hints_foldery.txt;data" ^
   app.py
 
 if errorlevel 1 (
