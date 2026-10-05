@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Iterator
 
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 DEFAULT_ROUTE = ("Laser", "Giętarki", "Zgrzewarki", "Malarnia", "Pakownia")
 QUALITY_REASON_CODES = (
     "NIEZGODNY_WYMIAR",
@@ -146,6 +146,43 @@ class MetalboxStore:
 
                 CREATE INDEX IF NOT EXISTS idx_employees_status_name
                     ON employees(status, name);
+
+                CREATE TABLE IF NOT EXISTS products (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    symbol TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                    name TEXT NOT NULL,
+                    kind TEXT NOT NULL DEFAULT 'PRODUKT',
+                    client_variant TEXT NOT NULL DEFAULT '',
+                    material TEXT NOT NULL DEFAULT '',
+                    dimensions TEXT NOT NULL DEFAULT '',
+                    quantity_per_set INTEGER NOT NULL DEFAULT 1 CHECK(quantity_per_set >= 1),
+                    department TEXT NOT NULL DEFAULT '',
+                    technology TEXT NOT NULL DEFAULT '',
+                    notes TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL DEFAULT 'AKTYWNY',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_products_kind_status_symbol
+                    ON products(kind, status, symbol);
+
+                CREATE TABLE IF NOT EXISTS product_hints (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    source TEXT NOT NULL,
+                    source_line INTEGER NOT NULL,
+                    raw_name TEXT NOT NULL,
+                    normalized_name TEXT NOT NULL,
+                    used_product_id INTEGER REFERENCES products(id) ON DELETE SET NULL,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(source, source_line)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_product_hints_normalized
+                    ON product_hints(normalized_name);
+
+                CREATE INDEX IF NOT EXISTS idx_product_hints_used
+                    ON product_hints(used_product_id);
 
                 CREATE TABLE IF NOT EXISTS session_workers (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -481,6 +518,275 @@ class MetalboxStore:
                 )
                 inserted += int(cursor.rowcount or 0)
         return inserted > 0
+
+    def ensure_development_products_seeded(self) -> bool:
+        """Przenosi dotychczasowe przykładowe karty do prawdziwego katalogu produktów."""
+        now = datetime.now(timezone.utc).isoformat()
+        defaults = [
+            ("1.435.135", "SC600 RP Sorta"),
+            ("1.330.50", "Elimger"),
+            ("1.436.70", "VC"),
+            ("1.622.59", "VW"),
+            ("1.380.68", "SC200 RP Sorta"),
+        ]
+        inserted = 0
+        with self._connect() as db:
+            for symbol, name in defaults:
+                cursor = db.execute(
+                    """
+                    INSERT OR IGNORE INTO products(
+                        symbol, name, kind, technology, status, created_at, updated_at
+                    )
+                    VALUES (?, ?, 'PRODUKT', '5 operacji', 'AKTYWNY', ?, ?)
+                    """,
+                    (symbol, name, now, now),
+                )
+                inserted += int(cursor.rowcount or 0)
+        return inserted > 0
+
+    def import_product_hints(
+        self,
+        entries: list[str],
+        *,
+        source: str = "foldery.txt/2026-10-02",
+    ) -> dict:
+        """Importuje surowe nazwy jako podpowiedzi. Niczego nie tworzy w katalogu produktów."""
+        source = str(source or "foldery.txt").strip()
+        now = datetime.now(timezone.utc).isoformat()
+        inserted = 0
+        valid = 0
+        with self._connect() as db:
+            for source_line, raw in enumerate(entries, start=1):
+                raw_name = str(raw or "").strip()
+                if not raw_name:
+                    continue
+                valid += 1
+                cursor = db.execute(
+                    """
+                    INSERT OR IGNORE INTO product_hints(
+                        source, source_line, raw_name, normalized_name, created_at
+                    )
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        source,
+                        source_line,
+                        raw_name,
+                        raw_name.casefold(),
+                        now,
+                    ),
+                )
+                inserted += int(cursor.rowcount or 0)
+
+            total = int(
+                db.execute(
+                    "SELECT COUNT(*) FROM product_hints WHERE source = ?",
+                    (source,),
+                ).fetchone()[0]
+            )
+
+        return {
+            "source": source,
+            "input_count": valid,
+            "inserted": inserted,
+            "total": total,
+        }
+
+    def list_product_hints(
+        self,
+        *,
+        query: str = "",
+        limit: int = 2000,
+    ) -> list[dict]:
+        query_norm = str(query or "").strip().casefold()
+        params: list[object] = []
+        where = ""
+        if query_norm:
+            where = "WHERE normalized_name LIKE ?"
+            params.append(f"%{query_norm}%")
+        params.append(max(1, min(10000, int(limit))))
+
+        with self._connect() as db:
+            rows = db.execute(
+                f"""
+                SELECT id, source, source_line, raw_name, used_product_id
+                FROM product_hints
+                {where}
+                ORDER BY source_line, id
+                LIMIT ?
+                """,
+                params,
+            ).fetchall()
+
+        result: list[dict] = []
+        seen: set[str] = set()
+        for row in rows:
+            item = dict(row)
+            key = str(item["raw_name"]).strip().casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            result.append(item)
+        return result
+
+    def product_hint_stats(self) -> dict:
+        with self._connect() as db:
+            row = db.execute(
+                """
+                SELECT
+                    COUNT(*) AS total,
+                    COUNT(DISTINCT lower(raw_name)) AS unique_names,
+                    SUM(CASE WHEN used_product_id IS NOT NULL THEN 1 ELSE 0 END) AS used_rows
+                FROM product_hints
+                """
+            ).fetchone()
+        return {
+            "total": int(row["total"] or 0),
+            "unique_names": int(row["unique_names"] or 0),
+            "used_rows": int(row["used_rows"] or 0),
+        }
+
+    def create_product(
+        self,
+        *,
+        symbol: str,
+        name: str,
+        kind: str = "PRODUKT",
+        client_variant: str = "",
+        material: str = "",
+        dimensions: str = "",
+        quantity_per_set: int = 1,
+        department: str = "",
+        technology: str = "",
+        notes: str = "",
+        status: str = "AKTYWNY",
+        hint_id: int | None = None,
+        actor: str = "development-user",
+    ) -> dict:
+        symbol = str(symbol or "").strip()
+        name = str(name or "").strip()
+        kind = str(kind or "PRODUKT").strip().upper()
+        status = str(status or "AKTYWNY").strip().upper()
+        quantity_per_set = int(quantity_per_set)
+
+        if not symbol:
+            raise ValueError("Symbol produktu jest wymagany.")
+        if not name:
+            raise ValueError("Nazwa produktu jest wymagana.")
+        if kind not in {"PRODUKT", "PÓŁPRODUKT"}:
+            raise ValueError("Typ musi być PRODUKT albo PÓŁPRODUKT.")
+        if status not in {"AKTYWNY", "DO WERYFIKACJI", "NIEAKTYWNY"}:
+            raise ValueError("Nieprawidłowy status produktu.")
+        if quantity_per_set < 1:
+            raise ValueError("Ilość na komplet musi być większa od zera.")
+
+        now = datetime.now(timezone.utc).isoformat()
+        with self._connect() as db:
+            try:
+                cursor = db.execute(
+                    """
+                    INSERT INTO products(
+                        symbol, name, kind, client_variant, material, dimensions,
+                        quantity_per_set, department, technology, notes, status,
+                        created_at, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        symbol,
+                        name,
+                        kind,
+                        str(client_variant or "").strip(),
+                        str(material or "").strip(),
+                        str(dimensions or "").strip(),
+                        quantity_per_set,
+                        str(department or "").strip(),
+                        str(technology or "").strip(),
+                        str(notes or "").strip(),
+                        status,
+                        now,
+                        now,
+                    ),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise ValueError(f"Produkt o symbolu {symbol} już istnieje.") from exc
+
+            product_id = int(cursor.lastrowid)
+            if hint_id is not None:
+                db.execute(
+                    "UPDATE product_hints SET used_product_id = ? WHERE id = ?",
+                    (product_id, int(hint_id)),
+                )
+
+            self._audit_in_connection(
+                db,
+                actor=actor,
+                action="product_created",
+                entity_type="product",
+                entity_id=str(product_id),
+                payload={
+                    "symbol": symbol,
+                    "name": name,
+                    "kind": kind,
+                    "status": status,
+                    "hint_id": hint_id,
+                },
+            )
+
+        product = self.get_product(symbol)
+        if product is None:
+            raise RuntimeError("Produkt został zapisany, ale nie można go odczytać.")
+        return product
+
+    def get_product(self, symbol: str) -> dict | None:
+        with self._connect() as db:
+            row = db.execute(
+                """
+                SELECT
+                    id, symbol, name, kind, client_variant, material, dimensions,
+                    quantity_per_set, department, technology, notes, status,
+                    created_at, updated_at
+                FROM products
+                WHERE symbol = ? COLLATE NOCASE
+                """,
+                (str(symbol or "").strip(),),
+            ).fetchone()
+        return dict(row) if row is not None else None
+
+    def list_products(
+        self,
+        *,
+        search: str = "",
+        kind: str = "",
+    ) -> list[dict]:
+        clauses: list[str] = []
+        params: list[object] = []
+        search = str(search or "").strip()
+        kind = str(kind or "").strip().upper()
+
+        if search:
+            clauses.append("(symbol LIKE ? OR name LIKE ? OR client_variant LIKE ?)")
+            value = f"%{search}%"
+            params.extend([value, value, value])
+        if kind:
+            clauses.append("kind = ?")
+            params.append(kind)
+
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        with self._connect() as db:
+            rows = db.execute(
+                f"""
+                SELECT
+                    id, symbol, name, kind, client_variant, material, dimensions,
+                    quantity_per_set, department, technology, notes, status,
+                    created_at, updated_at
+                FROM products
+                {where}
+                ORDER BY symbol COLLATE NOCASE, name COLLATE NOCASE
+                """,
+                params,
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def create_employee(
         self,
