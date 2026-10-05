@@ -60,6 +60,8 @@ class MetalboxStoreTests(unittest.TestCase):
         self.assertIn("operation_progress", tables)
         self.assertIn("order_items", tables)
         self.assertIn("audit_events", tables)
+        self.assertIn("products", tables)
+        self.assertIn("product_hints", tables)
 
     def test_migrates_v7_session_workers_employee_id(self) -> None:
         legacy_path = Path(self.temp_dir.name) / "legacy-v7.sqlite3"
@@ -145,6 +147,73 @@ class MetalboxStoreTests(unittest.TestCase):
 
         self.assertIn("reporter_employee_id", columns)
         self.assertEqual(version, SCHEMA_VERSION)
+
+    def test_product_hints_are_raw_idempotent_and_do_not_create_products(self) -> None:
+        entries = [
+            "1.437.68 TESAM",
+            "ARCHIWUM",
+            "1.437.68 TESAM",
+            "5.REG.PÓŁKA 1M",
+        ]
+
+        first = self.store.import_product_hints(
+            entries,
+            source="test-foldery.txt",
+        )
+        second = self.store.import_product_hints(
+            entries,
+            source="test-foldery.txt",
+        )
+
+        self.assertEqual(first["input_count"], 4)
+        self.assertEqual(first["inserted"], 4)
+        self.assertEqual(first["total"], 4)
+        self.assertEqual(second["inserted"], 0)
+        self.assertEqual(second["total"], 4)
+        self.assertEqual(self.store.list_products(), [])
+
+        hints = self.store.list_product_hints()
+        self.assertEqual(
+            {row["raw_name"] for row in hints},
+            {"1.437.68 TESAM", "ARCHIWUM", "5.REG.PÓŁKA 1M"},
+        )
+
+    def test_product_can_be_created_from_hint_and_marks_source_as_used(self) -> None:
+        self.store.import_product_hints(
+            ["1.437.68 TESAM", "ARCHIWUM"],
+            source="test-foldery.txt",
+        )
+        hint = next(
+            row
+            for row in self.store.list_product_hints()
+            if row["raw_name"] == "1.437.68 TESAM"
+        )
+
+        product = self.store.create_product(
+            symbol="1.437.68",
+            name="TESAM",
+            kind="PRODUKT",
+            material="DC01",
+            dimensions="437x68",
+            quantity_per_set=2,
+            department="Giętarki",
+            technology="Laser → Gięcie",
+            hint_id=int(hint["id"]),
+        )
+
+        self.assertEqual(product["symbol"], "1.437.68")
+        self.assertEqual(product["name"], "TESAM")
+        self.assertEqual(product["quantity_per_set"], 2)
+        self.assertEqual(self.store.product_hint_stats()["used_rows"], 1)
+        self.assertEqual(
+            [row["symbol"] for row in self.store.list_products(search="TESAM")],
+            ["1.437.68"],
+        )
+
+    def test_product_symbol_must_be_unique(self) -> None:
+        self.store.create_product(symbol="TEST.1", name="Test")
+        with self.assertRaisesRegex(ValueError, "już istnieje"):
+            self.store.create_product(symbol="test.1", name="Duplikat")
 
     def test_seed_and_search(self) -> None:
         orders = self.store.list_orders()
