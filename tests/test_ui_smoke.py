@@ -20,6 +20,21 @@ class UiSmokeTest(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.qt_app = QApplication.instance() or QApplication([])
 
+    def test_product_hints_resource_is_available(self) -> None:
+        self.assertTrue(
+            metalbox_app.PRODUCT_HINTS_FILE.exists(),
+            str(metalbox_app.PRODUCT_HINTS_FILE),
+        )
+        entries = [
+            line.strip()
+            for line in metalbox_app.PRODUCT_HINTS_FILE.read_text(
+                encoding="utf-8"
+            ).splitlines()
+            if line.strip()
+        ]
+        self.assertEqual(len(entries), 611)
+        self.assertIn("1.437.68 TESAM", entries)
+
     def test_main_window_constructs(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             db_path = Path(temp) / "metalbox-smoke.sqlite3"
