@@ -5161,6 +5161,8 @@ class MainWindow(QMainWindow):
         self.stack.setCurrentWidget(page)
         if page is self.orders_page:
             mark_update_check("page:orders")
+        elif page is self.products_page:
+            mark_update_check("page:products")
         elif page is self.alerts_page:
             mark_update_check("alerts:open")
         elif page is self.quality_page:
