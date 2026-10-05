@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Iterator
 
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 DEFAULT_ROUTE = ("Laser", "Giętarki", "Zgrzewarki", "Malarnia", "Pakownia")
 QUALITY_REASON_CODES = (
     "NIEZGODNY_WYMIAR",
@@ -183,6 +183,28 @@ class MetalboxStore:
 
                 CREATE INDEX IF NOT EXISTS idx_product_hints_used
                     ON product_hints(used_product_id);
+
+                CREATE TABLE IF NOT EXISTS product_bom_items (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    parent_product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+                    child_product_id INTEGER REFERENCES products(id) ON DELETE SET NULL,
+                    item_type TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    quantity_per_set REAL NOT NULL CHECK(quantity_per_set > 0),
+                    unit TEXT NOT NULL DEFAULT 'szt.',
+                    notes TEXT NOT NULL DEFAULT '',
+                    sequence_no INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE(parent_product_id, item_type, symbol COLLATE NOCASE)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_product_bom_parent
+                    ON product_bom_items(parent_product_id, sequence_no, id);
+
+                CREATE INDEX IF NOT EXISTS idx_product_bom_child
+                    ON product_bom_items(child_product_id);
 
                 CREATE TABLE IF NOT EXISTS session_workers (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -787,6 +809,194 @@ class MetalboxStore:
                 params,
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def list_product_bom(self, symbol: str) -> list[dict]:
+        product = self.get_product(symbol)
+        if product is None:
+            raise ValueError(f"Nie znaleziono produktu {symbol}.")
+
+        with self._connect() as db:
+            rows = db.execute(
+                """
+                SELECT
+                    b.id,
+                    b.parent_product_id,
+                    b.child_product_id,
+                    b.item_type,
+                    b.symbol,
+                    b.name,
+                    b.quantity_per_set,
+                    b.unit,
+                    b.notes,
+                    b.sequence_no,
+                    b.created_at,
+                    b.updated_at,
+                    cp.kind AS linked_kind,
+                    cp.status AS linked_status
+                FROM product_bom_items b
+                LEFT JOIN products cp ON cp.id = b.child_product_id
+                WHERE b.parent_product_id = ?
+                ORDER BY b.sequence_no, b.id
+                """,
+                (int(product["id"]),),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def add_product_bom_item(
+        self,
+        parent_symbol: str,
+        *,
+        item_type: str,
+        symbol: str,
+        name: str,
+        quantity_per_set: float,
+        unit: str = "szt.",
+        notes: str = "",
+        actor: str = "development-user",
+    ) -> dict:
+        parent = self.get_product(parent_symbol)
+        if parent is None:
+            raise ValueError(f"Nie znaleziono produktu {parent_symbol}.")
+
+        item_type = str(item_type or "").strip().upper()
+        symbol = str(symbol or "").strip()
+        name = str(name or "").strip()
+        unit = str(unit or "szt.").strip() or "szt."
+        notes = str(notes or "").strip()
+        quantity_per_set = float(quantity_per_set)
+
+        allowed_types = {"PÓŁPRODUKT", "DETAL", "ELEMENT KUPOWANY", "MATERIAŁ"}
+        if item_type not in allowed_types:
+            raise ValueError("Nieprawidłowy typ pozycji BOM.")
+        if not symbol:
+            raise ValueError("Symbol / oznaczenie pozycji BOM jest wymagane.")
+        if not name:
+            raise ValueError("Nazwa pozycji BOM jest wymagana.")
+        if quantity_per_set <= 0:
+            raise ValueError("Ilość na komplet musi być większa od zera.")
+        if symbol.casefold() == str(parent["symbol"]).casefold():
+            raise ValueError("Produkt nie może zawierać samego siebie w BOM.")
+
+        child = self.get_product(symbol)
+        child_product_id = int(child["id"]) if child is not None else None
+        now = datetime.now(timezone.utc).isoformat()
+
+        with self._connect() as db:
+            sequence_no = int(
+                db.execute(
+                    """
+                    SELECT COALESCE(MAX(sequence_no), 0) + 1
+                    FROM product_bom_items
+                    WHERE parent_product_id = ?
+                    """,
+                    (int(parent["id"]),),
+                ).fetchone()[0]
+            )
+            try:
+                cursor = db.execute(
+                    """
+                    INSERT INTO product_bom_items(
+                        parent_product_id, child_product_id, item_type,
+                        symbol, name, quantity_per_set, unit, notes,
+                        sequence_no, created_at, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        int(parent["id"]),
+                        child_product_id,
+                        item_type,
+                        symbol,
+                        name,
+                        quantity_per_set,
+                        unit,
+                        notes,
+                        sequence_no,
+                        now,
+                        now,
+                    ),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise ValueError(
+                    f"Pozycja {symbol} typu {item_type} już znajduje się w BOM."
+                ) from exc
+
+            item_id = int(cursor.lastrowid)
+            self._audit_in_connection(
+                db,
+                actor=actor,
+                action="product_bom_item_added",
+                entity_type="product",
+                entity_id=str(parent["id"]),
+                payload={
+                    "bom_item_id": item_id,
+                    "symbol": symbol,
+                    "name": name,
+                    "item_type": item_type,
+                    "quantity_per_set": quantity_per_set,
+                    "unit": unit,
+                    "child_product_id": child_product_id,
+                },
+            )
+
+        return next(
+            row for row in self.list_product_bom(parent_symbol)
+            if int(row["id"]) == item_id
+        )
+
+    def delete_product_bom_item(
+        self,
+        parent_symbol: str,
+        bom_item_id: int,
+        *,
+        actor: str = "development-user",
+    ) -> None:
+        parent = self.get_product(parent_symbol)
+        if parent is None:
+            raise ValueError(f"Nie znaleziono produktu {parent_symbol}.")
+
+        with self._connect() as db:
+            row = db.execute(
+                """
+                SELECT id, symbol, name, item_type, quantity_per_set, unit
+                FROM product_bom_items
+                WHERE id = ? AND parent_product_id = ?
+                """,
+                (int(bom_item_id), int(parent["id"])),
+            ).fetchone()
+            if row is None:
+                raise ValueError("Nie znaleziono pozycji BOM.")
+
+            db.execute(
+                "DELETE FROM product_bom_items WHERE id = ?",
+                (int(bom_item_id),),
+            )
+            self._audit_in_connection(
+                db,
+                actor=actor,
+                action="product_bom_item_deleted",
+                entity_type="product",
+                entity_id=str(parent["id"]),
+                payload=dict(row),
+            )
+
+    def calculate_product_requirements(
+        self,
+        symbol: str,
+        planned_quantity: float,
+    ) -> list[dict]:
+        planned_quantity = float(planned_quantity)
+        if planned_quantity < 0:
+            raise ValueError("Planowana ilość nie może być ujemna.")
+
+        result: list[dict] = []
+        for row in self.list_product_bom(symbol):
+            item = dict(row)
+            item["required_quantity"] = (
+                float(item["quantity_per_set"]) * planned_quantity
+            )
+            result.append(item)
+        return result
 
     def create_employee(
         self,
