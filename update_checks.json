@@ -1,22 +1,22 @@
 {
   "schema": 1,
-  "version": "0.1.21",
-  "title": "Produkty — baza właściwa i podpowiedzi z foldery.txt",
-  "description": "Sprawdź nowy katalog produktów oraz użycie 611 surowych nazw wyłącznie jako podpowiedzi. Żadna pozycja z foldery.txt nie może tworzyć produktu bez zapisu użytkownika.",
+  "version": "0.1.21.1",
+  "title": "Produkty — naprawa podpowiedzi ze starej bazy",
+  "description": "Sprawdź poprawkę źródła podpowiedzi. MetalboxDev ma czytać 611 nazw z katalogu aktualnej wersji, a samodzielny EXE z dołączonych zasobów.",
   "checks": [
     {
-      "id": "product-open",
-      "text": "1. Wejdź w PRODUKTY → kliknij „Nowy produkt”. Ma otworzyć się prawdziwy formularz z polem „Podpowiedź ze starej bazy” oraz polami produktu. Nie może być pola RAL.",
-      "trigger": "product:dialog_open"
+      "id": "product-hints-loaded",
+      "text": "1. Wejdź w PRODUKTY. Nad tabelą ma być informacja o źródle podpowiedzi i liczba 611 pozycji. Nie może być 0.",
+      "trigger": "page:products"
     },
     {
       "id": "product-hint",
-      "text": "2. W polu podpowiedzi zacznij wpisywać np. „1.437.68”, wybierz jedną z propozycji. Symbol i nazwa mają się uzupełnić, ale produkt nie może jeszcze pojawić się w katalogu.",
+      "text": "2. Kliknij „Nowy produkt”, wpisz w podpowiedzi „1.437.68” i wybierz np. „1.437.68 TESAM”. Symbol i nazwa mają się uzupełnić.",
       "trigger": "product:hint_selected"
     },
     {
       "id": "product-save",
-      "text": "3. Uzupełnij wymagane dane i kliknij „Zapisz produkt”. Dopiero teraz produkt ma pojawić się w tabeli PRODUKTY i być możliwy do otwarcia.",
+      "text": "3. Zapisz produkt testowy z wybranej podpowiedzi. Dopiero po zapisie ma pojawić się w tabeli PRODUKTY.",
       "trigger": "product:create"
     }
   ]
