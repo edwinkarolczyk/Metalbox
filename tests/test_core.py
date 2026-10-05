@@ -62,6 +62,7 @@ class MetalboxStoreTests(unittest.TestCase):
         self.assertIn("audit_events", tables)
         self.assertIn("products", tables)
         self.assertIn("product_hints", tables)
+        self.assertIn("accepted_plan_items", tables)
 
     def test_migrates_v7_session_workers_employee_id(self) -> None:
         legacy_path = Path(self.temp_dir.name) / "legacy-v7.sqlite3"
@@ -147,6 +148,164 @@ class MetalboxStoreTests(unittest.TestCase):
 
         self.assertIn("reporter_employee_id", columns)
         self.assertEqual(version, SCHEMA_VERSION)
+
+    def test_plan_acceptance_matches_products_and_does_not_create_orders(self) -> None:
+        known = self.store.create_product(
+            symbol="PLAN.KNOWN",
+            name="Produkt znany",
+        )
+        before_orders = len(self.store.list_orders())
+
+        snapshot = self.store.create_plan_snapshot(
+            source_name="Plan Produkcji 2026.xlsx",
+            snapshot_path="snapshot-1.xlsx",
+            sha256="snap1",
+            size_bytes=100,
+            sheet_name="PLAN 2026",
+            header_row=1,
+            rows=[
+                {
+                    "row_key": "zl-900|plan.known|produkt znany#1",
+                    "row_no": 2,
+                    "order_code": "ZL-900",
+                    "symbol": "PLAN.KNOWN",
+                    "name": "Produkt znany",
+                    "quantity": 10.0,
+                    "shipping": "2026-10-20",
+                    "ral": "9011",
+                },
+                {
+                    "row_key": "zl-901|plan.unknown|produkt obcy#1",
+                    "row_no": 3,
+                    "order_code": "ZL-901",
+                    "symbol": "PLAN.UNKNOWN",
+                    "name": "Produkt obcy",
+                    "quantity": 5.0,
+                    "shipping": "2026-10-21",
+                    "ral": "7042",
+                },
+            ],
+        )
+
+        preview = self.store.get_plan_acceptance_preview(int(snapshot["id"]))
+        self.assertEqual(preview["total_changes"], 2)
+        self.assertEqual(preview["matched_count"], 1)
+        self.assertEqual(preview["review_count"], 1)
+        by_symbol = {row["symbol"]: row for row in preview["added"]}
+        self.assertEqual(by_symbol["PLAN.KNOWN"]["product_match_status"], "DOPASOWANY")
+        self.assertEqual(
+            int(by_symbol["PLAN.KNOWN"]["product_id"]),
+            int(known["id"]),
+        )
+        self.assertEqual(
+            by_symbol["PLAN.UNKNOWN"]["product_match_status"],
+            "DO WERYFIKACJI",
+        )
+
+        summary = self.store.accept_plan_snapshot(int(snapshot["id"]))
+        self.assertFalse(summary["orders_changed"])
+        self.assertEqual(len(self.store.list_orders()), before_orders)
+
+        accepted = self.store.list_accepted_plan_items()
+        self.assertEqual(len(accepted), 2)
+        accepted_by_symbol = {row["symbol"]: row for row in accepted}
+        self.assertEqual(
+            accepted_by_symbol["PLAN.KNOWN"]["product_match_status"],
+            "DOPASOWANY",
+        )
+        self.assertEqual(
+            accepted_by_symbol["PLAN.UNKNOWN"]["product_match_status"],
+            "DO WERYFIKACJI",
+        )
+        self.assertEqual(accepted_by_symbol["PLAN.KNOWN"]["ral"], "9011")
+        self.assertEqual(accepted_by_symbol["PLAN.UNKNOWN"]["ral"], "7042")
+
+        saved_snapshot = self.store.get_plan_snapshot(int(snapshot["id"]))
+        self.assertEqual(saved_snapshot["status"], "ZAAKCEPTOWANY")
+
+    def test_plan_acceptance_preview_detects_new_changed_and_removed(self) -> None:
+        first = self.store.create_plan_snapshot(
+            source_name="Plan Produkcji 2026.xlsx",
+            snapshot_path="snapshot-a.xlsx",
+            sha256="snap-a",
+            size_bytes=100,
+            sheet_name="PLAN 2026",
+            header_row=1,
+            rows=[
+                {
+                    "row_key": "zl-910|a|produkt a#1",
+                    "row_no": 2,
+                    "order_code": "ZL-910",
+                    "symbol": "A",
+                    "name": "Produkt A",
+                    "quantity": 10.0,
+                    "shipping": "18.10",
+                    "ral": "9011",
+                },
+                {
+                    "row_key": "zl-911|b|produkt b#1",
+                    "row_no": 3,
+                    "order_code": "ZL-911",
+                    "symbol": "B",
+                    "name": "Produkt B",
+                    "quantity": 5.0,
+                    "shipping": "18.10",
+                    "ral": "9011",
+                },
+            ],
+        )
+        self.store.accept_plan_snapshot(int(first["id"]))
+
+        second = self.store.create_plan_snapshot(
+            source_name="Plan Produkcji 2026.xlsx",
+            snapshot_path="snapshot-b.xlsx",
+            sha256="snap-b",
+            size_bytes=120,
+            sheet_name="PLAN 2026",
+            header_row=1,
+            rows=[
+                {
+                    "row_key": "zl-910|a|produkt a#1",
+                    "row_no": 2,
+                    "order_code": "ZL-910",
+                    "symbol": "A",
+                    "name": "Produkt A",
+                    "quantity": 12.0,
+                    "shipping": "18.10",
+                    "ral": "9011",
+                },
+                {
+                    "row_key": "zl-912|c|produkt c#1",
+                    "row_no": 4,
+                    "order_code": "ZL-912",
+                    "symbol": "C",
+                    "name": "Produkt C",
+                    "quantity": 3.0,
+                    "shipping": "19.10",
+                    "ral": "7042",
+                },
+            ],
+        )
+
+        preview = self.store.get_plan_acceptance_preview(int(second["id"]))
+        self.assertEqual(len(preview["added"]), 1)
+        self.assertEqual(len(preview["changed"]), 1)
+        self.assertEqual(len(preview["removed"]), 1)
+        self.assertEqual(
+            preview["changed"][0]["changes"]["quantity"]["before"],
+            10.0,
+        )
+        self.assertEqual(
+            preview["changed"][0]["changes"]["quantity"]["after"],
+            12.0,
+        )
+
+        self.store.accept_plan_snapshot(int(second["id"]))
+        accepted_symbols = {
+            row["symbol"]
+            for row in self.store.list_accepted_plan_items()
+        }
+        self.assertEqual(accepted_symbols, {"A", "C"})
 
     def test_product_hints_are_raw_idempotent_and_do_not_create_products(self) -> None:
         entries = [
