@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Iterator
 
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 DEFAULT_ROUTE = ("Laser", "Giętarki", "Zgrzewarki", "Malarnia", "Pakownia")
 QUALITY_REASON_CODES = (
     "NIEZGODNY_WYMIAR",
@@ -205,6 +205,26 @@ class MetalboxStore:
 
                 CREATE INDEX IF NOT EXISTS idx_product_bom_child
                     ON product_bom_items(child_product_id);
+
+                CREATE TABLE IF NOT EXISTS product_operations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+                    sequence_no INTEGER NOT NULL,
+                    department TEXT NOT NULL,
+                    operation_name TEXT NOT NULL,
+                    setup_minutes REAL NOT NULL DEFAULT 0 CHECK(setup_minutes >= 0),
+                    minutes_per_unit REAL NOT NULL DEFAULT 0 CHECK(minutes_per_unit >= 0),
+                    notes TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE(product_id, sequence_no)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_product_operations_product
+                    ON product_operations(product_id, sequence_no);
+
+                CREATE INDEX IF NOT EXISTS idx_product_operations_department
+                    ON product_operations(department, product_id);
 
                 CREATE TABLE IF NOT EXISTS session_workers (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -994,6 +1014,242 @@ class MetalboxStore:
             item = dict(row)
             item["required_quantity"] = (
                 float(item["quantity_per_set"]) * planned_quantity
+            )
+            result.append(item)
+        return result
+
+    def list_product_operations(self, symbol: str) -> list[dict]:
+        product = self.get_product(symbol)
+        if product is None:
+            raise ValueError(f"Nie znaleziono produktu {symbol}.")
+
+        with self._connect() as db:
+            rows = db.execute(
+                """
+                SELECT
+                    id, product_id, sequence_no, department, operation_name,
+                    setup_minutes, minutes_per_unit, notes, created_at, updated_at
+                FROM product_operations
+                WHERE product_id = ?
+                ORDER BY sequence_no, id
+                """,
+                (int(product["id"]),),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def add_product_operation(
+        self,
+        symbol: str,
+        *,
+        department: str,
+        operation_name: str,
+        setup_minutes: float = 0,
+        minutes_per_unit: float = 0,
+        notes: str = "",
+        actor: str = "development-user",
+    ) -> dict:
+        product = self.get_product(symbol)
+        if product is None:
+            raise ValueError(f"Nie znaleziono produktu {symbol}.")
+
+        department = str(department or "").strip()
+        operation_name = str(operation_name or "").strip()
+        notes = str(notes or "").strip()
+        setup_minutes = float(setup_minutes)
+        minutes_per_unit = float(minutes_per_unit)
+
+        if not department:
+            raise ValueError("Dział operacji jest wymagany.")
+        if not operation_name:
+            raise ValueError("Nazwa operacji jest wymagana.")
+        if setup_minutes < 0 or minutes_per_unit < 0:
+            raise ValueError("Czasy operacji nie mogą być ujemne.")
+
+        now = datetime.now(timezone.utc).isoformat()
+        with self._connect() as db:
+            sequence_no = int(
+                db.execute(
+                    """
+                    SELECT COALESCE(MAX(sequence_no), 0) + 1
+                    FROM product_operations
+                    WHERE product_id = ?
+                    """,
+                    (int(product["id"]),),
+                ).fetchone()[0]
+            )
+            cursor = db.execute(
+                """
+                INSERT INTO product_operations(
+                    product_id, sequence_no, department, operation_name,
+                    setup_minutes, minutes_per_unit, notes,
+                    created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    int(product["id"]),
+                    sequence_no,
+                    department,
+                    operation_name,
+                    setup_minutes,
+                    minutes_per_unit,
+                    notes,
+                    now,
+                    now,
+                ),
+            )
+            operation_id = int(cursor.lastrowid)
+            self._audit_in_connection(
+                db,
+                actor=actor,
+                action="product_operation_added",
+                entity_type="product",
+                entity_id=str(product["id"]),
+                payload={
+                    "operation_id": operation_id,
+                    "sequence_no": sequence_no,
+                    "department": department,
+                    "operation_name": operation_name,
+                    "setup_minutes": setup_minutes,
+                    "minutes_per_unit": minutes_per_unit,
+                },
+            )
+
+        return next(
+            row for row in self.list_product_operations(symbol)
+            if int(row["id"]) == operation_id
+        )
+
+    def delete_product_operation(
+        self,
+        symbol: str,
+        operation_id: int,
+        *,
+        actor: str = "development-user",
+    ) -> None:
+        product = self.get_product(symbol)
+        if product is None:
+            raise ValueError(f"Nie znaleziono produktu {symbol}.")
+
+        with self._connect() as db:
+            row = db.execute(
+                """
+                SELECT id, sequence_no, department, operation_name,
+                       setup_minutes, minutes_per_unit, notes
+                FROM product_operations
+                WHERE id = ? AND product_id = ?
+                """,
+                (int(operation_id), int(product["id"])),
+            ).fetchone()
+            if row is None:
+                raise ValueError("Nie znaleziono operacji technologicznej.")
+
+            db.execute(
+                "DELETE FROM product_operations WHERE id = ?",
+                (int(operation_id),),
+            )
+            remaining = db.execute(
+                """
+                SELECT id
+                FROM product_operations
+                WHERE product_id = ?
+                ORDER BY sequence_no, id
+                """,
+                (int(product["id"]),),
+            ).fetchall()
+            for sequence_no, remaining_row in enumerate(remaining, start=1):
+                db.execute(
+                    "UPDATE product_operations SET sequence_no = ?, updated_at = ? WHERE id = ?",
+                    (sequence_no, datetime.now(timezone.utc).isoformat(), int(remaining_row["id"])),
+                )
+
+            self._audit_in_connection(
+                db,
+                actor=actor,
+                action="product_operation_deleted",
+                entity_type="product",
+                entity_id=str(product["id"]),
+                payload=dict(row),
+            )
+
+    def move_product_operation(
+        self,
+        symbol: str,
+        operation_id: int,
+        direction: int,
+        *,
+        actor: str = "development-user",
+    ) -> list[dict]:
+        product = self.get_product(symbol)
+        if product is None:
+            raise ValueError(f"Nie znaleziono produktu {symbol}.")
+        direction = -1 if int(direction) < 0 else 1
+
+        with self._connect() as db:
+            rows = db.execute(
+                """
+                SELECT id, sequence_no
+                FROM product_operations
+                WHERE product_id = ?
+                ORDER BY sequence_no, id
+                """,
+                (int(product["id"]),),
+            ).fetchall()
+            ids = [int(row["id"]) for row in rows]
+            try:
+                current_index = ids.index(int(operation_id))
+            except ValueError as exc:
+                raise ValueError("Nie znaleziono operacji technologicznej.") from exc
+
+            target_index = current_index + direction
+            if target_index < 0 or target_index >= len(ids):
+                return self.list_product_operations(symbol)
+
+            ids[current_index], ids[target_index] = ids[target_index], ids[current_index]
+            now = datetime.now(timezone.utc).isoformat()
+
+            # Tymczasowe numery unikają konfliktu UNIQUE(product_id, sequence_no).
+            for offset, row_id in enumerate(ids, start=1):
+                db.execute(
+                    "UPDATE product_operations SET sequence_no = ?, updated_at = ? WHERE id = ?",
+                    (100000 + offset, now, row_id),
+                )
+            for sequence_no, row_id in enumerate(ids, start=1):
+                db.execute(
+                    "UPDATE product_operations SET sequence_no = ?, updated_at = ? WHERE id = ?",
+                    (sequence_no, now, row_id),
+                )
+
+            self._audit_in_connection(
+                db,
+                actor=actor,
+                action="product_operation_moved",
+                entity_type="product",
+                entity_id=str(product["id"]),
+                payload={
+                    "operation_id": int(operation_id),
+                    "direction": direction,
+                },
+            )
+
+        return self.list_product_operations(symbol)
+
+    def calculate_operation_load(
+        self,
+        symbol: str,
+        planned_quantity: float,
+    ) -> list[dict]:
+        planned_quantity = float(planned_quantity)
+        if planned_quantity < 0:
+            raise ValueError("Planowana ilość nie może być ujemna.")
+
+        result: list[dict] = []
+        for row in self.list_product_operations(symbol):
+            item = dict(row)
+            item["planned_quantity"] = planned_quantity
+            item["load_minutes"] = (
+                float(item["setup_minutes"])
+                + float(item["minutes_per_unit"]) * planned_quantity
             )
             result.append(item)
         return result
