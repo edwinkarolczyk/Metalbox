@@ -48,7 +48,7 @@ from PySide6.QtWidgets import (
 )
 
 APP_NAME = "Metalbox"
-APP_VERSION = "0.1.20"
+APP_VERSION = "0.1.21"
 LOCAL_DATA_ROOT = Path(
     os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
 ) / "Metalbox"
@@ -66,6 +66,8 @@ DEV_UPDATE_STATE_FILE = DEV_ROOT / "update_state.json"
 DEV_SOURCE_STATE_FILE = DEV_ROOT / "source_state.json"
 INSTALLED_STATE_FILE = LOCAL_DATA_ROOT / "installed.json"
 DEV_VIEW_STATE_FILE = CONFIG_DIR / "dev_view.json"
+BUNDLE_ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+PRODUCT_HINTS_FILE = BUNDLE_ROOT / "data" / "product_hints_foldery.txt"
 
 # Tylko na czas developmentu. Ustaw False przed wersją produkcyjną,
 # aby całkowicie ukryć przycisk szybkiego zamykania aplikacji.
@@ -3528,32 +3530,229 @@ class PlannerPage(PageBase):
         self.root.addStretch(1)
 
 
+class ProductEditorDialog(QDialog):
+    def __init__(self, store: MetalboxStore, parent=None):
+        super().__init__(parent)
+        self.store = store
+        self.product: dict | None = None
+        self.selected_hint_id: int | None = None
+        self.setWindowTitle("Metalbox — nowy produkt")
+        self.setModal(True)
+        self.setMinimumWidth(sp(760))
+
+        hints = self.store.list_product_hints(limit=5000)
+        self.hints_by_name = {
+            str(row["raw_name"]): int(row["id"])
+            for row in hints
+        }
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(sp(18), sp(18), sp(18), sp(18))
+        root.setSpacing(sp(12))
+
+        title = QLabel("Dodaj produkt")
+        title.setObjectName("detailTitle")
+        root.addWidget(title)
+
+        stats = self.store.product_hint_stats()
+        info = QLabel(
+            f'Podpowiedzi ze starej dokumentacji: {stats["total"]} pozycji źródłowych • '
+            f'{stats["unique_names"]} unikalnych nazw. '
+            "Podpowiedź nie tworzy produktu — produkt powstaje dopiero po kliknięciu Zapisz."
+        )
+        info.setObjectName("hint")
+        info.setWordWrap(True)
+        root.addWidget(info)
+
+        self.hint_combo = QComboBox()
+        self.hint_combo.setEditable(True)
+        self.hint_combo.addItem("")
+        self.hint_combo.addItems(list(self.hints_by_name))
+        self.hint_combo.setCurrentIndex(0)
+        self.hint_combo.lineEdit().setPlaceholderText(
+            "Zacznij wpisywać symbol lub nazwę, np. 1.437.68…"
+        )
+        self.hint_combo.activated.connect(self._hint_activated)
+
+        self.symbol_edit = QLineEdit()
+        self.symbol_edit.setPlaceholderText("np. 1.437.68")
+        self.name_edit = QLineEdit()
+        self.name_edit.setPlaceholderText("Nazwa produktu")
+
+        self.kind_combo = QComboBox()
+        self.kind_combo.addItems(["PRODUKT", "PÓŁPRODUKT"])
+
+        self.client_edit = QLineEdit()
+        self.client_edit.setPlaceholderText("Opcjonalnie klient / wariant")
+        self.material_edit = QLineEdit()
+        self.material_edit.setPlaceholderText("Opcjonalnie materiał")
+        self.dimensions_edit = QLineEdit()
+        self.dimensions_edit.setPlaceholderText("Opcjonalnie wymiary")
+
+        self.quantity_spin = QSpinBox()
+        self.quantity_spin.setRange(1, 1_000_000)
+        self.quantity_spin.setValue(1)
+        self.quantity_spin.setSuffix(" szt.")
+
+        self.department_combo = QComboBox()
+        self.department_combo.addItem("— nie przypisano —", "")
+        for department in DEPARTMENTS:
+            self.department_combo.addItem(department, department)
+
+        self.technology_edit = QLineEdit()
+        self.technology_edit.setPlaceholderText("np. Laser → Gięcie → Zgrzewanie")
+        self.notes_edit = QLineEdit()
+        self.notes_edit.setPlaceholderText("Uwagi")
+
+        self.status_combo = QComboBox()
+        self.status_combo.addItems(["AKTYWNY", "DO WERYFIKACJI", "NIEAKTYWNY"])
+
+        form = QFormLayout()
+        form.setHorizontalSpacing(sp(18))
+        form.setVerticalSpacing(sp(10))
+        form.addRow("Podpowiedź ze starej bazy:", self.hint_combo)
+        form.addRow("Symbol:", self.symbol_edit)
+        form.addRow("Nazwa:", self.name_edit)
+        form.addRow("Typ:", self.kind_combo)
+        form.addRow("Klient / wariant:", self.client_edit)
+        form.addRow("Materiał:", self.material_edit)
+        form.addRow("Wymiary:", self.dimensions_edit)
+        form.addRow("Ilość na komplet:", self.quantity_spin)
+        form.addRow("Dział:", self.department_combo)
+        form.addRow("Technologia:", self.technology_edit)
+        form.addRow("Uwagi:", self.notes_edit)
+        form.addRow("Status:", self.status_combo)
+        root.addLayout(form)
+
+        no_ral = QLabel(
+            "RAL nie jest danymi produktu. Kolor będzie przypisywany do planu / zlecenia produkcyjnego."
+        )
+        no_ral.setObjectName("hint")
+        no_ral.setWordWrap(True)
+        root.addWidget(no_ral)
+
+        footer = QHBoxLayout()
+        footer.addStretch(1)
+        cancel = QPushButton("Anuluj")
+        cancel.clicked.connect(self.reject)
+        footer.addWidget(cancel)
+
+        save = QPushButton("Zapisz produkt")
+        save.setObjectName("primary")
+        save.clicked.connect(self._save)
+        footer.addWidget(save)
+        root.addLayout(footer)
+
+    @staticmethod
+    def _split_hint(raw_name: str) -> tuple[str, str]:
+        raw_name = str(raw_name or "").strip()
+        match = re.match(r"^([0-9]+(?:\.[^\s.]+)+)\s*(.*)$", raw_name)
+        if not match:
+            return "", raw_name
+        symbol = match.group(1).strip()
+        name = match.group(2).strip().lstrip("-–— ").strip()
+        return symbol, name
+
+    def _hint_activated(self, value) -> None:
+        raw_name = self.hint_combo.currentText().strip()
+        hint_id = self.hints_by_name.get(raw_name)
+        if hint_id is None:
+            return
+
+        self.selected_hint_id = hint_id
+        symbol, name = self._split_hint(raw_name)
+        if symbol:
+            self.symbol_edit.setText(symbol)
+        if name:
+            self.name_edit.setText(name)
+        mark_update_check("product:hint_selected")
+
+    def _save(self) -> None:
+        try:
+            product = self.store.create_product(
+                symbol=self.symbol_edit.text(),
+                name=self.name_edit.text(),
+                kind=self.kind_combo.currentText(),
+                client_variant=self.client_edit.text(),
+                material=self.material_edit.text(),
+                dimensions=self.dimensions_edit.text(),
+                quantity_per_set=self.quantity_spin.value(),
+                department=str(self.department_combo.currentData() or ""),
+                technology=self.technology_edit.text(),
+                notes=self.notes_edit.text(),
+                status=self.status_combo.currentText(),
+                hint_id=self.selected_hint_id,
+            )
+        except ValueError as exc:
+            QMessageBox.warning(self, "Nie można zapisać produktu", str(exc))
+            return
+        except Exception as exc:
+            app_log(f"Błąd zapisu produktu: {exc}", "ERROR")
+            QMessageBox.critical(
+                self,
+                "Błąd zapisu",
+                "Nie udało się zapisać produktu. Szczegóły zapisano w logu.",
+            )
+            return
+
+        self.product = product
+        mark_update_check("product:create")
+        self.accept()
+
+
 class ProductsPage(PageBase):
-    def __init__(self, go_home: Callable, open_product: Callable[[str], None]):
-        super().__init__("Produkty", go_home, "Karty produktów, BOM, dokumentacja, technologia i historia.")
+    def __init__(
+        self,
+        go_home: Callable,
+        open_product: Callable[[str], None],
+        store: MetalboxStore,
+    ):
+        super().__init__(
+            "Produkty",
+            go_home,
+            "Karty produktów, BOM, dokumentacja, technologia i historia.",
+        )
+        self.store = store
+        self.open_product_callback = open_product
 
         controls = QHBoxLayout()
-        search = QLineEdit()
-        search.setPlaceholderText("Szukaj po symbolu lub nazwie…")
-        search.setFixedWidth(sp(340))
-        controls.addWidget(search)
-        for text in ("Nowy produkt", "Import katalogów 2014–2016", "Do weryfikacji", "Półprodukty"):
-            btn = QPushButton(text)
-            if text == "Nowy produkt":
-                btn.setObjectName("primary")
-            btn.clicked.connect(lambda checked=False, t=text: mock_message(self, t))
-            controls.addWidget(btn)
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("Szukaj po symbolu lub nazwie…")
+        self.search.setFixedWidth(sp(340))
+        self.search.textChanged.connect(self._refresh_table)
+        controls.addWidget(self.search)
+
+        new_btn = QPushButton("Nowy produkt")
+        new_btn.setObjectName("primary")
+        new_btn.clicked.connect(self._new_product)
+        controls.addWidget(new_btn)
+
+        import_btn = QPushButton("Import katalogów 2014–2016")
+        import_btn.clicked.connect(lambda: mock_message(self, "Import katalogów 2014–2016"))
+        controls.addWidget(import_btn)
+
+        verify_btn = QPushButton("Do weryfikacji")
+        verify_btn.clicked.connect(lambda: mock_message(self, "Do weryfikacji"))
+        controls.addWidget(verify_btn)
+
+        semi_btn = QPushButton("Półprodukty")
+        semi_btn.clicked.connect(lambda: mock_message(self, "Półprodukty"))
+        controls.addWidget(semi_btn)
         controls.addStretch(1)
         self.root.addLayout(controls)
 
-        table = compact_table(
-            ["Symbol", "Nazwa", "RAL", "Technologia", "Status", "Karta"],
-            [list(row) + ["Otwórz"] for row in PRODUCTS],
-            [145, 260, 135, 150, 110, 90],
-            290,
+        self.hint_stats = QLabel("")
+        self.hint_stats.setObjectName("hint")
+        self.root.addWidget(self.hint_stats)
+
+        self.table = compact_table(
+            ["Symbol", "Nazwa", "Typ", "Technologia", "Status", "Karta"],
+            [],
+            [145, 285, 130, 260, 130, 90],
+            310,
         )
-        table.cellDoubleClicked.connect(lambda row, col: open_product(PRODUCTS[row][0]))
-        self.root.addWidget(table, alignment=Qt.AlignLeft)
+        self.table.cellDoubleClicked.connect(self._open_selected_product)
+        self.root.addWidget(self.table, alignment=Qt.AlignLeft)
 
         detail = QFrame()
         detail.setObjectName("panel")
@@ -3570,7 +3769,6 @@ class ProductsPage(PageBase):
             "Technologia",
             "Maszyny",
             "Narzędzia WM",
-            "RAL",
             "Pakowanie",
             "Jakość",
             "Statystyki",
@@ -3583,51 +3781,109 @@ class ProductsPage(PageBase):
             chips.addWidget(btn, idx // 6, idx % 6)
         layout.addLayout(chips)
         hint = QLabel(
-            "Półprodukt może w przyszłości być wykonany niezależnie od ZL i odłożony do bufora "
-            "dla konkretnego produktu."
+            "Surowe nazwy ze starych folderów są tylko podpowiedziami. "
+            "Do właściwego katalogu trafia dopiero produkt zapisany przez użytkownika."
         )
         hint.setObjectName("hint")
         hint.setWordWrap(True)
         layout.addWidget(hint)
         self.root.addWidget(detail, alignment=Qt.AlignLeft)
         self.root.addStretch(1)
+        self._refresh_table()
 
+    def _refresh_table(self, *_args) -> None:
+        rows = self.store.list_products(search=self.search.text().strip())
+        self.table.setRowCount(len(rows))
+        for row_index, row in enumerate(rows):
+            values = [
+                row["symbol"],
+                row["name"],
+                row["kind"],
+                row["technology"] or "—",
+                row["status"],
+                "Otwórz",
+            ]
+            self.table.setRowHeight(row_index, sp(38))
+            for column_index, value in enumerate(values):
+                item = QTableWidgetItem(str(value))
+                self.table.setItem(row_index, column_index, item)
+
+        stats = self.store.product_hint_stats()
+        self.hint_stats.setText(
+            f'Źródło podpowiedzi: {stats["total"]} pozycji • '
+            f'{stats["unique_names"]} unikalnych nazw • '
+            f'{stats["used_rows"]} wykorzystanych'
+        )
+
+    def _new_product(self) -> None:
+        dialog = ProductEditorDialog(self.store, self)
+        mark_update_check("product:dialog_open")
+        if dialog.exec() != QDialog.Accepted:
+            return
+        self._refresh_table()
+        if dialog.product is not None:
+            symbol = str(dialog.product["symbol"])
+            QMessageBox.information(
+                self,
+                "Produkt zapisany",
+                f"Produkt {symbol} został dodany do właściwego katalogu.",
+            )
+
+    def _open_selected_product(self, row: int, _column: int) -> None:
+        item = self.table.item(row, 0)
+        if item is not None:
+            self.open_product_callback(item.text())
 
 
 class ProductDetailPage(PageBase):
-    def __init__(self, go_home: Callable):
+    def __init__(self, go_home: Callable, store: MetalboxStore):
         super().__init__(
             "Karta produktu",
             go_home,
             "Cyfrowa teczka produktu — dane, technologia, dokumentacja, pakowanie i historia.",
         )
-        self.symbol = "1.435.135"
+        self.store = store
+        self.symbol = ""
 
         top = QHBoxLayout()
-        self.symbol_label = QLabel(self.symbol)
+        self.symbol_label = QLabel("—")
         self.symbol_label.setObjectName("detailTitle")
         top.addWidget(self.symbol_label)
         top.addSpacing(sp(22))
-        top.addWidget(QLabel("SC600 RP Sorta"))
-        top.addWidget(QLabel("RAL 7042"))
+
+        self.name_label = QLabel("—")
+        self.name_label.setObjectName("orderDetails")
+        top.addWidget(self.name_label)
         top.addStretch(1)
-        active = QLabel("AKTYWNY")
-        active.setObjectName("statusPill")
-        top.addWidget(active)
+
+        self.status_label = QLabel("—")
+        self.status_label.setObjectName("statusPill")
+        top.addWidget(self.status_label)
         self.root.addLayout(top)
 
         summary = QHBoxLayout()
-        summary.addWidget(card("Trasa", "5 operacji", "Laser → Gięcie → Zgrzewanie → Malarnia → Pakownia", 280))
+        summary.addWidget(card("Trasa", "—", "uzupełnij technologię", 280))
         summary.addWidget(card("Norma", "—", "uczenie z historii", 220))
-        summary.addWidget(card("Ostatnia produkcja", "ZL-740", "bieżące zlecenie", 220))
-        summary.addWidget(card("Dokumentacja", "6 plików", "PDF / rysunki / zdjęcia", 230))
+        summary.addWidget(card("Ostatnia produkcja", "—", "brak danych", 220))
+        summary.addWidget(card("Dokumentacja", "—", "PDF / rysunki / zdjęcia", 230))
         summary.addStretch(1)
         self.root.addLayout(summary)
 
         tabs = QGridLayout()
         tabs.setHorizontalSpacing(sp(7))
         tabs.setVerticalSpacing(sp(7))
-        tab_names = ("Dane", "BOM", "Dokumentacja", "Technologia", "Maszyny", "Narzędzia WM", "RAL", "Pakowanie", "Jakość", "Statystyki", "Historia")
+        tab_names = (
+            "Dane",
+            "BOM",
+            "Dokumentacja",
+            "Technologia",
+            "Maszyny",
+            "Narzędzia WM",
+            "Pakowanie",
+            "Jakość",
+            "Statystyki",
+            "Historia",
+        )
         for idx, text in enumerate(tab_names):
             btn = QPushButton(text)
             btn.setFixedHeight(sp(34))
@@ -3643,49 +3899,68 @@ class ProductDetailPage(PageBase):
         details.setMaximumWidth(sp(1280))
         dl = QGridLayout(details)
         dl.setContentsMargins(sp(16), sp(14), sp(16), sp(14))
+        self.detail_values: dict[str, QLabel] = {}
         fields = [
-            ("Symbol", "1.435.135"),
-            ("Nazwa", "SC600 RP Sorta"),
-            ("Klient / wariant", "Sorta"),
-            ("RAL", "7042"),
-            ("Pakowanie", "wg instrukcji produktu"),
-            ("Kontrola jakości", "po każdym kluczowym etapie"),
-            ("Narzędzia", "powiązane z Warsztat Menager"),
-            ("Półprodukty", "obsługa bufora — kierunek przyszły"),
+            "Symbol",
+            "Nazwa",
+            "Typ",
+            "Klient / wariant",
+            "Materiał",
+            "Wymiary",
+            "Ilość na komplet",
+            "Dział",
+            "Technologia",
+            "Uwagi",
         ]
-        for idx, (name, value) in enumerate(fields):
+        for idx, name in enumerate(fields):
             label = QLabel(name)
             label.setObjectName("hint")
-            val = QLabel(value)
-            val.setObjectName("orderDetails")
+            value = QLabel("—")
+            value.setObjectName("orderDetails")
+            value.setWordWrap(True)
+            self.detail_values[name] = value
             dl.addWidget(label, idx // 2, (idx % 2) * 2)
-            dl.addWidget(val, idx // 2, (idx % 2) * 2 + 1)
+            dl.addWidget(value, idx // 2, (idx % 2) * 2 + 1)
         self.root.addWidget(details, alignment=Qt.AlignLeft)
 
-        route = QFrame()
-        route.setObjectName("panel")
-        route.setMaximumWidth(sp(1280))
-        rl = QVBoxLayout(route)
-        rl.addWidget(section_heading("Trasa produkcyjna"))
-        line = QHBoxLayout()
-        for idx, step in enumerate(("LASER", "GIĘTARKI", "ZGRZEWARKI", "MALARNIA", "PAKOWNIA")):
-            badge = QLabel(step)
-            badge.setObjectName("routeBadge")
-            badge.setAlignment(Qt.AlignCenter)
-            badge.setMinimumWidth(sp(130))
-            line.addWidget(badge)
-            if idx < 4:
-                arrow = QLabel("→")
-                arrow.setObjectName("routeArrow")
-                line.addWidget(arrow)
-        line.addStretch(1)
-        rl.addLayout(line)
-        self.root.addWidget(route, alignment=Qt.AlignLeft)
+        note = QLabel(
+            "RAL nie jest przechowywany na karcie produktu. "
+            "Kolor należy do konkretnego planu / zlecenia produkcyjnego."
+        )
+        note.setObjectName("hint")
+        note.setWordWrap(True)
+        self.root.addWidget(note)
+
         self.root.addStretch(1)
 
     def set_product(self, symbol: str) -> None:
-        self.symbol = symbol
-        self.symbol_label.setText(symbol)
+        self.symbol = str(symbol or "").strip()
+        product = self.store.get_product(self.symbol)
+        if product is None:
+            self.symbol_label.setText(self.symbol or "—")
+            self.name_label.setText("Nie znaleziono produktu")
+            self.status_label.setText("BRAK")
+            for value in self.detail_values.values():
+                value.setText("—")
+            return
+
+        self.symbol_label.setText(str(product["symbol"]))
+        self.name_label.setText(str(product["name"]))
+        self.status_label.setText(str(product["status"]))
+        values = {
+            "Symbol": product["symbol"],
+            "Nazwa": product["name"],
+            "Typ": product["kind"],
+            "Klient / wariant": product["client_variant"] or "—",
+            "Materiał": product["material"] or "—",
+            "Wymiary": product["dimensions"] or "—",
+            "Ilość na komplet": f'{product["quantity_per_set"]} szt.',
+            "Dział": product["department"] or "—",
+            "Technologia": product["technology"] or "—",
+            "Uwagi": product["notes"] or "—",
+        }
+        for name, value in values.items():
+            self.detail_values[name].setText(str(value))
 
 
 class AlertsPage(PageBase):
@@ -4690,8 +4965,8 @@ class MainWindow(QMainWindow):
 
         self.orders_page = OrdersPage(self.go_home, self.open_order, self.store)
         self.planner_page = PlannerPage(self.go_home)
-        self.product_detail_page = ProductDetailPage(self.go_home)
-        self.products_page = ProductsPage(self.go_home, self.open_product)
+        self.product_detail_page = ProductDetailPage(self.go_home, self.store)
+        self.products_page = ProductsPage(self.go_home, self.open_product, self.store)
         self.alerts_page = AlertsPage(self.go_home, self.store)
         self.semiproducts_page = SemiProductsPage(self.go_home)
         self.user_profile_page = UserProfilePage(
@@ -5671,11 +5946,27 @@ def main() -> int:
     seeded = store.seed_development_data()
     progress_seeded = store.ensure_development_progress_seeded()
     employees_seeded = store.ensure_development_employees_seeded()
+    products_seeded = store.ensure_development_products_seeded()
+
+    hint_import = {"inserted": 0, "total": 0}
+    try:
+        hint_entries = [
+            line.strip()
+            for line in PRODUCT_HINTS_FILE.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        hint_import = store.import_product_hints(hint_entries)
+    except OSError as exc:
+        app_log(f"Brak źródła podpowiedzi produktów: {PRODUCT_HINTS_FILE} • {exc}", "WARN")
+
     app_log(
         f"Baza Development gotowa: {DEV_DB_FILE} • "
         f"seed={'tak' if seeded else 'nie'} • "
         f"postęp_seed={'tak' if progress_seeded else 'nie'} • "
-        f"pracownicy_seed={'tak' if employees_seeded else 'nie'}"
+        f"pracownicy_seed={'tak' if employees_seeded else 'nie'} • "
+        f"produkty_seed={'tak' if products_seeded else 'nie'} • "
+        f"podpowiedzi={hint_import.get('total', 0)} "
+        f"(nowe {hint_import.get('inserted', 0)})"
     )
 
     window = MainWindow(config, store)
