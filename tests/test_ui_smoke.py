@@ -35,6 +35,40 @@ class UiSmokeTest(unittest.TestCase):
         self.assertEqual(len(entries), 611)
         self.assertIn("1.437.68 TESAM", entries)
 
+    def test_product_technology_page_constructs_and_refreshes(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            store = MetalboxStore(Path(temp) / "technology-ui.sqlite3")
+            store.create_product(symbol="TECH.UI", name="Produkt UI")
+            store.add_product_operation(
+                "TECH.UI",
+                department="Laser",
+                operation_name="Cięcie",
+                setup_minutes=20,
+                minutes_per_unit=0.5,
+            )
+            store.add_product_operation(
+                "TECH.UI",
+                department="Giętarki",
+                operation_name="Gięcie",
+                minutes_per_unit=0.25,
+            )
+
+            page = metalbox_app.ProductDetailPage(lambda: None, store)
+            page.set_product("TECH.UI")
+            page._show_tab("Technologia")
+            self.qt_app.processEvents()
+
+            self.assertFalse(page.data_panel.isVisible())
+            self.assertFalse(page.bom_panel.isVisible())
+            self.assertTrue(page.technology_panel.isVisible() or not page.isVisible())
+            self.assertEqual(page.operation_table.rowCount(), 2)
+            self.assertEqual(page.operation_table.item(0, 1).text(), "Laser")
+            self.assertEqual(page.operation_table.item(1, 1).text(), "Giętarki")
+            self.assertEqual(page.operation_table.item(0, 2).text(), "Cięcie")
+            self.assertEqual(page.operation_table.item(0, 3).text(), "20 min")
+            self.assertEqual(page.operation_table.item(0, 4).text(), "0.5")
+            page.close()
+
     def test_product_bom_page_constructs_and_refreshes(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             store = MetalboxStore(Path(temp) / "bom-ui.sqlite3")
