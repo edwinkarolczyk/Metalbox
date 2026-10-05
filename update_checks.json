@@ -1,23 +1,28 @@
 {
   "schema": 1,
-  "version": "0.1.21.1",
-  "title": "Produkty — naprawa podpowiedzi ze starej bazy",
-  "description": "Sprawdź poprawkę źródła podpowiedzi. MetalboxDev ma czytać 611 nazw z katalogu aktualnej wersji, a samodzielny EXE z dołączonych zasobów.",
+  "version": "0.1.22",
+  "title": "Produkty — BOM produktu",
+  "description": "Sprawdź prawdziwą zakładkę BOM na karcie produktu: dodawanie pozycji, automatyczne powiązanie istniejącego półproduktu oraz usuwanie z audytem.",
   "checks": [
     {
-      "id": "product-hints-loaded",
-      "text": "1. Wejdź w PRODUKTY. Nad tabelą ma być informacja o źródle podpowiedzi i liczba 611 pozycji. Nie może być 0.",
-      "trigger": "page:products"
+      "id": "bom-open",
+      "text": "1. Otwórz PRODUKTY → wejdź w kartę produktu → kliknij „BOM”. Ma pojawić się tabela BOM oraz przyciski „Dodaj pozycję BOM” i „Usuń z BOM”.",
+      "trigger": "product:bom_open"
     },
     {
-      "id": "product-hint",
-      "text": "2. Kliknij „Nowy produkt”, wpisz w podpowiedzi „1.437.68” i wybierz np. „1.437.68 TESAM”. Symbol i nazwa mają się uzupełnić.",
-      "trigger": "product:hint_selected"
+      "id": "bom-add",
+      "text": "2. Dodaj pozycję BOM z typem np. DETAL lub MATERIAŁ, podaj symbol, nazwę, ilość na 1 komplet i jednostkę. Po zapisie pozycja ma pojawić się w tabeli.",
+      "trigger": "product:bom_item_add"
     },
     {
-      "id": "product-save",
-      "text": "3. Zapisz produkt testowy z wybranej podpowiedzi. Dopiero po zapisie ma pojawić się w tabeli PRODUKTY.",
-      "trigger": "product:create"
+      "id": "bom-link",
+      "text": "3. Dodaj jako PÓŁPRODUKT symbol, który istnieje już w katalogu produktów/półproduktów. W kolumnie „Powiązanie” ma być „Karta produktu”.",
+      "trigger": "product:bom_item_linked"
+    },
+    {
+      "id": "bom-delete",
+      "text": "4. Zaznacz dowolną pozycję BOM i kliknij „Usuń z BOM”. Po potwierdzeniu pozycja ma zniknąć z tabeli.",
+      "trigger": "product:bom_item_delete"
     }
   ]
 }
