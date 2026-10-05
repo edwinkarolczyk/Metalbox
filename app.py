@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Callable
 
 from metalbox_core import MetalboxStore, SCHEMA_VERSION, QUALITY_REASON_CODES
+from plan_excel import compare_plan_rows, read_plan_snapshot, safe_snapshot
 
 from PySide6.QtCore import QEvent, Qt, QTimer
 from PySide6.QtGui import QColor
@@ -27,6 +28,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QDoubleSpinBox,
+    QFileDialog,
     QFormLayout,
     QFrame,
     QGridLayout,
@@ -49,7 +51,7 @@ from PySide6.QtWidgets import (
 )
 
 APP_NAME = "Metalbox"
-APP_VERSION = "0.1.24.2"
+APP_VERSION = "0.1.25"
 LOCAL_DATA_ROOT = Path(
     os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
 ) / "Metalbox"
@@ -67,6 +69,7 @@ DEV_UPDATE_STATE_FILE = DEV_ROOT / "update_state.json"
 DEV_SOURCE_STATE_FILE = DEV_ROOT / "source_state.json"
 INSTALLED_STATE_FILE = LOCAL_DATA_ROOT / "installed.json"
 DEV_VIEW_STATE_FILE = CONFIG_DIR / "dev_view.json"
+PLAN_SNAPSHOT_DIR = DEV_DATA_DIR / "plan_snapshots"
 
 
 def resource_file(*parts: str) -> Path:
