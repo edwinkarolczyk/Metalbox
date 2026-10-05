@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Iterator
 
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 DEFAULT_ROUTE = ("Laser", "Giętarki", "Zgrzewarki", "Malarnia", "Pakownia")
 QUALITY_REASON_CODES = (
     "NIEZGODNY_WYMIAR",
@@ -225,6 +225,40 @@ class MetalboxStore:
 
                 CREATE INDEX IF NOT EXISTS idx_product_operations_department
                     ON product_operations(department, product_id);
+
+                CREATE TABLE IF NOT EXISTS plan_snapshots (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    source_name TEXT NOT NULL,
+                    snapshot_path TEXT NOT NULL,
+                    sha256 TEXT NOT NULL,
+                    size_bytes INTEGER NOT NULL,
+                    sheet_name TEXT NOT NULL,
+                    header_row INTEGER NOT NULL,
+                    row_count INTEGER NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'PODGLĄD',
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS plan_snapshot_rows (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    snapshot_id INTEGER NOT NULL REFERENCES plan_snapshots(id) ON DELETE CASCADE,
+                    row_key TEXT NOT NULL,
+                    row_no INTEGER NOT NULL,
+                    order_code TEXT NOT NULL DEFAULT '',
+                    symbol TEXT NOT NULL DEFAULT '',
+                    name TEXT NOT NULL DEFAULT '',
+                    quantity REAL,
+                    shipping TEXT NOT NULL DEFAULT '',
+                    ral TEXT NOT NULL DEFAULT '',
+                    raw_json TEXT NOT NULL DEFAULT '{}',
+                    UNIQUE(snapshot_id, row_key)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_plan_snapshots_created
+                    ON plan_snapshots(created_at DESC, id DESC);
+
+                CREATE INDEX IF NOT EXISTS idx_plan_snapshot_rows_snapshot
+                    ON plan_snapshot_rows(snapshot_id, row_no);
 
                 CREATE TABLE IF NOT EXISTS session_workers (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
