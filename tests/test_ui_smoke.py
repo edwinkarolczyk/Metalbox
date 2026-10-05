@@ -128,7 +128,16 @@ class UiSmokeTest(unittest.TestCase):
             self.assertEqual(page.bom_table.item(0, 2).text(), "SEMI.UI")
             self.assertEqual(page.bom_table.item(0, 4).text(), "2")
             self.assertEqual(page.bom_table.item(0, 6).text(), "Karta produktu")
+            open_button = page.bom_table.cellWidget(0, 7)
+            self.assertIsNotNone(open_button)
+            self.assertEqual(open_button.text(), "Otwórz półprodukt")
             self.assertTrue(page.add_bom_button.isEnabled())
+
+            open_button.click()
+            self.qt_app.processEvents()
+            self.assertEqual(page.symbol, "SEMI.UI")
+            self.assertEqual(page.current_product["kind"], "PÓŁPRODUKT")
+            self.assertTrue(page.data_panel.isVisible() or not page.isVisible())
             page.close()
 
     def test_main_window_constructs(self) -> None:
