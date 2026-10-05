@@ -35,6 +35,36 @@ class UiSmokeTest(unittest.TestCase):
         self.assertEqual(len(entries), 611)
         self.assertIn("1.437.68 TESAM", entries)
 
+    def test_product_editor_updates_existing_card(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            store = MetalboxStore(Path(temp) / "product-edit-ui.sqlite3")
+            store.create_product(
+                symbol="EDIT.UI",
+                name="Nazwa stara",
+                status="DO WERYFIKACJI",
+            )
+            product = store.get_product("EDIT.UI")
+            self.assertIsNotNone(product)
+
+            dialog = metalbox_app.ProductEditorDialog(
+                store,
+                product=product,
+            )
+            self.assertTrue(dialog.symbol_edit.isReadOnly())
+            dialog.name_edit.setText("Nazwa poprawiona")
+            dialog.material_edit.setText("DC01")
+            dialog.status_combo.setCurrentText("AKTYWNY")
+            dialog._save()
+            self.qt_app.processEvents()
+
+            updated = store.get_product("EDIT.UI")
+            self.assertIsNotNone(updated)
+            self.assertEqual(updated["symbol"], "EDIT.UI")
+            self.assertEqual(updated["name"], "Nazwa poprawiona")
+            self.assertEqual(updated["material"], "DC01")
+            self.assertEqual(updated["status"], "AKTYWNY")
+            dialog.close()
+
     def test_product_technology_page_constructs_and_refreshes(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             store = MetalboxStore(Path(temp) / "technology-ui.sqlite3")
