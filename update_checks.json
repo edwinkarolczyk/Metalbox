@@ -1,22 +1,22 @@
 {
   "schema": 1,
-  "version": "0.1.25.2",
-  "title": "Planista — rozpoznawanie rzeczywistego arkusza planu",
-  "description": "Poprawka importu firmowego Excela: Metalbox skanuje arkusze, wybiera właściwy plan i rozpoznaje nagłówki z kropkami/dwukropkami, m.in. Nr zlec., Ilość: i Termin realizacji:.",
+  "version": "0.1.25.3",
+  "title": "Planista — ręczne dopasowanie kolumn Excel",
+  "description": "Gdy firmowy Excel ma nietypowy układ, można ręcznie wskazać arkusz, wiersz nagłówków i kolumny Nr ZL / Produkt / Symbol / Nazwa / Ilość / Termin / RAL. Mapowanie można zapamiętać dla tego pliku.",
   "checks": [
     {
-      "id": "planner-snapshot-created",
-      "text": "1. PLANISTA → Import snapshot → wybierz ten sam firmowy plik Excel. Snapshot ma powstać bez błędu i bez pozostawienia oryginału otwartego.",
-      "trigger": "planner:snapshot_created"
+      "id": "planner-manual-mapping",
+      "text": "1. PLANISTA → „Dopasuj kolumny” → wybierz ten sam firmowy Excel. Wskaż arkusz, wiersz nagłówków oraz co najmniej Produkt/Symbol/Nazwę i Ilość, potem kliknij „Użyj mapowania”.",
+      "trigger": "planner:manual_mapping"
     },
     {
       "id": "planner-snapshot-parsed",
-      "text": "2. Metalbox ma sam znaleźć arkusz planu (np. PLAN 2026) i pokazać pozycje mimo nagłówków typu „Nr zlec.”, „Ilość:” i „Termin realizacji:”.",
+      "text": "2. Po ręcznym mapowaniu tabela ma pokazać pozycje planu: Nr ZL, symbol/nazwa, ilość, termin/wysyłkę oraz RAL, jeśli wskażesz te kolumny.",
       "trigger": "planner:snapshot_parsed"
     },
     {
       "id": "planner-snapshot-compared",
-      "text": "3. Po imporcie mają być widoczne liczniki NOWY / ZMIENIONY / USUNIĘTY względem poprzedniego poprawnie odczytanego snapshotu. Nadal jest to tylko podgląd — bez aktualizacji zleceń.",
+      "text": "3. Po imporcie mają być widoczne liczniki NOWY / ZMIENIONY / USUNIĘTY. Mapowanie ma zostać zapamiętane dla tego pliku, ale zmiany nadal są tylko podglądem — bez aktualizacji zleceń.",
       "trigger": "planner:snapshot_compared"
     }
   ]
