@@ -3533,60 +3533,251 @@ class OrderDetailPage(PageBase):
 
 
 class PlannerPage(PageBase):
-    def __init__(self, go_home: Callable):
+    def __init__(self, go_home: Callable, store: MetalboxStore):
         super().__init__(
             "Planista",
             go_home,
-            "Układ wzorowany na obecnym planie Excel. W pilotażu Excel pozostaje nadrzędny.",
+            "Excel pozostaje nadrzędnym źródłem planu. Metalbox analizuje wyłącznie lokalny snapshot.",
         )
+        self.store = store
+        self.current_snapshot: dict | None = None
+        self.current_diff = {"added": [], "changed": [], "removed": []}
+
         controls = QHBoxLayout()
-        for text in ("Dzisiaj", "Tydzień", "Do akceptacji", "Zmiany Excel", "Import snapshot"):
-            btn = QPushButton(text)
-            if text == "Import snapshot":
-                btn.setObjectName("primary")
-            btn.clicked.connect(lambda checked=False, t=text: mock_message(self, t))
-            controls.addWidget(btn)
+
+        today_btn = QPushButton("Dzisiaj")
+        today_btn.clicked.connect(lambda: mock_message(self, "Planista — Dzisiaj"))
+        controls.addWidget(today_btn)
+
+        week_btn = QPushButton("Tydzień")
+        week_btn.clicked.connect(lambda: mock_message(self, "Planista — Tydzień"))
+        controls.addWidget(week_btn)
+
+        approval_btn = QPushButton("Do akceptacji")
+        approval_btn.clicked.connect(self._show_changes)
+        controls.addWidget(approval_btn)
+
+        changes_btn = QPushButton("Zmiany Excel")
+        changes_btn.clicked.connect(self._show_changes)
+        controls.addWidget(changes_btn)
+
+        import_btn = QPushButton("Import snapshot")
+        import_btn.setObjectName("primary")
+        import_btn.clicked.connect(self._import_snapshot)
+        controls.addWidget(import_btn)
+
         controls.addStretch(1)
         self.root.addLayout(controls)
 
-        rows = [
-            ["740", "1.435.135 SC600 RP Sorta", "65", "18.10", "x", "", "ZGRZ.", "", "", ""],
-            ["", "1.325.68 SC400 RP Sorta", "120", "", "x", "", "ZGRZ.", "", "", ""],
-            ["", "1.380.100 SC900 RP Sorta", "40", "", "x", "", "", "ZGRZ.", "", ""],
-            ["763", "1.330.50 Elimger", "864", "08.10", "zgrzane", "", "", "MAL.", "", ""],
-            ["781", "2.510.240 DELKER", "48", "15.10", "x", "", "", "", "ZGRZ.", ""],
-            ["785", "1.380.68 WIST", "50", "16.10", "x", "", "", "", "", "ZGRZ."],
-        ]
-        table = compact_table(
-            ["Nr ZL", "Produkt", "Ilość", "Wysyłka", "Proces", "Pon", "Wt", "Śr", "Czw", "Pt"],
-            rows,
-            [90, 300, 80, 95, 105, 85, 85, 85, 85, 85],
-            300,
+        self.snapshot_info = QLabel(
+            "Brak snapshotu planu. Oryginalny Excel nie jest analizowany bezpośrednio."
         )
-        self.root.addWidget(table, alignment=Qt.AlignLeft)
+        self.snapshot_info.setObjectName("hint")
+        self.snapshot_info.setWordWrap(True)
+        self.snapshot_info.setMaximumWidth(sp(1320))
+        self.root.addWidget(self.snapshot_info)
+
+        self.table = compact_table(
+            ["Nr ZL", "Symbol", "Nazwa", "Ilość", "Wysyłka", "RAL", "Zmiana"],
+            [],
+            [120, 180, 310, 90, 140, 100, 150],
+            330,
+        )
+        self.root.addWidget(self.table, alignment=Qt.AlignLeft)
 
         lower = QHBoxLayout()
-        lower.addWidget(card("Wąskie gardło", "Zgrzewarki", "Planista — atrapa", 240))
-        lower.addWidget(card("Ryzyko terminu", "2 ZL", "wymaga uwagi", 240))
-        lower.addWidget(card("Najbliższa wysyłka", "08.10", "ZL-763", 240))
-        lower.addWidget(card("Dokładność prognozy", "—", "zbieranie danych", 240))
+        self.rows_card = card("Pozycje snapshotu", "0", "wierszy planu", 230)
+        self.added_card = card("Nowe", "0", "od poprzedniego snapshotu", 230)
+        self.changed_card = card("Zmienione", "0", "od poprzedniego snapshotu", 230)
+        self.removed_card = card("Usunięte", "0", "od poprzedniego snapshotu", 230)
+        lower.addWidget(self.rows_card)
+        lower.addWidget(self.added_card)
+        lower.addWidget(self.changed_card)
+        lower.addWidget(self.removed_card)
         lower.addStretch(1)
         self.root.addLayout(lower)
 
         info = QFrame()
         info.setObjectName("panel")
-        info.setMaximumWidth(sp(1120))
+        info.setMaximumWidth(sp(1180))
         layout = QVBoxLayout(info)
-        layout.addWidget(QLabel("<b>Planista — docelowe działania</b>"))
+        layout.addWidget(QLabel("<b>Bezpieczny import planu</b>"))
         desc = QLabel(
-            "Prognoza zakończenia • obciążenie działów • grupowanie malarni po RAL • "
-            "propozycja soboty/nadgodzin/III zmiany • porównanie prognozy z wykonaniem."
+            "1. Metalbox otwiera źródłowy Excel tylko na czas kopiowania bajtów. "
+            "2. Uchwyt źródła zostaje zamknięty. "
+            "3. Dopiero lokalny snapshot jest parsowany i porównywany. "
+            "4. Ten etap jest wyłącznie podglądem — nie zmienia jeszcze zleceń."
         )
         desc.setWordWrap(True)
         desc.setObjectName("hint")
         layout.addWidget(desc)
         self.root.addWidget(info, alignment=Qt.AlignLeft)
         self.root.addStretch(1)
+
+        self._load_latest_snapshot()
+
+    @staticmethod
+    def _set_card_value(frame: QFrame, value: object) -> None:
+        label = frame.findChild(QLabel, "cardValue")
+        if label is not None:
+            label.setText(str(value))
+
+    @staticmethod
+    def _format_quantity(value: object) -> str:
+        if value is None:
+            return "—"
+        number = float(value)
+        if number.is_integer():
+            return str(int(number))
+        return f"{number:.3f}".rstrip("0").rstrip(".")
+
+    def _load_latest_snapshot(self) -> None:
+        snapshot = self.store.get_latest_plan_snapshot()
+        if snapshot is None:
+            self.table.setRowCount(0)
+            return
+
+        self.current_snapshot = snapshot
+        rows = self.store.list_plan_snapshot_rows(int(snapshot["id"]))
+        self.current_diff = {"added": [], "changed": [], "removed": []}
+        self._render_rows(rows, self.current_diff)
+        self.snapshot_info.setText(
+            f'Ostatni snapshot: {snapshot["source_name"]} • '
+            f'{snapshot["row_count"]} pozycji • arkusz {snapshot["sheet_name"]} • '
+            "status: PODGLĄD. Oryginalny Excel nie jest utrzymywany otwarty."
+        )
+
+    def _import_snapshot(self) -> None:
+        filename, _filter = QFileDialog.getOpenFileName(
+            self,
+            "Wybierz plan produkcji Excel",
+            "",
+            "Excel (*.xlsx *.xlsm)",
+        )
+        if not filename:
+            return
+
+        source = Path(filename)
+        previous = self.store.get_latest_plan_snapshot()
+        previous_rows = (
+            self.store.list_plan_snapshot_rows(int(previous["id"]))
+            if previous is not None
+            else []
+        )
+
+        try:
+            snapshot_info = safe_snapshot(source, PLAN_SNAPSHOT_DIR)
+            mark_update_check("planner:snapshot_created")
+
+            parsed = read_plan_snapshot(snapshot_info.path)
+            mark_update_check("planner:snapshot_parsed")
+
+            diff = compare_plan_rows(previous_rows, parsed.rows)
+            snapshot = self.store.create_plan_snapshot(
+                source_name=snapshot_info.source_name,
+                snapshot_path=str(snapshot_info.path),
+                sha256=snapshot_info.sha256,
+                size_bytes=snapshot_info.size_bytes,
+                sheet_name=parsed.sheet_name,
+                header_row=parsed.header_row,
+                rows=parsed.rows,
+            )
+        except (OSError, ValueError) as exc:
+            app_log(f"Import snapshotu planu nieudany: {exc}", "ERROR")
+            QMessageBox.warning(
+                self,
+                "Nie udało się zaimportować planu",
+                str(exc),
+            )
+            return
+        except Exception as exc:
+            app_log(f"Nieoczekiwany błąd importu snapshotu planu: {exc}", "ERROR")
+            QMessageBox.critical(
+                self,
+                "Błąd importu planu",
+                "Nie udało się utworzyć lub przeanalizować snapshotu. "
+                "Szczegóły zapisano w logu.",
+            )
+            return
+
+        self.current_snapshot = snapshot
+        self.current_diff = diff
+        self._render_rows(parsed.rows, diff)
+        self.snapshot_info.setText(
+            f'Snapshot lokalny: {snapshot_info.path.name} • źródło: {snapshot_info.source_name} • '
+            f'{len(parsed.rows)} pozycji • arkusz {parsed.sheet_name} • '
+            f'nowe {len(diff["added"])} • zmienione {len(diff["changed"])} • '
+            f'usunięte {len(diff["removed"])}. '
+            "Oryginalny Excel został zamknięty przed parsowaniem."
+        )
+
+        mark_update_check("planner:snapshot_compared")
+        app_log(
+            "Plan Excel: utworzono i porównano snapshot "
+            f"{snapshot_info.source_name} -> {snapshot_info.path.name}; "
+            f"wiersze={len(parsed.rows)}, nowe={len(diff['added'])}, "
+            f"zmienione={len(diff['changed'])}, usunięte={len(diff['removed'])}"
+        )
+
+    def _render_rows(self, rows: list[dict], diff: dict) -> None:
+        added_keys = {str(row["row_key"]) for row in diff.get("added", [])}
+        changed_keys = {
+            str(row["row_key"]) for row in diff.get("changed", [])
+        }
+        removed_rows = list(diff.get("removed", []))
+
+        display_rows: list[tuple[dict, str]] = []
+        for row in rows:
+            key = str(row.get("row_key", ""))
+            if key in added_keys:
+                state = "NOWY"
+            elif key in changed_keys:
+                state = "ZMIENIONY"
+            else:
+                state = "BEZ ZMIAN"
+            display_rows.append((row, state))
+
+        for row in removed_rows:
+            display_rows.append((row, "USUNIĘTY"))
+
+        self.table.setRowCount(len(display_rows))
+        for row_index, (row, state) in enumerate(display_rows):
+            values = [
+                row.get("order_code") or "—",
+                row.get("symbol") or "—",
+                row.get("name") or "—",
+                self._format_quantity(row.get("quantity")),
+                row.get("shipping") or "—",
+                row.get("ral") or "—",
+                state,
+            ]
+            self.table.setRowHeight(row_index, sp(38))
+            for column_index, value in enumerate(values):
+                item = QTableWidgetItem(str(value))
+                self.table.setItem(row_index, column_index, item)
+
+        self._set_card_value(self.rows_card, len(rows))
+        self._set_card_value(self.added_card, len(diff.get("added", [])))
+        self._set_card_value(self.changed_card, len(diff.get("changed", [])))
+        self._set_card_value(self.removed_card, len(diff.get("removed", [])))
+
+    def _show_changes(self) -> None:
+        if self.current_snapshot is None:
+            QMessageBox.information(
+                self,
+                "Zmiany Excel",
+                "Najpierw utwórz snapshot planu.",
+            )
+            return
+
+        QMessageBox.information(
+            self,
+            "Zmiany względem poprzedniego snapshotu",
+            f'Nowe: {len(self.current_diff.get("added", []))}\n'
+            f'Zmienione: {len(self.current_diff.get("changed", []))}\n'
+            f'Usunięte: {len(self.current_diff.get("removed", []))}\n\n'
+            "Zmiany są tylko podglądem i nie zostały jeszcze zastosowane do zleceń.",
+        )
 
 
 class ProductEditorDialog(QDialog):
@@ -5731,7 +5922,7 @@ class MainWindow(QMainWindow):
             self.stack.addWidget(page)
 
         self.orders_page = OrdersPage(self.go_home, self.open_order, self.store)
-        self.planner_page = PlannerPage(self.go_home)
+        self.planner_page = PlannerPage(self.go_home, self.store)
         self.product_detail_page = ProductDetailPage(self.go_home, self.store)
         self.products_page = ProductsPage(self.go_home, self.open_product, self.store)
         self.alerts_page = AlertsPage(self.go_home, self.store)
