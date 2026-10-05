@@ -1,22 +1,22 @@
 {
   "schema": 1,
-  "version": "0.1.25.1",
-  "title": "Planista — bezpieczny snapshot Excel bez openpyxl",
-  "description": "Hotfix 0.1.25: MetalboxDev nie wymaga już biblioteki openpyxl. Import .xlsx/.xlsm działa na wbudowanych modułach Pythona, zachowując zasadę: kopiowanie źródła → zamknięcie → parsowanie lokalnego snapshotu.",
+  "version": "0.1.25.2",
+  "title": "Planista — rozpoznawanie rzeczywistego arkusza planu",
+  "description": "Poprawka importu firmowego Excela: Metalbox skanuje arkusze, wybiera właściwy plan i rozpoznaje nagłówki z kropkami/dwukropkami, m.in. Nr zlec., Ilość: i Termin realizacji:.",
   "checks": [
     {
       "id": "planner-snapshot-created",
-      "text": "1. Wejdź w PLANISTA → „Import snapshot” i wybierz plan .xlsx/.xlsm. Aplikacja ma działać bez błędu „No module named openpyxl” i utworzyć lokalny snapshot.",
+      "text": "1. PLANISTA → Import snapshot → wybierz ten sam firmowy plik Excel. Snapshot ma powstać bez błędu i bez pozostawienia oryginału otwartego.",
       "trigger": "planner:snapshot_created"
     },
     {
       "id": "planner-snapshot-parsed",
-      "text": "2. Po imporcie tabela ma pokazać rozpoznane pozycje planu: Nr ZL, symbol/nazwa, ilość, wysyłkę i RAL, jeśli występują w Excelu.",
+      "text": "2. Metalbox ma sam znaleźć arkusz planu (np. PLAN 2026) i pokazać pozycje mimo nagłówków typu „Nr zlec.”, „Ilość:” i „Termin realizacji:”.",
       "trigger": "planner:snapshot_parsed"
     },
     {
       "id": "planner-snapshot-compared",
-      "text": "3. Metalbox ma pokazać liczbę pozycji NOWY / ZMIENIONY / USUNIĘTY względem poprzedniego snapshotu. Zmiany są tylko podglądem i nie aktualizują jeszcze zleceń.",
+      "text": "3. Po imporcie mają być widoczne liczniki NOWY / ZMIENIONY / USUNIĘTY względem poprzedniego poprawnie odczytanego snapshotu. Nadal jest to tylko podgląd — bez aktualizacji zleceń.",
       "trigger": "planner:snapshot_compared"
     }
   ]
