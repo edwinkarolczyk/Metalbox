@@ -1,43 +1,23 @@
 {
   "schema": 1,
-  "version": "0.1.20",
-  "title": "Jakość — zgłaszający i obieg poprawek",
-  "description": "Sprawdź zgłoszenie jakości na konkretnej pozycji ZL oraz pełny obieg poprawki. Każdy punkt mówi dokładnie, co kliknąć i czego oczekiwać.",
+  "version": "0.1.21",
+  "title": "Produkty — baza właściwa i podpowiedzi z foldery.txt",
+  "description": "Sprawdź nowy katalog produktów oraz użycie 611 surowych nazw wyłącznie jako podpowiedzi. Żadna pozycja z foldery.txt nie może tworzyć produktu bez zapisu użytkownika.",
   "checks": [
     {
-      "id": "quality-open",
-      "text": "1. Wejdź w JAKOŚĆ → kliknij „Nowe zgłoszenie”. W oknie mają być pola: Zlecenie, Pozycja / produkt, Dział zgłoszenia, Typ, Zgłaszający, Ilość, Przyczyna i Uwagi. Jeśli są — punkt zaliczy się automatycznie.",
-      "trigger": "quality:dialog_open"
+      "id": "product-open",
+      "text": "1. Wejdź w PRODUKTY → kliknij „Nowy produkt”. Ma otworzyć się prawdziwy formularz z polem „Podpowiedź ze starej bazy” oraz polami produktu. Nie może być pola RAL.",
+      "trigger": "product:dialog_open"
     },
     {
-      "id": "quality-crew",
-      "text": "2. Dla pozycji, która ma otwartą sesję produkcyjną, wybierz tę pozycję i dział. W polu „Zgłaszający” mają być tylko osoby aktualnie pracujące w tej sesji. Pod polem „Sesja” ma być pokazana obsada. Jeśli tak jest — punkt zaliczy się automatycznie.",
-      "trigger": "quality:session_crew_visible"
+      "id": "product-hint",
+      "text": "2. W polu podpowiedzi zacznij wpisywać np. „1.437.68”, wybierz jedną z propozycji. Symbol i nazwa mają się uzupełnić, ale produkt nie może jeszcze pojawić się w katalogu.",
+      "trigger": "product:hint_selected"
     },
     {
-      "id": "quality-reporter",
-      "text": "3. W polu „Zgłaszający” wybierz jednego pracownika z obsady. Następnie wybierz przyczynę z gotowej listy, np. „Błąd zgrzewu”. Nie wpisujesz przyczyny ręcznie. Jeśli wybór działa — punkt zaliczy się automatycznie.",
-      "trigger": "quality:reporter_selected"
-    },
-    {
-      "id": "quality-report",
-      "text": "4. Ustaw Typ = POPRAWKA, Ilość = 1 szt., wybierz wcześniejszy etap w polu „Cofnij do etapu” i kliknij „Zapisz zgłoszenie”. Po zapisie w JAKOŚĆ ma pojawić się wpis z konkretnym ZL, produktem, działem, ilością i nazwą zgłaszającego. Jeśli zapis się uda — punkt zaliczy się automatycznie.",
-      "trigger": "rework:create"
-    },
-    {
-      "id": "rework-start",
-      "text": "5. W tabeli „Poprawki w obiegu” zaznacz utworzoną poprawkę → kliknij „Rozpocznij naprawę” → wybierz pracownika wykonującego akcję. Status ma zmienić się z DO_NAPRAWY na W_NAPRAWIE.",
-      "trigger": "rework:start"
-    },
-    {
-      "id": "rework-repaired",
-      "text": "6. Zaznacz tę samą poprawkę → kliknij „Oznacz naprawione” → wybierz pracownika. Status ma zmienić się z W_NAPRAWIE na DO_KONTROLI.",
-      "trigger": "rework:repaired"
-    },
-    {
-      "id": "rework-accept",
-      "text": "7. Zaznacz tę samą poprawkę → kliknij „Zaakceptuj poprawkę” → wybierz pracownika. Status ma zmienić się z DO_KONTROLI na ZAMKNIĘTA, a 1 szt. ma wrócić do dostępnej ilości etapu źródłowego.",
-      "trigger": "rework:accept"
+      "id": "product-save",
+      "text": "3. Uzupełnij wymagane dane i kliknij „Zapisz produkt”. Dopiero teraz produkt ma pojawić się w tabeli PRODUKTY i być możliwy do otwarcia.",
+      "trigger": "product:create"
     }
   ]
 }
