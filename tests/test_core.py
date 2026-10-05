@@ -215,6 +215,81 @@ class MetalboxStoreTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "już istnieje"):
             self.store.create_product(symbol="test.1", name="Duplikat")
 
+    def test_product_bom_add_link_calculate_and_delete(self) -> None:
+        self.store.create_product(symbol="PARENT.1", name="Produkt główny")
+        child = self.store.create_product(
+            symbol="SEMI.1",
+            name="Półprodukt",
+            kind="PÓŁPRODUKT",
+        )
+
+        linked = self.store.add_product_bom_item(
+            "PARENT.1",
+            item_type="PÓŁPRODUKT",
+            symbol="SEMI.1",
+            name="Półprodukt",
+            quantity_per_set=2,
+            unit="szt.",
+        )
+        loose = self.store.add_product_bom_item(
+            "PARENT.1",
+            item_type="MATERIAŁ",
+            symbol="BLACHA.1",
+            name="Blacha",
+            quantity_per_set=1.5,
+            unit="kg",
+        )
+
+        rows = self.store.list_product_bom("PARENT.1")
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(int(linked["child_product_id"]), int(child["id"]))
+        self.assertIsNone(loose["child_product_id"])
+
+        requirements = self.store.calculate_product_requirements(
+            "PARENT.1",
+            100,
+        )
+        by_symbol = {row["symbol"]: row for row in requirements}
+        self.assertEqual(by_symbol["SEMI.1"]["required_quantity"], 200.0)
+        self.assertEqual(by_symbol["BLACHA.1"]["required_quantity"], 150.0)
+
+        self.store.delete_product_bom_item(
+            "PARENT.1",
+            int(linked["id"]),
+        )
+        self.assertEqual(
+            [row["symbol"] for row in self.store.list_product_bom("PARENT.1")],
+            ["BLACHA.1"],
+        )
+
+    def test_product_bom_blocks_duplicate_and_self_reference(self) -> None:
+        self.store.create_product(symbol="PARENT.2", name="Produkt")
+
+        self.store.add_product_bom_item(
+            "PARENT.2",
+            item_type="DETAL",
+            symbol="D.1",
+            name="Detal",
+            quantity_per_set=1,
+        )
+        with self.assertRaisesRegex(ValueError, "już znajduje się"):
+            self.store.add_product_bom_item(
+                "PARENT.2",
+                item_type="DETAL",
+                symbol="d.1",
+                name="Duplikat",
+                quantity_per_set=2,
+            )
+
+        with self.assertRaisesRegex(ValueError, "samego siebie"):
+            self.store.add_product_bom_item(
+                "PARENT.2",
+                item_type="PÓŁPRODUKT",
+                symbol="PARENT.2",
+                name="Błędne zapętlenie",
+                quantity_per_set=1,
+            )
+
     def test_seed_and_search(self) -> None:
         orders = self.store.list_orders()
         self.assertEqual(len(orders), 4)
