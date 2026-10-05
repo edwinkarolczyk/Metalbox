@@ -2,25 +2,72 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
-
-from openpyxl import Workbook
+from xml.sax.saxutils import escape
 
 from metalbox_core import MetalboxStore
 from plan_excel import compare_plan_rows, read_plan_snapshot, safe_snapshot
 
 
+def _column_name(index: int) -> str:
+    result = ""
+    while index:
+        index, remainder = divmod(index - 1, 26)
+        result = chr(ord("A") + remainder) + result
+    return result
+
+
 class PlanExcelTests(unittest.TestCase):
     def _write_plan(self, path: Path, rows: list[list[object]]) -> None:
-        workbook = Workbook()
-        sheet = workbook.active
-        sheet.title = "PLAN"
-        sheet.append(["PLAN PRODUKCJI"])
-        sheet.append(["Nr ZL", "Produkt", "Ilość", "Wysyłka", "RAL"])
-        for row in rows:
-            sheet.append(row)
-        workbook.save(path)
-        workbook.close()
+        all_rows = [
+            ["PLAN PRODUKCJI"],
+            ["Nr ZL", "Produkt", "Ilość", "Wysyłka", "RAL"],
+            *rows,
+        ]
+
+        row_xml: list[str] = []
+        for row_no, row in enumerate(all_rows, start=1):
+            cells: list[str] = []
+            for column_no, value in enumerate(row, start=1):
+                ref = f"{_column_name(column_no)}{row_no}"
+                if isinstance(value, (int, float)):
+                    cells.append(f'<c r="{ref}"><v>{value}</v></c>')
+                else:
+                    text = escape(str(value or ""))
+                    cells.append(
+                        f'<c r="{ref}" t="inlineStr"><is><t>{text}</t></is></c>'
+                    )
+            row_xml.append(
+                f'<row r="{row_no}">' + "".join(cells) + "</row>"
+            )
+
+        workbook_xml = """<?xml version="1.0" encoding="UTF-8"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+ xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+ <bookViews><workbookView activeTab="0"/></bookViews>
+ <sheets><sheet name="PLAN" sheetId="1" r:id="rId1"/></sheets>
+</workbook>"""
+
+        rels_xml = """<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+ <Relationship Id="rId1"
+  Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"
+  Target="worksheets/sheet1.xml"/>
+</Relationships>"""
+
+        sheet_xml = (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+            "<sheetData>"
+            + "".join(row_xml)
+            + "</sheetData></worksheet>"
+        )
+
+        with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr("xl/workbook.xml", workbook_xml)
+            archive.writestr("xl/_rels/workbook.xml.rels", rels_xml)
+            archive.writestr("xl/worksheets/sheet1.xml", sheet_xml)
 
     def test_source_is_closed_before_snapshot_is_parsed(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
