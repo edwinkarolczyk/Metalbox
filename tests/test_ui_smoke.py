@@ -35,6 +35,38 @@ class UiSmokeTest(unittest.TestCase):
         self.assertEqual(len(entries), 611)
         self.assertIn("1.437.68 TESAM", entries)
 
+    def test_product_bom_page_constructs_and_refreshes(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            store = MetalboxStore(Path(temp) / "bom-ui.sqlite3")
+            store.create_product(symbol="PARENT.UI", name="Produkt UI")
+            store.create_product(
+                symbol="SEMI.UI",
+                name="Półprodukt UI",
+                kind="PÓŁPRODUKT",
+            )
+            store.add_product_bom_item(
+                "PARENT.UI",
+                item_type="PÓŁPRODUKT",
+                symbol="SEMI.UI",
+                name="Półprodukt UI",
+                quantity_per_set=2,
+                unit="szt.",
+            )
+
+            page = metalbox_app.ProductDetailPage(lambda: None, store)
+            page.set_product("PARENT.UI")
+            page._show_tab("BOM")
+            self.qt_app.processEvents()
+
+            self.assertTrue(page.bom_panel.isVisible() or not page.isVisible())
+            self.assertFalse(page.data_panel.isVisible())
+            self.assertEqual(page.bom_table.rowCount(), 1)
+            self.assertEqual(page.bom_table.item(0, 2).text(), "SEMI.UI")
+            self.assertEqual(page.bom_table.item(0, 4).text(), "2")
+            self.assertEqual(page.bom_table.item(0, 6).text(), "Karta produktu")
+            self.assertTrue(page.add_bom_button.isEnabled())
+            page.close()
+
     def test_main_window_constructs(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             db_path = Path(temp) / "metalbox-smoke.sqlite3"
