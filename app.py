@@ -3956,6 +3956,8 @@ class PlanApprovalDialog(QDialog):
 
         self._render()
         mark_update_check("planner:approval_open")
+        if int(self.preview.get("total_changes", 0)) == 0:
+            mark_update_check("planner:approval_clean")
 
     @staticmethod
     def _format_quantity(value: object) -> str:
