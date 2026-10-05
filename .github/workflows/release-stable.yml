@@ -41,7 +41,7 @@ jobs:
       - name: Build Metalbox
         shell: pwsh
         run: |
-          python -m PyInstaller --noconfirm --clean --windowed --onefile --name Metalbox --collect-all PySide6 app.py
+          python -m PyInstaller --noconfirm --clean --windowed --onefile --name Metalbox --collect-all PySide6 --add-data "data/product_hints_foldery.txt;data" app.py
 
       - name: Build Launcher
         shell: pwsh
