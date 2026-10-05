@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Callable
 
 from metalbox_core import MetalboxStore, SCHEMA_VERSION, QUALITY_REASON_CODES
-from plan_excel import compare_plan_rows, read_plan_snapshot, safe_snapshot
+from plan_excel import compare_plan_rows, inspect_plan_snapshot, read_plan_snapshot, safe_snapshot
 
 from PySide6.QtCore import QEvent, Qt, QTimer
 from PySide6.QtGui import QColor
@@ -51,7 +51,7 @@ from PySide6.QtWidgets import (
 )
 
 APP_NAME = "Metalbox"
-APP_VERSION = "0.1.25.2"
+APP_VERSION = "0.1.25.3"
 LOCAL_DATA_ROOT = Path(
     os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
 ) / "Metalbox"
@@ -70,6 +70,7 @@ DEV_SOURCE_STATE_FILE = DEV_ROOT / "source_state.json"
 INSTALLED_STATE_FILE = LOCAL_DATA_ROOT / "installed.json"
 DEV_VIEW_STATE_FILE = CONFIG_DIR / "dev_view.json"
 PLAN_SNAPSHOT_DIR = DEV_DATA_DIR / "plan_snapshots"
+PLAN_COLUMN_MAPPING_FILE = CONFIG_DIR / "plan_column_mapping.json"
 
 
 def resource_file(*parts: str) -> Path:
@@ -169,6 +170,31 @@ def _safe_json(path: Path) -> dict:
         return data if isinstance(data, dict) else {}
     except (OSError, ValueError, TypeError):
         return {}
+
+
+def load_plan_column_mapping(source_name: str) -> dict:
+    data = _safe_json(PLAN_COLUMN_MAPPING_FILE)
+    mappings = data.get("mappings", {})
+    if not isinstance(mappings, dict):
+        return {}
+    item = mappings.get(str(source_name or "").strip(), {})
+    return dict(item) if isinstance(item, dict) else {}
+
+
+def save_plan_column_mapping(source_name: str, mapping: dict) -> None:
+    data = _safe_json(PLAN_COLUMN_MAPPING_FILE)
+    mappings = data.get("mappings", {})
+    if not isinstance(mappings, dict):
+        mappings = {}
+    mappings[str(source_name or "").strip()] = dict(mapping)
+    payload = {"schema": 1, "mappings": mappings}
+    tmp = PLAN_COLUMN_MAPPING_FILE.with_suffix(".json.tmp")
+    tmp.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    os.replace(tmp, PLAN_COLUMN_MAPPING_FILE)
+
 
 
 def _format_elapsed_update_age(value: str, *, now: datetime | None = None) -> str:
