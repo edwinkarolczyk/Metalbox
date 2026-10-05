@@ -3294,12 +3294,6 @@ class OrderDetailPage(PageBase):
         top.addWidget(self.priority_label)
         top.addStretch(1)
 
-        self.edit_data_button = QPushButton("Edytuj dane")
-        self.edit_data_button.clicked.connect(self._edit_product)
-        self.edit_data_button.setEnabled(False)
-        top.addWidget(self.edit_data_button)
-        top.addSpacing(sp(8))
-
         self.status_label = QLabel("—")
         self.status_label.setObjectName("statusPill")
         top.addWidget(self.status_label)
@@ -4145,6 +4139,12 @@ class ProductDetailPage(PageBase):
         self.name_label.setObjectName("orderDetails")
         top.addWidget(self.name_label)
         top.addStretch(1)
+
+        self.edit_data_button = QPushButton("Edytuj dane")
+        self.edit_data_button.clicked.connect(self._edit_product)
+        self.edit_data_button.setEnabled(False)
+        top.addWidget(self.edit_data_button)
+        top.addSpacing(sp(8))
 
         self.status_label = QLabel("—")
         self.status_label.setObjectName("statusPill")
