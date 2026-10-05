@@ -140,6 +140,72 @@ class UiSmokeTest(unittest.TestCase):
             self.assertTrue(page.data_panel.isVisible() or not page.isVisible())
             page.close()
 
+    def test_plan_approval_dialog_shows_matches_and_accepts_without_orders(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            store = MetalboxStore(Path(temp) / "plan-approval-ui.sqlite3")
+            store.create_product(symbol="KNOWN.UI", name="Znany produkt")
+            snapshot = store.create_plan_snapshot(
+                source_name="Plan Produkcji 2026.xlsx",
+                snapshot_path="snapshot-ui.xlsx",
+                sha256="ui-snapshot",
+                size_bytes=123,
+                sheet_name="PLAN 2026",
+                header_row=1,
+                rows=[
+                    {
+                        "row_key": "zl-ui|known.ui|znany produkt#1",
+                        "row_no": 2,
+                        "order_code": "ZL-UI",
+                        "symbol": "KNOWN.UI",
+                        "name": "Znany produkt",
+                        "quantity": 10.0,
+                        "shipping": "20.10",
+                        "ral": "9011",
+                    },
+                    {
+                        "row_key": "zl-ui2|unknown.ui|obcy produkt#1",
+                        "row_no": 3,
+                        "order_code": "ZL-UI2",
+                        "symbol": "UNKNOWN.UI",
+                        "name": "Obcy produkt",
+                        "quantity": 5.0,
+                        "shipping": "21.10",
+                        "ral": "7042",
+                    },
+                ],
+            )
+
+            dialog = metalbox_app.PlanApprovalDialog(
+                store,
+                int(snapshot["id"]),
+            )
+            self.qt_app.processEvents()
+
+            self.assertEqual(dialog.table.rowCount(), 2)
+            statuses = {
+                dialog.table.item(row, 7).text()
+                for row in range(dialog.table.rowCount())
+            }
+            self.assertEqual(statuses, {"DOPASOWANY", "DO WERYFIKACJI"})
+            self.assertTrue(dialog.accept_button.isEnabled())
+
+            with patch.object(
+                metalbox_app.QMessageBox,
+                "question",
+                return_value=metalbox_app.QMessageBox.Yes,
+            ), patch.object(
+                metalbox_app.QMessageBox,
+                "information",
+                return_value=metalbox_app.QMessageBox.Ok,
+            ):
+                dialog._accept_changes()
+
+            self.assertIsNotNone(dialog.accepted_summary)
+            self.assertEqual(dialog.accepted_summary["row_count"], 2)
+            self.assertFalse(dialog.accepted_summary["orders_changed"])
+            self.assertEqual(len(store.list_accepted_plan_items()), 2)
+            dialog.close()
+
     def test_main_window_constructs(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             db_path = Path(temp) / "metalbox-smoke.sqlite3"
