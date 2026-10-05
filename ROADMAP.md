@@ -229,7 +229,7 @@ Każdy produkt ma własną cyfrową teczkę. Symbol produktu jest głównym iden
 - [ ] Lista wymaganych działów / operacji.
 - [ ] Zalecane maszyny / technologie.
 - [ ] Powiązanie z wymaganymi narzędziami z Warsztat Menager bez dublowania modułu Narzędzia.
-- [ ] RAL / sposób malowania.
+- [ ] Dane malowania przypisywane do planu / zlecenia; RAL nie jest stałą daną karty produktu.
 - [ ] Sposób pakowania.
 - [ ] Kontrola jakości.
 - [ ] Normy i dane technologiczne przewidziane dla danego procesu.
@@ -541,7 +541,7 @@ Warsztat Menager ma posiadać osobny moduł **Metalbox** z pełnym dostępem do 
 
 ---
 
-# 0.15 — Stabilizacja przed 1.0# 0.14 — Stabilizacja przed 1.0
+# 0.15 — Stabilizacja przed 1.0
 
 - [ ] Testy jednostkowe kluczowej logiki.
 - [ ] Testy integracyjne wielu klientów.
