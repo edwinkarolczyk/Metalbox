@@ -476,18 +476,121 @@ def _split_product(product_text: str) -> tuple[str, str]:
     return "", product_text
 
 
-def read_plan_snapshot(snapshot_path: Path) -> ParsedPlan:
-    """Parsuje wyłącznie lokalny snapshot; nigdy plik źródłowy."""
+def inspect_plan_snapshot(
+    snapshot_path: Path,
+    *,
+    max_rows: int = 40,
+) -> list[dict]:
+    """Zwraca podgląd arkuszy lokalnego snapshotu do ręcznego mapowania kolumn."""
     snapshot_path = Path(snapshot_path)
-    sheet_name, worksheet_rows, header_row, mapping = _sheet_rows(snapshot_path)
+    try:
+        archive = zipfile.ZipFile(snapshot_path, "r")
+    except (OSError, zipfile.BadZipFile) as exc:
+        raise ValueError(
+            "Wybrany plik nie jest prawidłowym plikiem Excel .xlsx/.xlsm."
+        ) from exc
+
+    result: list[dict] = []
+    with archive:
+        shared_strings = _read_shared_strings(archive)
+        date_styles = _date_style_indexes(archive)
+        workbook_sheets = _workbook_sheets(archive)
+
+        for sheet_name, sheet_path, is_active in workbook_sheets:
+            rows = _read_sheet_rows(
+                archive,
+                sheet_path,
+                shared_strings,
+                date_styles,
+            )
+            header_row, mapping, score = _header_candidate(rows)
+            result.append(
+                {
+                    "sheet_name": sheet_name,
+                    "is_active": is_active,
+                    "header_row": header_row or 1,
+                    "detected_mapping": dict(mapping),
+                    "score": score,
+                    "rows": [list(row) for row in rows[:max_rows]],
+                }
+            )
+    return result
+
+
+def _sheet_rows_manual(
+    snapshot_path: Path,
+    sheet_name: str,
+) -> list[tuple[object, ...]]:
+    snapshot_path = Path(snapshot_path)
+    try:
+        archive = zipfile.ZipFile(snapshot_path, "r")
+    except (OSError, zipfile.BadZipFile) as exc:
+        raise ValueError(
+            "Wybrany plik nie jest prawidłowym plikiem Excel .xlsx/.xlsm."
+        ) from exc
+
+    with archive:
+        shared_strings = _read_shared_strings(archive)
+        date_styles = _date_style_indexes(archive)
+        workbook_sheets = _workbook_sheets(archive)
+        for candidate_name, sheet_path, _is_active in workbook_sheets:
+            if candidate_name == sheet_name:
+                return _read_sheet_rows(
+                    archive,
+                    sheet_path,
+                    shared_strings,
+                    date_styles,
+                )
+    raise ValueError(f"Nie znaleziono arkusza {sheet_name} w snapshotcie.")
+
+
+def read_plan_snapshot(
+    snapshot_path: Path,
+    *,
+    sheet_name: str | None = None,
+    header_row: int | None = None,
+    mapping: dict[str, int] | None = None,
+) -> ParsedPlan:
+    """Parsuje wyłącznie lokalny snapshot; nigdy plik źródłowy.
+
+    Gdy sheet_name/header_row/mapping są podane, używa ręcznego mapowania kolumn.
+    """
+    snapshot_path = Path(snapshot_path)
+
+    manual = mapping is not None
+    if manual:
+        if not sheet_name:
+            raise ValueError("Przy ręcznym mapowaniu trzeba wskazać arkusz.")
+        if header_row is None or int(header_row) < 1:
+            raise ValueError("Przy ręcznym mapowaniu trzeba wskazać wiersz nagłówków.")
+
+        clean_mapping = {
+            str(field): int(column)
+            for field, column in dict(mapping or {}).items()
+            if int(column or 0) > 0
+        }
+        if not (
+            clean_mapping.get("product")
+            or clean_mapping.get("symbol")
+            or clean_mapping.get("name")
+        ):
+            raise ValueError(
+                "Ręczne mapowanie musi wskazywać kolumnę Produkt, Symbol albo Nazwa."
+            )
+
+        worksheet_rows = _sheet_rows_manual(snapshot_path, sheet_name)
+        header_row = int(header_row)
+        mapping = clean_mapping
+    else:
+        sheet_name, worksheet_rows, header_row, mapping = _sheet_rows(snapshot_path)
 
     result: list[dict] = []
     last_order_code = ""
     occurrence: dict[str, int] = {}
 
     for row_no, row in enumerate(
-        worksheet_rows[header_row:],
-        start=header_row + 1,
+        worksheet_rows[int(header_row):],
+        start=int(header_row) + 1,
     ):
         order_code = _text(_cell(row, mapping.get("order_code")))
         if order_code:
@@ -535,12 +638,17 @@ def read_plan_snapshot(snapshot_path: Path) -> ParsedPlan:
             }
         )
 
+    if manual and not result:
+        raise ValueError(
+            "Ręczne mapowanie nie zwróciło żadnych pozycji planu. "
+            "Sprawdź arkusz, wiersz nagłówków i przypisane kolumny."
+        )
+
     return ParsedPlan(
-        sheet_name=sheet_name,
-        header_row=header_row,
+        sheet_name=str(sheet_name),
+        header_row=int(header_row),
         rows=result,
     )
-
 
 def compare_plan_rows(previous_rows: Iterable[dict], current_rows: Iterable[dict]) -> dict:
     previous = {str(row["row_key"]): dict(row) for row in previous_rows}
