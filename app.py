@@ -2350,7 +2350,7 @@ class DepartmentPage(PageBase):
             ),
             "Malarnia": (
                 "Aktualny kolor",
-                "Pozycje są rozdzielone; RAL zostanie podpięty z karty produktu.",
+                "Pozycje są rozdzielone; RAL jest pobierany z konkretnej pozycji planu / ZL.",
                 "Planowane: grupowanie po RAL i zużycie farby w kg.",
             ),
             "Pakownia": (
@@ -2399,9 +2399,11 @@ class DepartmentPage(PageBase):
 
     @staticmethod
     def _product_label(row: dict) -> str:
+        source_kind = str(row.get("source_kind") or "").strip()
+        source = f"{source_kind} • " if source_kind else ""
         return (
             f'poz. {int(row["position_no"])} • '
-            f'{row["symbol"]} • {row["name"]}'
+            f'{source}{row["symbol"]} • {row["name"]}'
         )
 
     def _order_card(self, row: dict, idx: int) -> QFrame:
@@ -2432,6 +2434,16 @@ class DepartmentPage(PageBase):
 
         top.addWidget(code_label)
         top.addWidget(product_label)
+        operation_name = str(row.get("operation_name") or "").strip()
+        if operation_name:
+            operation_label = QLabel(f"Operacja: {operation_name}")
+            operation_label.setObjectName("hint")
+            top.addWidget(operation_label)
+        ral = str(row.get("ral") or "").strip()
+        if ral:
+            ral_label = QLabel(f"RAL {ral}")
+            ral_label.setObjectName("statusPill")
+            top.addWidget(ral_label)
         top.addSpacing(sp(24))
         top.addWidget(QLabel(f"Plan: {total} szt."))
         top.addWidget(QLabel(f"Wykonano: {done} szt."))
