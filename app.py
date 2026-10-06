@@ -51,7 +51,7 @@ from PySide6.QtWidgets import (
 )
 
 APP_NAME = "Metalbox"
-APP_VERSION = "0.1.28"
+APP_VERSION = "0.1.28.1"
 LOCAL_DATA_ROOT = Path(
     os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
 ) / "Metalbox"
@@ -4441,6 +4441,16 @@ class PlannerPage(PageBase):
         self.store = store
         self.current_snapshot: dict | None = None
         self.current_diff = {"added": [], "changed": [], "removed": []}
+        self._inline_view: QWidget | None = None
+
+        self.view_stack = QStackedWidget()
+        self.root.addWidget(self.view_stack, 1)
+
+        self.main_view = QWidget()
+        main_layout = QVBoxLayout(self.main_view)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(sp(14))
+        self.view_stack.addWidget(self.main_view)
 
         controls = QHBoxLayout()
 
@@ -4478,7 +4488,7 @@ class PlannerPage(PageBase):
         controls.addWidget(import_btn)
 
         controls.addStretch(1)
-        self.root.addLayout(controls)
+        main_layout.addLayout(controls)
 
         self.snapshot_info = QLabel(
             "Brak snapshotu planu. Oryginalny Excel nie jest analizowany bezpośrednio."
@@ -4486,7 +4496,7 @@ class PlannerPage(PageBase):
         self.snapshot_info.setObjectName("hint")
         self.snapshot_info.setWordWrap(True)
         self.snapshot_info.setMaximumWidth(sp(1320))
-        self.root.addWidget(self.snapshot_info)
+        main_layout.addWidget(self.snapshot_info)
 
         self.table = compact_table(
             ["Nr ZL", "Symbol", "Nazwa", "Ilość", "Wysyłka", "RAL", "Zmiana"],
@@ -4494,21 +4504,26 @@ class PlannerPage(PageBase):
             [120, 180, 310, 90, 140, 100, 150],
             330,
         )
-        self.root.addWidget(self.table, alignment=Qt.AlignLeft)
+        main_layout.addWidget(self.table, alignment=Qt.AlignLeft)
 
         lower = QHBoxLayout()
         self.rows_card = card("Pozycje snapshotu", "0", "wierszy planu", 230)
         self.added_card = card("Nowe", "0", "od poprzedniego snapshotu", 230)
         self.changed_card = card("Zmienione", "0", "od poprzedniego snapshotu", 230)
         self.removed_card = card("Usunięte", "0", "od poprzedniego snapshotu", 220)
-        self.approval_card = card("Do akceptacji", "0", "względem zaakceptowanego planu", 240)
+        self.approval_card = card(
+            "Do akceptacji",
+            "0",
+            "względem zaakceptowanego planu",
+            240,
+        )
         lower.addWidget(self.rows_card)
         lower.addWidget(self.added_card)
         lower.addWidget(self.changed_card)
         lower.addWidget(self.removed_card)
         lower.addWidget(self.approval_card)
         lower.addStretch(1)
-        self.root.addLayout(lower)
+        main_layout.addLayout(lower)
 
         info = QFrame()
         info.setObjectName("panel")
@@ -4524,10 +4539,83 @@ class PlannerPage(PageBase):
         desc.setWordWrap(True)
         desc.setObjectName("hint")
         layout.addWidget(desc)
-        self.root.addWidget(info, alignment=Qt.AlignLeft)
-        self.root.addStretch(1)
+        main_layout.addWidget(info, alignment=Qt.AlignLeft)
+        main_layout.addStretch(1)
 
         self._load_latest_snapshot()
+
+    def _clear_inline_view(self) -> None:
+        if self._inline_view is None:
+            return
+        old = self._inline_view
+        self._inline_view = None
+        self.view_stack.removeWidget(old)
+        old.deleteLater()
+
+    def _return_to_plan(self) -> None:
+        self.view_stack.setCurrentWidget(self.main_view)
+        self._load_latest_snapshot()
+        mark_update_check("planner:inline_return")
+
+    def _show_inline_dialog(self, dialog: QDialog, title: str) -> None:
+        self._clear_inline_view()
+
+        wrapper = QWidget()
+        root = QVBoxLayout(wrapper)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(sp(10))
+
+        nav = QHBoxLayout()
+        back_btn = QPushButton("← Wróć do planu")
+        back_btn.clicked.connect(self._return_to_plan)
+        nav.addWidget(back_btn)
+
+        label = QLabel(title)
+        label.setObjectName("detailTitle")
+        nav.addWidget(label)
+        nav.addStretch(1)
+        root.addLayout(nav)
+
+        dialog.setParent(wrapper)
+        dialog.setWindowFlags(Qt.Widget)
+        dialog.setModal(False)
+        dialog.setVisible(True)
+        root.addWidget(dialog, 1)
+
+        dialog.accepted.connect(self._return_to_plan)
+        dialog.rejected.connect(self._return_to_plan)
+
+        self._inline_view = wrapper
+        self.view_stack.addWidget(wrapper)
+        self.view_stack.setCurrentWidget(wrapper)
+        mark_update_check("planner:inline_view")
+
+    def _show_inline_widget(self, widget: QWidget, title: str) -> None:
+        self._clear_inline_view()
+
+        wrapper = QWidget()
+        root = QVBoxLayout(wrapper)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(sp(10))
+
+        nav = QHBoxLayout()
+        back_btn = QPushButton("← Wróć do planu")
+        back_btn.clicked.connect(self._return_to_plan)
+        nav.addWidget(back_btn)
+
+        label = QLabel(title)
+        label.setObjectName("detailTitle")
+        nav.addWidget(label)
+        nav.addStretch(1)
+        root.addLayout(nav)
+
+        widget.setParent(wrapper)
+        root.addWidget(widget, 1)
+
+        self._inline_view = wrapper
+        self.view_stack.addWidget(wrapper)
+        self.view_stack.setCurrentWidget(wrapper)
+        mark_update_check("planner:inline_view")
 
     @staticmethod
     def _set_card_value(frame: QFrame, value: object) -> None:
