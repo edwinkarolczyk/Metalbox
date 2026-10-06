@@ -51,7 +51,7 @@ from PySide6.QtWidgets import (
 )
 
 APP_NAME = "Metalbox"
-APP_VERSION = "0.1.26"
+APP_VERSION = "0.1.27"
 LOCAL_DATA_ROOT = Path(
     os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
 ) / "Metalbox"
@@ -4074,6 +4074,159 @@ class PlanApprovalDialog(QDialog):
         self.accept()
 
 
+class PlanBomRequirementsDialog(QDialog):
+    def __init__(
+        self,
+        store: MetalboxStore,
+        build_summary: dict,
+        parent=None,
+    ):
+        super().__init__(parent)
+        self.store = store
+        self.build_summary = dict(build_summary)
+
+        self.setWindowTitle("Metalbox — zapotrzebowanie BOM z planu")
+        self.setModal(True)
+        self.resize(sp(1420), sp(800))
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(sp(18), sp(18), sp(18), sp(18))
+        root.setSpacing(sp(10))
+
+        title = QLabel("Zapotrzebowanie BOM zaakceptowanego planu")
+        title.setObjectName("detailTitle")
+        root.addWidget(title)
+
+        info = QLabel(
+            "Metalbox rozwija wyłącznie zaakceptowany plan i wyłącznie produkty "
+            "dopasowane do istniejących kart. Półprodukty mogą mieć własny BOM, "
+            "dlatego rozwinięcie jest wielopoziomowe. Ten ekran niczego nie wysyła "
+            "jeszcze do działów i nie tworzy zleceń produkcyjnych."
+        )
+        info.setObjectName("hint")
+        info.setWordWrap(True)
+        root.addWidget(info)
+
+        summary = self.store.get_accepted_plan_bom_summary()
+
+        cards = QHBoxLayout()
+        cards.addWidget(
+            card(
+                "Plan zaakceptowany",
+                str(summary["accepted_count"]),
+                "pozycji Excel",
+                210,
+            )
+        )
+        cards.addWidget(
+            card(
+                "Dopasowane",
+                str(summary["matched_count"]),
+                "karta produktu istnieje",
+                210,
+            )
+        )
+        cards.addWidget(
+            card(
+                "Do weryfikacji",
+                str(summary["review_count"]),
+                "brak dopasowanej karty",
+                210,
+            )
+        )
+        cards.addWidget(
+            card(
+                "Bez BOM",
+                str(summary["matched_without_bom_count"]),
+                "dopasowane produkty bez struktury",
+                210,
+            )
+        )
+        cards.addWidget(
+            card(
+                "Pozycje BOM",
+                str(summary["requirement_count"]),
+                "wygenerowane wymagania",
+                210,
+            )
+        )
+        cards.addStretch(1)
+        root.addLayout(cards)
+
+        self.table = compact_table(
+            [
+                "Nr ZL",
+                "Produkt planu",
+                "Poziom",
+                "Ścieżka BOM",
+                "Typ",
+                "Element",
+                "Ilość wymagana",
+                "Jedn.",
+                "Powiązanie",
+            ],
+            [],
+            [110, 170, 75, 320, 145, 230, 135, 80, 120],
+            410,
+        )
+        root.addWidget(self.table)
+
+        requirements = self.store.list_accepted_plan_requirements()
+        self.table.setRowCount(len(requirements))
+        for row_index, row in enumerate(requirements):
+            root_product = str(row.get("root_symbol") or "—")
+            component = (
+                f'{row.get("symbol") or "—"} • {row.get("name") or ""}'
+            ).strip(" •")
+            values = [
+                row.get("order_code") or "—",
+                root_product,
+                row.get("level_no") or "—",
+                row.get("path") or "—",
+                row.get("item_type") or "—",
+                component,
+                self._format_quantity(row.get("required_quantity")),
+                row.get("unit") or "—",
+                row.get("link_status") or "—",
+            ]
+            self.table.setRowHeight(row_index, sp(38))
+            for column_index, value in enumerate(values):
+                self.table.setItem(
+                    row_index,
+                    column_index,
+                    QTableWidgetItem(str(value)),
+                )
+
+        note = QLabel(
+            f'Wygenerowano {build_summary.get("requirements", 0)} pozycji BOM. '
+            f'Dopasowanych pozycji planu: {build_summary.get("matched_plan_items", 0)}. '
+            f'Do weryfikacji: {build_summary.get("review_plan_items", 0)}. '
+            f'Dopasowanych bez BOM: {build_summary.get("matched_without_bom", 0)}. '
+            "Pozycja „TYLKO BOM” nie ma jeszcze własnej karty produktu/półproduktu."
+        )
+        note.setObjectName("hint")
+        note.setWordWrap(True)
+        root.addWidget(note)
+
+        footer = QHBoxLayout()
+        footer.addStretch(1)
+        close_btn = QPushButton("Zamknij")
+        close_btn.clicked.connect(self.accept)
+        footer.addWidget(close_btn)
+        root.addLayout(footer)
+
+        mark_update_check("planner:bom_requirements_open")
+
+    @staticmethod
+    def _format_quantity(value: object) -> str:
+        if value is None:
+            return "—"
+        number = float(value)
+        if number.is_integer():
+            return str(int(number))
+        return f"{number:.3f}".rstrip("0").rstrip(".")
+
+
 class PlannerPage(PageBase):
     def __init__(self, go_home: Callable, store: MetalboxStore):
         super().__init__(
@@ -4098,6 +4251,10 @@ class PlannerPage(PageBase):
         approval_btn = QPushButton("Do akceptacji")
         approval_btn.clicked.connect(self._open_approval)
         controls.addWidget(approval_btn)
+
+        bom_btn = QPushButton("Zapotrzebowanie BOM")
+        bom_btn.clicked.connect(self._open_bom_requirements)
+        controls.addWidget(bom_btn)
 
         changes_btn = QPushButton("Zmiany Excel")
         changes_btn.clicked.connect(self._show_changes)
@@ -4401,6 +4558,63 @@ class PlannerPage(PageBase):
         self._set_card_value(self.added_card, len(diff.get("added", [])))
         self._set_card_value(self.changed_card, len(diff.get("changed", [])))
         self._set_card_value(self.removed_card, len(diff.get("removed", [])))
+
+    def _open_bom_requirements(self) -> None:
+        accepted = self.store.list_accepted_plan_items()
+        if not accepted:
+            QMessageBox.information(
+                self,
+                "Zapotrzebowanie BOM",
+                "Najpierw zaakceptuj plan Excel w „Do akceptacji”.",
+            )
+            return
+
+        before_orders = len(self.store.list_orders())
+        try:
+            summary = self.store.rebuild_accepted_plan_requirements()
+        except ValueError as exc:
+            app_log(f"Nie można rozwinąć planu przez BOM: {exc}", "ERROR")
+            QMessageBox.warning(
+                self,
+                "Nie można rozwinąć BOM",
+                str(exc),
+            )
+            return
+        except Exception as exc:
+            app_log(f"Błąd rozwinięcia planu przez BOM: {exc}", "ERROR")
+            QMessageBox.critical(
+                self,
+                "Błąd zapotrzebowania BOM",
+                "Nie udało się policzyć zapotrzebowania BOM. "
+                "Szczegóły zapisano w logu.",
+            )
+            return
+
+        after_orders = len(self.store.list_orders())
+        if before_orders != after_orders:
+            raise RuntimeError(
+                "Naruszono zasadę bezpieczeństwa: obliczenie BOM zmieniło liczbę zleceń."
+            )
+
+        mark_update_check("planner:bom_requirements_calculated")
+        if not summary.get("orders_changed", True):
+            mark_update_check("planner:bom_requirements_no_orders")
+        app_log(
+            "Plan BOM: przeliczono zaakceptowany plan; "
+            f"pozycje={summary['accepted_count']}, "
+            f"dopasowane={summary['matched_plan_items']}, "
+            f"do_weryfikacji={summary['review_plan_items']}, "
+            f"bez_bom={summary['matched_without_bom']}, "
+            f"wymagania={summary['requirements']}, "
+            "zlecenia_zmienione=nie"
+        )
+
+        dialog = PlanBomRequirementsDialog(
+            self.store,
+            summary,
+            self,
+        )
+        dialog.exec()
 
     def _open_approval(self) -> None:
         snapshot = self.store.get_latest_plan_snapshot()
