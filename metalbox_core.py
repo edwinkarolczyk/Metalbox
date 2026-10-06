@@ -299,7 +299,7 @@ class MetalboxStore:
                     unit TEXT NOT NULL DEFAULT 'szt.',
                     link_status TEXT NOT NULL DEFAULT 'TYLKO BOM',
                     created_at TEXT NOT NULL,
-                    UNIQUE(accepted_plan_item_id, path)
+                    UNIQUE(accepted_plan_item_id, path, source_bom_item_id)
                 );
 
                 CREATE INDEX IF NOT EXISTS idx_plan_requirements_item
