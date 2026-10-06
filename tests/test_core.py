@@ -63,6 +63,7 @@ class MetalboxStoreTests(unittest.TestCase):
         self.assertIn("products", tables)
         self.assertIn("product_hints", tables)
         self.assertIn("accepted_plan_items", tables)
+        self.assertIn("accepted_plan_requirements", tables)
 
     def test_migrates_v7_session_workers_employee_id(self) -> None:
         legacy_path = Path(self.temp_dir.name) / "legacy-v7.sqlite3"
@@ -306,6 +307,183 @@ class MetalboxStoreTests(unittest.TestCase):
             for row in self.store.list_accepted_plan_items()
         }
         self.assertEqual(accepted_symbols, {"A", "C"})
+
+    def test_accepted_plan_bom_expands_recursively_and_keeps_orders_unchanged(self) -> None:
+        root = self.store.create_product(symbol="PLAN.ROOT", name="Produkt główny")
+        semi = self.store.create_product(
+            symbol="PLAN.SEMI",
+            name="Półprodukt",
+            kind="PÓŁPRODUKT",
+        )
+        detail = self.store.create_product(
+            symbol="PLAN.DETAIL",
+            name="Detal",
+            kind="PÓŁPRODUKT",
+        )
+
+        self.store.add_product_bom_item(
+            "PLAN.ROOT",
+            item_type="PÓŁPRODUKT",
+            symbol="PLAN.SEMI",
+            name="Półprodukt",
+            quantity_per_set=2,
+            unit="szt.",
+        )
+        self.store.add_product_bom_item(
+            "PLAN.ROOT",
+            item_type="MATERIAŁ",
+            symbol="MAT.X",
+            name="Materiał X",
+            quantity_per_set=1.5,
+            unit="kg",
+        )
+        self.store.add_product_bom_item(
+            "PLAN.SEMI",
+            item_type="DETAL",
+            symbol="PLAN.DETAIL",
+            name="Detal",
+            quantity_per_set=3,
+            unit="szt.",
+        )
+
+        snapshot = self.store.create_plan_snapshot(
+            source_name="Plan Produkcji 2026.xlsx",
+            snapshot_path="snapshot-bom.xlsx",
+            sha256="bom-plan",
+            size_bytes=100,
+            sheet_name="PLAN 2026",
+            header_row=1,
+            rows=[
+                {
+                    "row_key": "zl-100|plan.root|produkt glowny#1",
+                    "row_no": 2,
+                    "order_code": "ZL-100",
+                    "symbol": "PLAN.ROOT",
+                    "name": "Produkt główny",
+                    "quantity": 100.0,
+                    "shipping": "20.10",
+                    "ral": "9011",
+                }
+            ],
+        )
+        self.store.accept_plan_snapshot(int(snapshot["id"]))
+        before_orders = len(self.store.list_orders())
+
+        summary = self.store.rebuild_accepted_plan_requirements()
+
+        self.assertFalse(summary["orders_changed"])
+        self.assertEqual(len(self.store.list_orders()), before_orders)
+        self.assertEqual(summary["requirements"], 3)
+        self.assertEqual(summary["linked_requirements"], 2)
+        self.assertEqual(summary["unlinked_requirements"], 1)
+        self.assertEqual(summary["matched_without_bom"], 0)
+
+        rows = self.store.list_accepted_plan_requirements()
+        by_symbol = {row["symbol"]: row for row in rows}
+
+        self.assertEqual(by_symbol["PLAN.SEMI"]["level_no"], 1)
+        self.assertEqual(by_symbol["PLAN.SEMI"]["required_quantity"], 200.0)
+        self.assertEqual(by_symbol["PLAN.SEMI"]["link_status"], "POWIĄZANY")
+
+        self.assertEqual(by_symbol["MAT.X"]["level_no"], 1)
+        self.assertEqual(by_symbol["MAT.X"]["required_quantity"], 150.0)
+        self.assertEqual(by_symbol["MAT.X"]["unit"], "kg")
+        self.assertEqual(by_symbol["MAT.X"]["link_status"], "TYLKO BOM")
+
+        self.assertEqual(by_symbol["PLAN.DETAIL"]["level_no"], 2)
+        self.assertEqual(by_symbol["PLAN.DETAIL"]["required_quantity"], 600.0)
+        self.assertIn("PLAN.ROOT", by_symbol["PLAN.DETAIL"]["path"])
+        self.assertIn("PLAN.SEMI", by_symbol["PLAN.DETAIL"]["path"])
+
+    def test_accepted_plan_bom_reports_unmatched_and_products_without_bom(self) -> None:
+        self.store.create_product(symbol="PLAN.EMPTY", name="Produkt bez BOM")
+        snapshot = self.store.create_plan_snapshot(
+            source_name="Plan Produkcji 2026.xlsx",
+            snapshot_path="snapshot-empty.xlsx",
+            sha256="empty-plan",
+            size_bytes=100,
+            sheet_name="PLAN 2026",
+            header_row=1,
+            rows=[
+                {
+                    "row_key": "zl-110|plan.empty|produkt bez bom#1",
+                    "row_no": 2,
+                    "order_code": "ZL-110",
+                    "symbol": "PLAN.EMPTY",
+                    "name": "Produkt bez BOM",
+                    "quantity": 10.0,
+                    "shipping": "20.10",
+                    "ral": "9011",
+                },
+                {
+                    "row_key": "zl-111|unknown|nieznany#1",
+                    "row_no": 3,
+                    "order_code": "ZL-111",
+                    "symbol": "UNKNOWN",
+                    "name": "Nieznany",
+                    "quantity": 5.0,
+                    "shipping": "21.10",
+                    "ral": "7042",
+                },
+            ],
+        )
+        self.store.accept_plan_snapshot(int(snapshot["id"]))
+
+        summary = self.store.rebuild_accepted_plan_requirements()
+
+        self.assertEqual(summary["matched_plan_items"], 1)
+        self.assertEqual(summary["review_plan_items"], 1)
+        self.assertEqual(summary["matched_without_bom"], 1)
+        self.assertEqual(summary["requirements"], 0)
+
+    def test_accepted_plan_bom_blocks_multilevel_cycle(self) -> None:
+        self.store.create_product(symbol="CYCLE.A", name="A")
+        self.store.create_product(
+            symbol="CYCLE.B",
+            name="B",
+            kind="PÓŁPRODUKT",
+        )
+        self.store.add_product_bom_item(
+            "CYCLE.A",
+            item_type="PÓŁPRODUKT",
+            symbol="CYCLE.B",
+            name="B",
+            quantity_per_set=1,
+        )
+        self.store.add_product_bom_item(
+            "CYCLE.B",
+            item_type="PÓŁPRODUKT",
+            symbol="CYCLE.A",
+            name="A",
+            quantity_per_set=1,
+        )
+
+        snapshot = self.store.create_plan_snapshot(
+            source_name="Plan Produkcji 2026.xlsx",
+            snapshot_path="snapshot-cycle.xlsx",
+            sha256="cycle-plan",
+            size_bytes=100,
+            sheet_name="PLAN 2026",
+            header_row=1,
+            rows=[
+                {
+                    "row_key": "zl-cycle|cycle.a|a#1",
+                    "row_no": 2,
+                    "order_code": "ZL-CYCLE",
+                    "symbol": "CYCLE.A",
+                    "name": "A",
+                    "quantity": 1.0,
+                    "shipping": "20.10",
+                    "ral": "9011",
+                }
+            ],
+        )
+        self.store.accept_plan_snapshot(int(snapshot["id"]))
+
+        with self.assertRaisesRegex(ValueError, "cykl BOM"):
+            self.store.rebuild_accepted_plan_requirements()
+
+        self.assertEqual(self.store.list_accepted_plan_requirements(), [])
 
     def test_product_hints_are_raw_idempotent_and_do_not_create_products(self) -> None:
         entries = [
