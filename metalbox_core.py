@@ -2966,6 +2966,19 @@ class MetalboxStore:
                 ):
                     reasons.append("Produkt ma status DO WERYFIKACJI.")
 
+                for requirement in requirements_by_item.get(item_id, []):
+                    requirement_type = str(
+                        requirement.get("item_type") or ""
+                    ).upper()
+                    if (
+                        requirement_type in {"PÓŁPRODUKT", "DETAL"}
+                        and requirement.get("component_product_id") is None
+                    ):
+                        reasons.append(
+                            f'{requirement.get("symbol") or "Element BOM"}: '
+                            "brak powiązanej karty produktu / półproduktu."
+                        )
+
                 if not order_code:
                     reasons.append("Brak numeru ZL.")
 
