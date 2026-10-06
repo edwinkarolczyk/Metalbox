@@ -51,7 +51,7 @@ from PySide6.QtWidgets import (
 )
 
 APP_NAME = "Metalbox"
-APP_VERSION = "0.1.28.1"
+APP_VERSION = "0.1.29"
 LOCAL_DATA_ROOT = Path(
     os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
 ) / "Metalbox"
@@ -4431,6 +4431,160 @@ class PlanDepartmentLoadDialog(QDialog):
         return f"{cls._format_number(number)} min"
 
 
+class PlanDepartmentScheduleView(QWidget):
+    def __init__(self, store: MetalboxStore, summary: dict, parent=None):
+        super().__init__(parent)
+        self.store = store
+        self.summary = dict(summary)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(sp(8), sp(8), sp(8), sp(8))
+        root.setSpacing(sp(12))
+
+        info = QLabel(
+            "To jest plan operacji wynikający z zaakceptowanego Excela, BOM i technologii. "
+            "Pozycje są jeszcze PLANOWANE — nie są aktywnymi zleceniami dla pracowników. "
+            "Dopiero późniejsza publikacja planu utworzy właściwe kolejki produkcyjne."
+        )
+        info.setObjectName("hint")
+        info.setWordWrap(True)
+        root.addWidget(info)
+
+        cards = QHBoxLayout()
+        cards.addWidget(
+            card(
+                "Działy",
+                str(summary.get("department_count", 0)),
+                "z zaplanowanymi operacjami",
+                210,
+            )
+        )
+        cards.addWidget(
+            card(
+                "Operacje",
+                str(summary.get("row_count", 0)),
+                "pozycji planu działów",
+                210,
+            )
+        )
+        cards.addWidget(
+            card(
+                "Łączny czas",
+                self._format_hours(summary.get("total_load_hours", 0)),
+                "tylko operacje z normą",
+                220,
+            )
+        )
+        cards.addWidget(
+            card(
+                "Bez normy",
+                str(summary.get("untimed_operation_count", 0)),
+                "operacji do uzupełnienia",
+                210,
+            )
+        )
+        cards.addStretch(1)
+        root.addLayout(cards)
+
+        filters = QHBoxLayout()
+        filters.addWidget(QLabel("Dział:"))
+        self.department_combo = QComboBox()
+        self.department_combo.addItem("Wszystkie działy", "")
+        present_departments = {
+            str(item.get("department") or "")
+            for item in summary.get("departments", [])
+            if str(item.get("department") or "")
+        }
+        for department in DEPARTMENTS:
+            if department in present_departments:
+                self.department_combo.addItem(department, department)
+        for department in sorted(present_departments - set(DEPARTMENTS)):
+            self.department_combo.addItem(department, department)
+        filters.addWidget(self.department_combo)
+        filters.addStretch(1)
+        root.addLayout(filters)
+
+        self.table = compact_table(
+            [
+                "Dział",
+                "Nr ZL",
+                "Termin",
+                "RAL",
+                "Źródło",
+                "Produkt / półprodukt",
+                "Operacja",
+                "Etap",
+                "Ilość",
+                "Czas",
+                "Status",
+            ],
+            [],
+            [150, 105, 115, 80, 110, 245, 210, 125, 95, 115, 110],
+            470,
+        )
+        root.addWidget(self.table, 1)
+
+        note = QLabel(
+            "PIERWSZY ETAP / KOLEJNY ETAP / OSTATNI ETAP pokazuje kolejność technologii "
+            "dla danego produktu lub półproduktu. Na tym etapie wszystkie pozycje mają "
+            "status PLANOWANE — nie można ich jeszcze rozpocząć z widoku pracownika."
+        )
+        note.setObjectName("hint")
+        note.setWordWrap(True)
+        root.addWidget(note)
+
+        self.department_combo.currentIndexChanged.connect(self._render)
+        self._render()
+        mark_update_check("planner:department_plan_open")
+
+    @staticmethod
+    def _format_number(value: object) -> str:
+        number = float(value or 0)
+        if number.is_integer():
+            return str(int(number))
+        return f"{number:.2f}".rstrip("0").rstrip(".")
+
+    @classmethod
+    def _format_hours(cls, value: object) -> str:
+        return f"{cls._format_number(value)} h"
+
+    def _render(self, *_args) -> None:
+        department = str(self.department_combo.currentData() or "")
+        rows = self.store.list_accepted_department_plan(department)
+        self.table.setRowCount(len(rows))
+
+        for row_index, row in enumerate(rows):
+            subject = (
+                f'{row.get("subject_symbol") or "—"} • '
+                f'{row.get("subject_name") or ""}'
+            ).strip(" •")
+            if int(row.get("has_time_norm") or 0):
+                load_text = f'{self._format_number(row.get("load_minutes", 0))} min'
+            else:
+                load_text = "BRAK NORMY"
+
+            values = [
+                row.get("department") or "—",
+                row.get("order_code") or "—",
+                row.get("shipping") or "—",
+                row.get("ral") or "—",
+                row.get("source_kind") or "—",
+                subject,
+                row.get("operation_name") or "—",
+                row.get("plan_stage") or "—",
+                self._format_number(row.get("planned_quantity", 0)),
+                load_text,
+                row.get("plan_status") or "PLANOWANE",
+            ]
+            self.table.setRowHeight(row_index, sp(38))
+            for column_index, value in enumerate(values):
+                self.table.setItem(
+                    row_index,
+                    column_index,
+                    QTableWidgetItem(str(value)),
+                )
+
+
 class PlannerPage(PageBase):
     def __init__(self, go_home: Callable, store: MetalboxStore):
         super().__init__(
@@ -4473,6 +4627,10 @@ class PlannerPage(PageBase):
         load_btn = QPushButton("Obciążenie działów")
         load_btn.clicked.connect(self._open_department_load)
         controls.addWidget(load_btn)
+
+        department_plan_btn = QPushButton("Plan działów")
+        department_plan_btn.clicked.connect(self._open_department_plan)
+        controls.addWidget(department_plan_btn)
 
         changes_btn = QPushButton("Zmiany Excel")
         changes_btn.clicked.connect(self._show_changes)
@@ -4913,6 +5071,69 @@ class PlannerPage(PageBase):
         self._set_card_value(self.added_card, len(diff.get("added", [])))
         self._set_card_value(self.changed_card, len(diff.get("changed", [])))
         self._set_card_value(self.removed_card, len(diff.get("removed", [])))
+
+    def _open_department_plan(self) -> None:
+        accepted = self.store.list_accepted_plan_items()
+        if not accepted:
+            QMessageBox.information(
+                self,
+                "Plan działów",
+                "Najpierw zaakceptuj plan Excel w „Do akceptacji”.",
+            )
+            return
+
+        before_orders = len(self.store.list_orders())
+        try:
+            load_summary = self.store.rebuild_accepted_plan_operation_loads()
+            summary = self.store.accepted_department_plan_summary()
+        except ValueError as exc:
+            app_log(f"Nie można zbudować planu działów: {exc}", "ERROR")
+            QMessageBox.warning(
+                self,
+                "Nie można zbudować planu działów",
+                str(exc),
+            )
+            return
+        except Exception as exc:
+            app_log(f"Błąd planu działów: {exc}", "ERROR")
+            QMessageBox.critical(
+                self,
+                "Błąd planu działów",
+                "Nie udało się zbudować planu działów. "
+                "Szczegóły zapisano w logu.",
+            )
+            return
+
+        after_orders = len(self.store.list_orders())
+        if before_orders != after_orders:
+            raise RuntimeError(
+                "Naruszono zasadę bezpieczeństwa: plan działów zmienił liczbę zleceń."
+            )
+
+        mark_update_check("planner:department_plan_calculated")
+        if not summary.get("orders_changed", True):
+            mark_update_check("planner:department_plan_no_orders")
+
+        app_log(
+            "Plan działów: zbudowano podgląd z zaakceptowanego planu; "
+            f"działy={summary['department_count']}, "
+            f"operacje={summary['row_count']}, "
+            f"z_normą={summary['timed_operation_count']}, "
+            f"bez_normy={summary['untimed_operation_count']}, "
+            f"godziny={summary['total_load_hours']:.2f}, "
+            f"źródłowe_operacje={load_summary['operation_count']}, "
+            "zlecenia_zmienione=nie"
+        )
+
+        view = PlanDepartmentScheduleView(
+            self.store,
+            summary,
+            self,
+        )
+        self._show_inline_widget(
+            view,
+            "Planista / Plan działów",
+        )
 
     def _open_department_load(self) -> None:
         accepted = self.store.list_accepted_plan_items()
