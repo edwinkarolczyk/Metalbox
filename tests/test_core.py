@@ -64,6 +64,7 @@ class MetalboxStoreTests(unittest.TestCase):
         self.assertIn("product_hints", tables)
         self.assertIn("accepted_plan_items", tables)
         self.assertIn("accepted_plan_requirements", tables)
+        self.assertIn("accepted_plan_operation_loads", tables)
 
     def test_migrates_v7_session_workers_employee_id(self) -> None:
         legacy_path = Path(self.temp_dir.name) / "legacy-v7.sqlite3"
@@ -484,6 +485,234 @@ class MetalboxStoreTests(unittest.TestCase):
             self.store.rebuild_accepted_plan_requirements()
 
         self.assertEqual(self.store.list_accepted_plan_requirements(), [])
+
+    def test_plan_operation_loads_use_root_and_bom_technologies(self) -> None:
+        self.store.create_product(symbol="LOAD.ROOT", name="Produkt główny")
+        self.store.create_product(
+            symbol="LOAD.SEMI",
+            name="Półprodukt",
+            kind="PÓŁPRODUKT",
+        )
+        self.store.create_product(
+            symbol="LOAD.MAT",
+            name="Materiał z kartą",
+            kind="PÓŁPRODUKT",
+        )
+
+        self.store.add_product_bom_item(
+            "LOAD.ROOT",
+            item_type="PÓŁPRODUKT",
+            symbol="LOAD.SEMI",
+            name="Półprodukt",
+            quantity_per_set=2,
+            unit="szt.",
+        )
+        self.store.add_product_bom_item(
+            "LOAD.ROOT",
+            item_type="MATERIAŁ",
+            symbol="LOAD.MAT",
+            name="Materiał z kartą",
+            quantity_per_set=1.5,
+            unit="kg",
+        )
+
+        self.store.add_product_operation(
+            "LOAD.ROOT",
+            department="Laser",
+            operation_name="Cięcie",
+            setup_minutes=30,
+            minutes_per_unit=0.5,
+        )
+        self.store.add_product_operation(
+            "LOAD.SEMI",
+            department="Giętarki",
+            operation_name="Gięcie",
+            setup_minutes=15,
+            minutes_per_unit=0.25,
+        )
+        self.store.add_product_operation(
+            "LOAD.MAT",
+            department="Magazyn",
+            operation_name="Nie licz materiału",
+            setup_minutes=10,
+            minutes_per_unit=1,
+        )
+
+        snapshot = self.store.create_plan_snapshot(
+            source_name="Plan Produkcji 2026.xlsx",
+            snapshot_path="snapshot-load.xlsx",
+            sha256="load-plan",
+            size_bytes=100,
+            sheet_name="PLAN 2026",
+            header_row=1,
+            rows=[
+                {
+                    "row_key": "zl-load|load.root|produkt#1",
+                    "row_no": 2,
+                    "order_code": "ZL-LOAD",
+                    "symbol": "LOAD.ROOT",
+                    "name": "Produkt główny",
+                    "quantity": 100.0,
+                    "shipping": "20.10",
+                    "ral": "9011",
+                }
+            ],
+        )
+        self.store.accept_plan_snapshot(int(snapshot["id"]))
+        before_orders = len(self.store.list_orders())
+
+        summary = self.store.rebuild_accepted_plan_operation_loads()
+
+        self.assertFalse(summary["orders_changed"])
+        self.assertEqual(len(self.store.list_orders()), before_orders)
+        self.assertEqual(summary["department_count"], 2)
+        self.assertEqual(summary["operation_count"], 2)
+        self.assertEqual(summary["timed_operation_count"], 2)
+        self.assertEqual(summary["untimed_operation_count"], 0)
+        self.assertAlmostEqual(summary["total_load_minutes"], 145.0)
+        self.assertAlmostEqual(summary["total_load_hours"], 145.0 / 60.0)
+
+        loads = self.store.list_accepted_plan_operation_loads()
+        by_department = {row["department"]: row for row in loads}
+
+        self.assertEqual(by_department["Laser"]["source_kind"], "PRODUKT")
+        self.assertEqual(by_department["Laser"]["planned_quantity"], 100.0)
+        self.assertEqual(by_department["Laser"]["load_minutes"], 80.0)
+
+        self.assertEqual(by_department["Giętarki"]["source_kind"], "PÓŁPRODUKT")
+        self.assertEqual(by_department["Giętarki"]["planned_quantity"], 200.0)
+        self.assertEqual(by_department["Giętarki"]["load_minutes"], 65.0)
+
+        self.assertNotIn("Magazyn", by_department)
+
+    def test_plan_operation_loads_aggregate_same_component_and_setup_once(self) -> None:
+        self.store.create_product(symbol="LOAD2.ROOT", name="Produkt")
+        self.store.create_product(
+            symbol="LOAD2.SEMI",
+            name="Półprodukt",
+            kind="PÓŁPRODUKT",
+        )
+        self.store.create_product(
+            symbol="LOAD2.A",
+            name="Gałąź A",
+            kind="PÓŁPRODUKT",
+        )
+        self.store.create_product(
+            symbol="LOAD2.B",
+            name="Gałąź B",
+            kind="PÓŁPRODUKT",
+        )
+
+        self.store.add_product_bom_item(
+            "LOAD2.ROOT",
+            item_type="PÓŁPRODUKT",
+            symbol="LOAD2.A",
+            name="A",
+            quantity_per_set=1,
+        )
+        self.store.add_product_bom_item(
+            "LOAD2.ROOT",
+            item_type="PÓŁPRODUKT",
+            symbol="LOAD2.B",
+            name="B",
+            quantity_per_set=1,
+        )
+        self.store.add_product_bom_item(
+            "LOAD2.A",
+            item_type="PÓŁPRODUKT",
+            symbol="LOAD2.SEMI",
+            name="Półprodukt",
+            quantity_per_set=2,
+        )
+        self.store.add_product_bom_item(
+            "LOAD2.B",
+            item_type="PÓŁPRODUKT",
+            symbol="LOAD2.SEMI",
+            name="Półprodukt",
+            quantity_per_set=3,
+        )
+        self.store.add_product_operation(
+            "LOAD2.SEMI",
+            department="Zgrzewarki",
+            operation_name="Zgrzewanie",
+            setup_minutes=10,
+            minutes_per_unit=1,
+        )
+
+        snapshot = self.store.create_plan_snapshot(
+            source_name="Plan Produkcji 2026.xlsx",
+            snapshot_path="snapshot-load2.xlsx",
+            sha256="load-plan2",
+            size_bytes=100,
+            sheet_name="PLAN 2026",
+            header_row=1,
+            rows=[
+                {
+                    "row_key": "zl-load2|load2.root|produkt#1",
+                    "row_no": 2,
+                    "order_code": "ZL-LOAD2",
+                    "symbol": "LOAD2.ROOT",
+                    "name": "Produkt",
+                    "quantity": 10.0,
+                    "shipping": "20.10",
+                    "ral": "9011",
+                }
+            ],
+        )
+        self.store.accept_plan_snapshot(int(snapshot["id"]))
+
+        summary = self.store.rebuild_accepted_plan_operation_loads()
+        loads = [
+            row
+            for row in self.store.list_accepted_plan_operation_loads()
+            if row["subject_symbol"] == "LOAD2.SEMI"
+        ]
+
+        self.assertEqual(len(loads), 1)
+        self.assertEqual(loads[0]["planned_quantity"], 50.0)
+        self.assertEqual(loads[0]["load_minutes"], 60.0)
+        self.assertEqual(summary["subjects_without_technology_count"], 3)
+
+    def test_plan_operation_load_marks_missing_time_norm(self) -> None:
+        self.store.create_product(symbol="LOAD3.ROOT", name="Produkt")
+        self.store.add_product_operation(
+            "LOAD3.ROOT",
+            department="Pakownia",
+            operation_name="Pakowanie",
+            setup_minutes=0,
+            minutes_per_unit=0,
+        )
+        snapshot = self.store.create_plan_snapshot(
+            source_name="Plan Produkcji 2026.xlsx",
+            snapshot_path="snapshot-load3.xlsx",
+            sha256="load-plan3",
+            size_bytes=100,
+            sheet_name="PLAN 2026",
+            header_row=1,
+            rows=[
+                {
+                    "row_key": "zl-load3|load3.root|produkt#1",
+                    "row_no": 2,
+                    "order_code": "ZL-LOAD3",
+                    "symbol": "LOAD3.ROOT",
+                    "name": "Produkt",
+                    "quantity": 20.0,
+                    "shipping": "20.10",
+                    "ral": "7042",
+                }
+            ],
+        )
+        self.store.accept_plan_snapshot(int(snapshot["id"]))
+
+        summary = self.store.rebuild_accepted_plan_operation_loads()
+
+        self.assertEqual(summary["operation_count"], 1)
+        self.assertEqual(summary["timed_operation_count"], 0)
+        self.assertEqual(summary["untimed_operation_count"], 1)
+        self.assertEqual(summary["total_load_minutes"], 0.0)
+        load = self.store.list_accepted_plan_operation_loads()[0]
+        self.assertEqual(int(load["has_time_norm"]), 0)
+        self.assertEqual(load["load_minutes"], 0.0)
 
     def test_product_hints_are_raw_idempotent_and_do_not_create_products(self) -> None:
         entries = [
