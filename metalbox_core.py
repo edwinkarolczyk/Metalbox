@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Iterator
 
 
-SCHEMA_VERSION = 16
+SCHEMA_VERSION = 17
 DEFAULT_ROUTE = ("Laser", "Giętarki", "Zgrzewarki", "Malarnia", "Pakownia")
 QUALITY_REASON_CODES = (
     "NIEZGODNY_WYMIAR",
@@ -79,6 +79,9 @@ class MetalboxStore:
                     symbol TEXT NOT NULL,
                     name TEXT NOT NULL DEFAULT '',
                     quantity INTEGER NOT NULL CHECK(quantity >= 0),
+                    ral TEXT NOT NULL DEFAULT '',
+                    source_kind TEXT NOT NULL DEFAULT '',
+                    plan_row_key TEXT NOT NULL DEFAULT '',
                     UNIQUE(order_id, position_no)
                 );
 
@@ -337,6 +340,43 @@ class MetalboxStore:
                 CREATE INDEX IF NOT EXISTS idx_plan_operation_loads_department
                     ON accepted_plan_operation_loads(department, sequence_no);
 
+                CREATE TABLE IF NOT EXISTS plan_publications (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    snapshot_id INTEGER REFERENCES plan_snapshots(id) ON DELETE SET NULL,
+                    actor TEXT NOT NULL DEFAULT 'development-user',
+                    published_at TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'OPUBLIKOWANY',
+                    eligible_rows INTEGER NOT NULL DEFAULT 0,
+                    blocked_rows INTEGER NOT NULL DEFAULT 0,
+                    created_orders INTEGER NOT NULL DEFAULT 0,
+                    created_items INTEGER NOT NULL DEFAULT 0,
+                    updated_items INTEGER NOT NULL DEFAULT 0,
+                    removed_items INTEGER NOT NULL DEFAULT 0,
+                    operation_count INTEGER NOT NULL DEFAULT 0
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_plan_publications_time
+                    ON plan_publications(published_at DESC, id DESC);
+
+                CREATE TABLE IF NOT EXISTS plan_published_subjects (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    plan_row_key TEXT NOT NULL,
+                    subject_product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+                    source_kind TEXT NOT NULL,
+                    order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+                    order_item_id INTEGER NOT NULL UNIQUE REFERENCES order_items(id) ON DELETE CASCADE,
+                    publication_id INTEGER REFERENCES plan_publications(id) ON DELETE SET NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE(plan_row_key, subject_product_id)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_plan_published_row
+                    ON plan_published_subjects(plan_row_key, subject_product_id);
+
+                CREATE INDEX IF NOT EXISTS idx_plan_published_order
+                    ON plan_published_subjects(order_id, order_item_id);
+
                 CREATE TABLE IF NOT EXISTS session_workers (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     session_id INTEGER NOT NULL REFERENCES production_sessions(id) ON DELETE CASCADE,
@@ -452,6 +492,24 @@ class MetalboxStore:
                 "session_workers",
                 "employee_id",
                 "INTEGER REFERENCES employees(id) ON DELETE SET NULL",
+            )
+            self._ensure_column(
+                db,
+                "order_items",
+                "ral",
+                "TEXT NOT NULL DEFAULT ''",
+            )
+            self._ensure_column(
+                db,
+                "order_items",
+                "source_kind",
+                "TEXT NOT NULL DEFAULT ''",
+            )
+            self._ensure_column(
+                db,
+                "order_items",
+                "plan_row_key",
+                "TEXT NOT NULL DEFAULT ''",
             )
 
             db.execute(
