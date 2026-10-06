@@ -361,6 +361,85 @@ class UiSmokeTest(unittest.TestCase):
             )
             dialog.close()
 
+    def test_planner_detail_views_stay_inside_one_window(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            store = MetalboxStore(Path(temp) / "planner-inline.sqlite3")
+            store.create_product(symbol="INLINE.ROOT", name="Produkt")
+            store.create_product(
+                symbol="INLINE.SEMI",
+                name="Półprodukt",
+                kind="PÓŁPRODUKT",
+            )
+            store.add_product_bom_item(
+                "INLINE.ROOT",
+                item_type="PÓŁPRODUKT",
+                symbol="INLINE.SEMI",
+                name="Półprodukt",
+                quantity_per_set=2,
+            )
+            store.add_product_operation(
+                "INLINE.ROOT",
+                department="Laser",
+                operation_name="Cięcie",
+                setup_minutes=10,
+                minutes_per_unit=0.2,
+            )
+            snapshot = store.create_plan_snapshot(
+                source_name="Plan Produkcji 2026.xlsx",
+                snapshot_path="inline.xlsx",
+                sha256="inline",
+                size_bytes=123,
+                sheet_name="PLAN 2026",
+                header_row=1,
+                rows=[
+                    {
+                        "row_key": "zl-inline|inline.root|produkt#1",
+                        "row_no": 2,
+                        "order_code": "ZL-INLINE",
+                        "symbol": "INLINE.ROOT",
+                        "name": "Produkt",
+                        "quantity": 10.0,
+                        "shipping": "20.10",
+                        "ral": "9011",
+                    }
+                ],
+            )
+            store.accept_plan_snapshot(int(snapshot["id"]))
+
+            page = metalbox_app.PlannerPage(lambda: None, store)
+            self.qt_app.processEvents()
+
+            page._open_approval()
+            self.qt_app.processEvents()
+            approval = page.findChild(metalbox_app.PlanApprovalDialog)
+            self.assertIsNotNone(approval)
+            self.assertFalse(approval.isWindow())
+            self.assertIsNot(page.view_stack.currentWidget(), page.main_view)
+
+            page._return_to_plan()
+            self.assertIs(page.view_stack.currentWidget(), page.main_view)
+
+            page._open_bom_requirements()
+            self.qt_app.processEvents()
+            bom = page.findChild(metalbox_app.PlanBomRequirementsDialog)
+            self.assertIsNotNone(bom)
+            self.assertFalse(bom.isWindow())
+            self.assertIsNot(page.view_stack.currentWidget(), page.main_view)
+
+            page._return_to_plan()
+            self.assertIs(page.view_stack.currentWidget(), page.main_view)
+
+            page._open_department_load()
+            self.qt_app.processEvents()
+            load = page.findChild(metalbox_app.PlanDepartmentLoadDialog)
+            self.assertIsNotNone(load)
+            self.assertFalse(load.isWindow())
+            self.assertIsNot(page.view_stack.currentWidget(), page.main_view)
+
+            page._return_to_plan()
+            self.assertIs(page.view_stack.currentWidget(), page.main_view)
+            page.close()
+
     def test_main_window_constructs(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             db_path = Path(temp) / "metalbox-smoke.sqlite3"
