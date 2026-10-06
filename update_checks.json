@@ -11,7 +11,7 @@
     },
     {
       "id": "planner-publication-done",
-      "text": "2. Kliknij „Publikuj gotowe pozycje” i potwierdź. Tylko pozycje GOTOWE mają trafić do realnych kolejek odpowiednich działów zgodnie z technologią; od tej chwili pracownik może rozpocząć pierwszy etap.",
+      "text": "2. Kliknij „Publikuj gotowe pozycje” i potwierdź. Tylko pozycje GOTOWE mają trafić do realnych kolejek działów zgodnie z technologią. Jeśli produkt zależy od produkowanego półproduktu/detalu z BOM, rodzic ma czekać na zakończenie dziecka; pracownik może rozpocząć tylko faktycznie dostępny etap.",
       "trigger": "planner:publication_done"
     },
     {
