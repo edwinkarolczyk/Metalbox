@@ -1,23 +1,23 @@
 {
   "schema": 1,
-  "version": "0.1.28.1",
-  "title": "Planista — wszystkie widoki w jednym oknie",
-  "description": "Poprawka UX Planisty: Do akceptacji, Zapotrzebowanie BOM, Obciążenie działów, Zmiany Excel i ręczne dopasowanie kolumn działają jako podstrony jednego okna Metalbox. Nie otwierają osobnych dużych okien aplikacji.",
+  "version": "0.1.29",
+  "title": "Planista — plan operacji według działów",
+  "description": "Zaakceptowany plan Excel, BOM i technologie tworzą kontrolowany podgląd operacji według działów. Każda pozycja pozostaje PLANOWANA i nie staje się jeszcze aktywnym zleceniem produkcyjnym.",
   "checks": [
     {
-      "id": "planner-inline-approval",
-      "text": "1. PLANISTA → „Do akceptacji”. Widok ma otworzyć się wewnątrz tego samego okna Metalbox, z przyciskiem „← Wróć do planu”, bez osobnego okna aplikacji.",
-      "trigger": "planner:approval_open"
+      "id": "planner-department-plan-open",
+      "text": "1. PLANISTA → „Plan działów”. Widok ma otworzyć się wewnątrz tego samego okna i pokazać operacje przypisane do Laser / Giętarki / Zgrzewarki itd. z Nr ZL, terminem, RAL, produktem/półproduktem, ilością i operacją.",
+      "trigger": "planner:department_plan_open"
     },
     {
-      "id": "planner-inline-bom-load",
-      "text": "2. Otwórz kolejno „Zapotrzebowanie BOM” i „Obciążenie działów”. Oba widoki mają zastępować zawartość Planisty w tym samym oknie i wracać przyciskiem „← Wróć do planu”.",
-      "trigger": "planner:department_load_open"
+      "id": "planner-department-plan-calculated",
+      "text": "2. Sprawdź filtrowanie po dziale oraz kolejność technologii: PIERWSZY ETAP / KOLEJNY ETAP / OSTATNI ETAP lub JEDYNY ETAP. Wszystkie pozycje mają status PLANOWANE.",
+      "trigger": "planner:department_plan_calculated"
     },
     {
-      "id": "planner-inline-extra",
-      "text": "3. „Zmiany Excel” oraz „Dopasuj kolumny” również mają działać wewnątrz Planisty. Osobno może pojawić się tylko systemowe okno Windows do wyboru pliku oraz mały komunikat potwierdzenia/błędu.",
-      "trigger": "planner:inline_view"
+      "id": "planner-department-plan-no-orders",
+      "text": "3. Zbudowanie planu działów nie może utworzyć ani zmienić zleceń produkcyjnych i nie może jeszcze pozwalać pracownikowi rozpocząć produkcji. To nadal kontrolowany podgląd przed publikacją.",
+      "trigger": "planner:department_plan_no_orders"
     }
   ]
 }
