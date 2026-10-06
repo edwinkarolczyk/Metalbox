@@ -4567,7 +4567,7 @@ class MetalboxStore:
 
             items = db.execute(
                 """
-                SELECT id, position_no, symbol, name, quantity
+                SELECT id, position_no, symbol, name, quantity, ral, source_kind, plan_row_key
                 FROM order_items
                 WHERE order_id = ?
                 ORDER BY position_no ASC
@@ -4591,6 +4591,9 @@ class MetalboxStore:
                     oi.symbol,
                     oi.name,
                     oi.quantity AS order_item_quantity,
+                    oi.ral,
+                    oi.source_kind,
+                    op.operation_name,
                     op.planned_qty,
                     op.good_qty,
                     op.reject_qty,
