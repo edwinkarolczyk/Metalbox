@@ -524,6 +524,96 @@ class UiSmokeTest(unittest.TestCase):
             self.assertIs(page.view_stack.currentWidget(), page.main_view)
             page.close()
 
+    def test_plan_publication_stays_inline_and_does_not_duplicate_queue(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            store = MetalboxStore(Path(temp) / "publication-ui.sqlite3")
+            store.create_product(symbol="UIPUB.ROOT", name="Produkt")
+            store.add_product_operation(
+                "UIPUB.ROOT",
+                department="Laser",
+                operation_name="Cięcie",
+                setup_minutes=5,
+                minutes_per_unit=0.2,
+            )
+            snapshot = store.create_plan_snapshot(
+                source_name="Plan Produkcji 2026.xlsx",
+                snapshot_path="publication-ui.xlsx",
+                sha256="publication-ui",
+                size_bytes=123,
+                sheet_name="PLAN 2026",
+                header_row=1,
+                rows=[
+                    {
+                        "row_key": "10011|uipub.root|produkt#1",
+                        "row_no": 2,
+                        "order_code": "10011",
+                        "symbol": "UIPUB.ROOT",
+                        "name": "Produkt",
+                        "quantity": 10.0,
+                        "shipping": "20.10",
+                        "ral": "9011",
+                    }
+                ],
+            )
+            store.accept_plan_snapshot(int(snapshot["id"]))
+
+            page = metalbox_app.PlannerPage(lambda: None, store)
+            page._open_publication()
+            self.qt_app.processEvents()
+
+            view = page.findChild(metalbox_app.PlanPublicationView)
+            self.assertIsNotNone(view)
+            self.assertFalse(view.isWindow())
+            self.assertIsNot(page.view_stack.currentWidget(), page.main_view)
+            self.assertEqual(view.preview["eligible_count"], 1)
+            self.assertEqual(view.preview["blocked_count"], 0)
+
+            with patch.object(
+                metalbox_app.QMessageBox,
+                "question",
+                return_value=metalbox_app.QMessageBox.Yes,
+            ), patch.object(
+                metalbox_app.QMessageBox,
+                "information",
+                return_value=metalbox_app.QMessageBox.Ok,
+            ):
+                view._publish()
+                self.qt_app.processEvents()
+
+            queue = [
+                row
+                for row in store.list_department_queue("Laser")
+                if row["code"] == "ZL-10011"
+            ]
+            self.assertEqual(len(queue), 1)
+            self.assertEqual(int(queue[0]["planned_qty"]), 10)
+
+            with patch.object(
+                metalbox_app.QMessageBox,
+                "question",
+                return_value=metalbox_app.QMessageBox.Yes,
+            ), patch.object(
+                metalbox_app.QMessageBox,
+                "information",
+                return_value=metalbox_app.QMessageBox.Ok,
+            ):
+                view._publish()
+                self.qt_app.processEvents()
+
+            queue_again = [
+                row
+                for row in store.list_department_queue("Laser")
+                if row["code"] == "ZL-10011"
+            ]
+            self.assertEqual(len(queue_again), 1)
+            self.assertIsNotNone(view.last_result)
+            self.assertEqual(view.last_result["created_orders"], 0)
+            self.assertEqual(view.last_result["created_items"], 0)
+
+            page._return_to_plan()
+            self.assertIs(page.view_stack.currentWidget(), page.main_view)
+            page.close()
+
     def test_main_window_constructs(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             db_path = Path(temp) / "metalbox-smoke.sqlite3"
