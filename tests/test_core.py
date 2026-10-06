@@ -714,6 +714,100 @@ class MetalboxStoreTests(unittest.TestCase):
         self.assertEqual(int(load["has_time_norm"]), 0)
         self.assertEqual(load["load_minutes"], 0.0)
 
+    def test_accepted_department_plan_preserves_operation_order_and_does_not_create_orders(self) -> None:
+        self.store.create_product(symbol="PLANQ.ROOT", name="Produkt")
+        self.store.create_product(
+            symbol="PLANQ.SEMI",
+            name="Półprodukt",
+            kind="PÓŁPRODUKT",
+        )
+        self.store.add_product_bom_item(
+            "PLANQ.ROOT",
+            item_type="PÓŁPRODUKT",
+            symbol="PLANQ.SEMI",
+            name="Półprodukt",
+            quantity_per_set=2,
+        )
+        self.store.add_product_operation(
+            "PLANQ.ROOT",
+            department="Laser",
+            operation_name="Cięcie",
+            setup_minutes=10,
+            minutes_per_unit=0.2,
+        )
+        self.store.add_product_operation(
+            "PLANQ.ROOT",
+            department="Giętarki",
+            operation_name="Gięcie",
+            setup_minutes=5,
+            minutes_per_unit=0.1,
+        )
+        self.store.add_product_operation(
+            "PLANQ.SEMI",
+            department="Zgrzewarki",
+            operation_name="Zgrzewanie",
+            setup_minutes=8,
+            minutes_per_unit=0.3,
+        )
+
+        snapshot = self.store.create_plan_snapshot(
+            source_name="Plan Produkcji 2026.xlsx",
+            snapshot_path="planq.xlsx",
+            sha256="planq",
+            size_bytes=100,
+            sheet_name="PLAN 2026",
+            header_row=1,
+            rows=[
+                {
+                    "row_key": "zl-planq|planq.root|produkt#1",
+                    "row_no": 2,
+                    "order_code": "ZL-PLANQ",
+                    "symbol": "PLANQ.ROOT",
+                    "name": "Produkt",
+                    "quantity": 10.0,
+                    "shipping": "2026-10-20",
+                    "ral": "9011",
+                }
+            ],
+        )
+        self.store.accept_plan_snapshot(int(snapshot["id"]))
+        before_orders = len(self.store.list_orders())
+
+        self.store.rebuild_accepted_plan_operation_loads()
+        summary = self.store.accepted_department_plan_summary()
+        rows = self.store.list_accepted_department_plan()
+
+        self.assertEqual(len(self.store.list_orders()), before_orders)
+        self.assertFalse(summary["orders_changed"])
+        self.assertEqual(summary["department_count"], 3)
+        self.assertEqual(summary["row_count"], 3)
+        self.assertEqual({row["plan_status"] for row in rows}, {"PLANOWANE"})
+
+        root_rows = [
+            row for row in rows
+            if row["subject_symbol"] == "PLANQ.ROOT"
+        ]
+        root_rows.sort(key=lambda row: int(row["sequence_no"]))
+        self.assertEqual(len(root_rows), 2)
+        self.assertEqual(root_rows[0]["department"], "Laser")
+        self.assertEqual(root_rows[0]["plan_stage"], "PIERWSZY ETAP")
+        self.assertTrue(root_rows[0]["is_first_operation"])
+        self.assertEqual(root_rows[1]["department"], "Giętarki")
+        self.assertEqual(root_rows[1]["plan_stage"], "OSTATNI ETAP")
+        self.assertTrue(root_rows[1]["is_last_operation"])
+
+        semi_rows = [
+            row for row in rows
+            if row["subject_symbol"] == "PLANQ.SEMI"
+        ]
+        self.assertEqual(len(semi_rows), 1)
+        self.assertEqual(semi_rows[0]["planned_quantity"], 20.0)
+        self.assertEqual(semi_rows[0]["plan_stage"], "JEDYNY ETAP")
+
+        laser_rows = self.store.list_accepted_department_plan("Laser")
+        self.assertEqual(len(laser_rows), 1)
+        self.assertEqual(laser_rows[0]["operation_name"], "Cięcie")
+
     def test_product_hints_are_raw_idempotent_and_do_not_create_products(self) -> None:
         entries = [
             "1.437.68 TESAM",
