@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Iterator
 
 
-SCHEMA_VERSION = 17
+SCHEMA_VERSION = 18
 DEFAULT_ROUTE = ("Laser", "Giętarki", "Zgrzewarki", "Malarnia", "Pakownia")
 QUALITY_REASON_CODES = (
     "NIEZGODNY_WYMIAR",
@@ -377,6 +377,21 @@ class MetalboxStore:
 
                 CREATE INDEX IF NOT EXISTS idx_plan_published_order
                     ON plan_published_subjects(order_id, order_item_id);
+
+                CREATE TABLE IF NOT EXISTS order_item_dependencies (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    parent_order_item_id INTEGER NOT NULL REFERENCES order_items(id) ON DELETE CASCADE,
+                    child_order_item_id INTEGER NOT NULL REFERENCES order_items(id) ON DELETE CASCADE,
+                    quantity_per_parent REAL NOT NULL DEFAULT 1 CHECK(quantity_per_parent > 0),
+                    created_at TEXT NOT NULL,
+                    UNIQUE(parent_order_item_id, child_order_item_id)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_order_item_dependencies_parent
+                    ON order_item_dependencies(parent_order_item_id, child_order_item_id);
+
+                CREATE INDEX IF NOT EXISTS idx_order_item_dependencies_child
+                    ON order_item_dependencies(child_order_item_id, parent_order_item_id);
 
                 CREATE TABLE IF NOT EXISTS session_workers (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -3392,6 +3407,77 @@ class MetalboxStore:
                         )
                         operation_count += 1
 
+                row_mappings = {
+                    int(mapping_row["subject_product_id"]): int(mapping_row["order_item_id"])
+                    for mapping_row in db.execute(
+                        """
+                        SELECT subject_product_id, order_item_id
+                        FROM plan_published_subjects
+                        WHERE plan_row_key = ?
+                        """,
+                        (str(row["row_key"]),),
+                    ).fetchall()
+                }
+
+                if row_mappings:
+                    mapped_ids = list(row_mappings.values())
+                    placeholders = ",".join("?" for _ in mapped_ids)
+                    db.execute(
+                        f"""
+                        DELETE FROM order_item_dependencies
+                        WHERE parent_order_item_id IN ({placeholders})
+                           OR child_order_item_id IN ({placeholders})
+                        """,
+                        [*mapped_ids, *mapped_ids],
+                    )
+
+                dependency_rows = db.execute(
+                    """
+                    SELECT
+                        parent_product_id,
+                        component_product_id,
+                        quantity_per_parent,
+                        item_type
+                    FROM accepted_plan_requirements
+                    WHERE accepted_plan_item_id = ?
+                      AND component_product_id IS NOT NULL
+                      AND UPPER(item_type) IN ('PÓŁPRODUKT', 'DETAL')
+                    ORDER BY level_no, id
+                    """,
+                    (int(row["accepted_plan_item_id"]),),
+                ).fetchall()
+
+                for dependency in dependency_rows:
+                    parent_item_id = row_mappings.get(
+                        int(dependency["parent_product_id"])
+                    )
+                    child_item_id = row_mappings.get(
+                        int(dependency["component_product_id"])
+                    )
+                    if (
+                        parent_item_id is None
+                        or child_item_id is None
+                        or parent_item_id == child_item_id
+                    ):
+                        continue
+                    db.execute(
+                        """
+                        INSERT OR REPLACE INTO order_item_dependencies(
+                            parent_order_item_id,
+                            child_order_item_id,
+                            quantity_per_parent,
+                            created_at
+                        )
+                        VALUES (?, ?, ?, ?)
+                        """,
+                        (
+                            parent_item_id,
+                            child_item_id,
+                            float(dependency["quantity_per_parent"]),
+                            now,
+                        ),
+                    )
+
             for order_id in list(touched_orders):
                 remaining = int(
                     db.execute(
@@ -6203,7 +6289,32 @@ class MetalboxStore:
                 op.status,
                 oi.position_no,
                 CASE
-                    WHEN op.sequence_no = 1 THEN op.planned_qty
+                    WHEN op.sequence_no = 1 THEN
+                        CASE
+                            WHEN NOT EXISTS(
+                                SELECT 1
+                                FROM order_item_dependencies dep
+                                WHERE dep.parent_order_item_id = oi.id
+                            ) THEN op.planned_qty
+                            WHEN NOT EXISTS(
+                                SELECT 1
+                                FROM order_item_dependencies dep
+                                JOIN order_items child_item
+                                  ON child_item.id = dep.child_order_item_id
+                                WHERE dep.parent_order_item_id = oi.id
+                                  AND COALESCE(
+                                      (
+                                          SELECT child_op.good_qty
+                                          FROM operation_progress child_op
+                                          WHERE child_op.order_item_id = dep.child_order_item_id
+                                          ORDER BY child_op.sequence_no DESC
+                                          LIMIT 1
+                                      ),
+                                      0
+                                  ) < child_item.quantity
+                            ) THEN op.planned_qty
+                            ELSE 0
+                        END
                     ELSE COALESCE(prev.good_qty, 0)
                 END AS upstream_good_qty
             FROM operation_progress op
