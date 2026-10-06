@@ -1074,6 +1074,55 @@ class MetalboxStoreTests(unittest.TestCase):
         )
         self.assertEqual(root_after["available_now"], 10)
 
+    def test_plan_publication_blocks_unlinked_production_bom(self) -> None:
+        self.store.create_product(symbol="PUBMISS.ROOT", name="Produkt")
+        self.store.add_product_bom_item(
+            "PUBMISS.ROOT",
+            item_type="PÓŁPRODUKT",
+            symbol="PUBMISS.SEMI",
+            name="Brakujący półprodukt",
+            quantity_per_set=2,
+        )
+        self.store.add_product_operation(
+            "PUBMISS.ROOT",
+            department="Laser",
+            operation_name="Cięcie",
+            setup_minutes=1,
+            minutes_per_unit=0.1,
+        )
+        snapshot = self.store.create_plan_snapshot(
+            source_name="Plan Produkcji 2026.xlsx",
+            snapshot_path="publish-missing-bom.xlsx",
+            sha256="publish-missing-bom",
+            size_bytes=100,
+            sheet_name="PLAN 2026",
+            header_row=1,
+            rows=[
+                {
+                    "row_key": "10005|pubmiss.root|produkt#1",
+                    "row_no": 2,
+                    "order_code": "10005",
+                    "symbol": "PUBMISS.ROOT",
+                    "name": "Produkt",
+                    "quantity": 10.0,
+                    "shipping": "24.10",
+                    "ral": "9011",
+                }
+            ],
+        )
+        self.store.accept_plan_snapshot(int(snapshot["id"]))
+        preview = self.store.get_plan_publication_preview()
+        self.assertEqual(preview["eligible_count"], 0)
+        self.assertEqual(preview["blocked_count"], 1)
+        self.assertIn(
+            "brak powiązanej karty",
+            " ".join(preview["blocked_rows"][0]["reasons"]),
+        )
+        before_orders = len(self.store.list_orders())
+        result = self.store.publish_accepted_department_plan()
+        self.assertEqual(result["created_orders"], 0)
+        self.assertEqual(len(self.store.list_orders()), before_orders)
+
     def test_plan_publication_protects_started_work(self) -> None:
         self.store.create_product(symbol="PUB.ACTIVE", name="Produkt aktywny")
         self.store.add_product_operation(
