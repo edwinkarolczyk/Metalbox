@@ -67,6 +67,7 @@ class MetalboxStoreTests(unittest.TestCase):
         self.assertIn("accepted_plan_operation_loads", tables)
         self.assertIn("plan_publications", tables)
         self.assertIn("plan_published_subjects", tables)
+        self.assertIn("order_item_dependencies", tables)
 
     def test_migrates_v7_session_workers_employee_id(self) -> None:
         legacy_path = Path(self.temp_dir.name) / "legacy-v7.sqlite3"
@@ -979,6 +980,99 @@ class MetalboxStoreTests(unittest.TestCase):
                 ).fetchone()[0]
             )
         self.assertEqual(item_count, 2)
+
+    def test_published_parent_waits_for_bom_child(self) -> None:
+        self.store.create_product(symbol="PUBDEP.ROOT", name="Produkt")
+        self.store.create_product(
+            symbol="PUBDEP.SEMI",
+            name="Półprodukt",
+            kind="PÓŁPRODUKT",
+        )
+        self.store.add_product_bom_item(
+            "PUBDEP.ROOT",
+            item_type="PÓŁPRODUKT",
+            symbol="PUBDEP.SEMI",
+            name="Półprodukt",
+            quantity_per_set=2,
+        )
+        self.store.add_product_operation(
+            "PUBDEP.ROOT",
+            department="Zgrzewarki",
+            operation_name="Montaż",
+            setup_minutes=5,
+            minutes_per_unit=0.2,
+        )
+        self.store.add_product_operation(
+            "PUBDEP.SEMI",
+            department="Laser",
+            operation_name="Cięcie półproduktu",
+            setup_minutes=5,
+            minutes_per_unit=0.1,
+        )
+        snapshot = self.store.create_plan_snapshot(
+            source_name="Plan Produkcji 2026.xlsx",
+            snapshot_path="publish-dependency.xlsx",
+            sha256="publish-dependency",
+            size_bytes=100,
+            sheet_name="PLAN 2026",
+            header_row=1,
+            rows=[
+                {
+                    "row_key": "10004|pubdep.root|produkt#1",
+                    "row_no": 2,
+                    "order_code": "10004",
+                    "symbol": "PUBDEP.ROOT",
+                    "name": "Produkt",
+                    "quantity": 10.0,
+                    "shipping": "23.10",
+                    "ral": "9011",
+                }
+            ],
+        )
+        self.store.accept_plan_snapshot(int(snapshot["id"]))
+        self.store.publish_accepted_department_plan()
+        order = self.store.get_order("ZL-10004")
+        self.assertIsNotNone(order)
+        by_kind = {str(item["source_kind"]): item for item in order["items"]}
+        root_item_id = int(by_kind["PRODUKT"]["id"])
+        semi_item_id = int(by_kind["PÓŁPRODUKT"]["id"])
+
+        root_before = self.store.get_item_department_capacity(
+            "ZL-10004", root_item_id, "Zgrzewarki"
+        )
+        semi_before = self.store.get_item_department_capacity(
+            "ZL-10004", semi_item_id, "Laser"
+        )
+        self.assertEqual(root_before["available_now"], 0)
+        self.assertEqual(semi_before["available_now"], 20)
+
+        with self.store._connect() as db:
+            dependency_count = int(
+                db.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM order_item_dependencies
+                    WHERE parent_order_item_id = ?
+                      AND child_order_item_id = ?
+                    """,
+                    (root_item_id, semi_item_id),
+                ).fetchone()[0]
+            )
+            self.assertEqual(dependency_count, 1)
+            db.execute(
+                """
+                UPDATE operation_progress
+                SET good_qty = planned_qty,
+                    status = 'GOTOWE'
+                WHERE order_item_id = ?
+                """,
+                (semi_item_id,),
+            )
+
+        root_after = self.store.get_item_department_capacity(
+            "ZL-10004", root_item_id, "Zgrzewarki"
+        )
+        self.assertEqual(root_after["available_now"], 10)
 
     def test_plan_publication_protects_started_work(self) -> None:
         self.store.create_product(symbol="PUB.ACTIVE", name="Produkt aktywny")
