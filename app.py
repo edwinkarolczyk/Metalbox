@@ -4651,119 +4651,14 @@ class PlannerPage(PageBase):
             "Oryginalny Excel nie jest utrzymywany otwarty."
         )
 
-    def _manual_plan_mapping(
+    def _complete_snapshot_import(
         self,
-        snapshot_path: Path,
-        source_name: str,
-        *,
-        reason: str = "",
-    ):
-        saved = load_plan_column_mapping(source_name)
-        dialog = PlanColumnMappingDialog(
-            snapshot_path,
-            source_name,
-            self,
-            saved=saved,
-            reason=reason,
-        )
-        if dialog.exec() != QDialog.Accepted:
-            return None
-
-        parsed = read_plan_snapshot(
-            snapshot_path,
-            sheet_name=dialog.result_sheet_name,
-            header_row=dialog.result_header_row,
-            mapping=dialog.result_mapping,
-        )
-        if dialog.remember_mapping:
-            save_plan_column_mapping(
-                source_name,
-                {
-                    "sheet_name": dialog.result_sheet_name,
-                    "header_row": dialog.result_header_row,
-                    "mapping": dialog.result_mapping,
-                },
-            )
-        mark_update_check("planner:manual_mapping")
-        app_log(
-            "Plan Excel: zapisano ręczne mapowanie kolumn "
-            f"dla {source_name}: arkusz={dialog.result_sheet_name}, "
-            f"wiersz={dialog.result_header_row}, pola={sorted(dialog.result_mapping)}"
-        )
-        return parsed
-
-    def _import_snapshot(self, force_mapping: bool = False) -> None:
-        filename, _filter = QFileDialog.getOpenFileName(
-            self,
-            "Wybierz plan produkcji Excel",
-            "",
-            "Excel (*.xlsx *.xlsm)",
-        )
-        if not filename:
-            return
-
-        source = Path(filename)
-        previous = self.store.get_latest_plan_snapshot()
-        previous_rows = (
-            self.store.list_plan_snapshot_rows(int(previous["id"]))
-            if previous is not None
-            else []
-        )
-
+        snapshot_info,
+        parsed,
+        previous_rows: list[dict],
+    ) -> None:
         try:
-            snapshot_info = safe_snapshot(source, PLAN_SNAPSHOT_DIR)
-            mark_update_check("planner:snapshot_created")
-
-            parsed = None
-            saved = load_plan_column_mapping(snapshot_info.source_name)
-
-            if force_mapping:
-                parsed = self._manual_plan_mapping(
-                    snapshot_info.path,
-                    snapshot_info.source_name,
-                    reason="Mapowanie ręczne wybrane przez użytkownika.",
-                )
-                if parsed is None:
-                    return
-            else:
-                if saved:
-                    try:
-                        parsed = read_plan_snapshot(
-                            snapshot_info.path,
-                            sheet_name=str(saved.get("sheet_name", "")),
-                            header_row=int(saved.get("header_row", 0) or 0),
-                            mapping=dict(saved.get("mapping", {})),
-                        )
-                        app_log(
-                            "Plan Excel: użyto zapamiętanego mapowania kolumn "
-                            f"dla {snapshot_info.source_name}."
-                        )
-                    except (TypeError, ValueError) as exc:
-                        app_log(
-                            "Zapamiętane mapowanie planu nie pasuje do pliku: "
-                            f"{exc}",
-                            "WARN",
-                        )
-                        parsed = None
-
-                if parsed is None:
-                    try:
-                        parsed = read_plan_snapshot(snapshot_info.path)
-                    except ValueError as auto_exc:
-                        app_log(
-                            f"Automatyczne rozpoznanie planu nieudane: {auto_exc}",
-                            "WARN",
-                        )
-                        parsed = self._manual_plan_mapping(
-                            snapshot_info.path,
-                            snapshot_info.source_name,
-                            reason=str(auto_exc),
-                        )
-                        if parsed is None:
-                            return
-
             mark_update_check("planner:snapshot_parsed")
-
             diff = compare_plan_rows(previous_rows, parsed.rows)
             snapshot = self.store.create_plan_snapshot(
                 source_name=snapshot_info.source_name,
@@ -4811,6 +4706,170 @@ class PlannerPage(PageBase):
             f"{snapshot_info.source_name} -> {snapshot_info.path.name}; "
             f"wiersze={len(parsed.rows)}, nowe={len(diff['added'])}, "
             f"zmienione={len(diff['changed'])}, usunięte={len(diff['removed'])}"
+        )
+
+    def _open_manual_plan_mapping(
+        self,
+        snapshot_info,
+        previous_rows: list[dict],
+        *,
+        reason: str = "",
+    ) -> None:
+        saved = load_plan_column_mapping(snapshot_info.source_name)
+        dialog = PlanColumnMappingDialog(
+            snapshot_info.path,
+            snapshot_info.source_name,
+            self,
+            saved=saved,
+            reason=reason,
+        )
+
+        def apply_mapping() -> None:
+            try:
+                parsed = read_plan_snapshot(
+                    snapshot_info.path,
+                    sheet_name=dialog.result_sheet_name,
+                    header_row=dialog.result_header_row,
+                    mapping=dialog.result_mapping,
+                )
+                if dialog.remember_mapping:
+                    save_plan_column_mapping(
+                        snapshot_info.source_name,
+                        {
+                            "sheet_name": dialog.result_sheet_name,
+                            "header_row": dialog.result_header_row,
+                            "mapping": dialog.result_mapping,
+                        },
+                    )
+                mark_update_check("planner:manual_mapping")
+                app_log(
+                    "Plan Excel: zapisano ręczne mapowanie kolumn "
+                    f"dla {snapshot_info.source_name}: "
+                    f"arkusz={dialog.result_sheet_name}, "
+                    f"wiersz={dialog.result_header_row}, "
+                    f"pola={sorted(dialog.result_mapping)}"
+                )
+                self._complete_snapshot_import(
+                    snapshot_info,
+                    parsed,
+                    previous_rows,
+                )
+            except (OSError, ValueError) as exc:
+                app_log(f"Ręczne mapowanie planu nieudane: {exc}", "ERROR")
+                QMessageBox.warning(
+                    self,
+                    "Nie udało się odczytać mapowania",
+                    str(exc),
+                )
+            except Exception as exc:
+                app_log(
+                    f"Nieoczekiwany błąd ręcznego mapowania planu: {exc}",
+                    "ERROR",
+                )
+                QMessageBox.critical(
+                    self,
+                    "Błąd mapowania planu",
+                    "Nie udało się zastosować mapowania kolumn. "
+                    "Szczegóły zapisano w logu.",
+                )
+
+        dialog.accepted.connect(apply_mapping)
+        self._show_inline_dialog(
+            dialog,
+            "Planista / Dopasuj kolumny",
+        )
+
+    def _import_snapshot(self, force_mapping: bool = False) -> None:
+        filename, _filter = QFileDialog.getOpenFileName(
+            self,
+            "Wybierz plan produkcji Excel",
+            "",
+            "Excel (*.xlsx *.xlsm)",
+        )
+        if not filename:
+            return
+
+        source = Path(filename)
+        previous = self.store.get_latest_plan_snapshot()
+        previous_rows = (
+            self.store.list_plan_snapshot_rows(int(previous["id"]))
+            if previous is not None
+            else []
+        )
+
+        try:
+            snapshot_info = safe_snapshot(source, PLAN_SNAPSHOT_DIR)
+            mark_update_check("planner:snapshot_created")
+        except (OSError, ValueError) as exc:
+            app_log(f"Utworzenie snapshotu planu nieudane: {exc}", "ERROR")
+            QMessageBox.warning(
+                self,
+                "Nie udało się utworzyć snapshotu",
+                str(exc),
+            )
+            return
+
+        if force_mapping:
+            self._open_manual_plan_mapping(
+                snapshot_info,
+                previous_rows,
+                reason="Mapowanie ręczne wybrane przez użytkownika.",
+            )
+            return
+
+        parsed = None
+        saved = load_plan_column_mapping(snapshot_info.source_name)
+        if saved:
+            try:
+                parsed = read_plan_snapshot(
+                    snapshot_info.path,
+                    sheet_name=str(saved.get("sheet_name", "")),
+                    header_row=int(saved.get("header_row", 0) or 0),
+                    mapping=dict(saved.get("mapping", {})),
+                )
+                app_log(
+                    "Plan Excel: użyto zapamiętanego mapowania kolumn "
+                    f"dla {snapshot_info.source_name}."
+                )
+            except (TypeError, ValueError) as exc:
+                app_log(
+                    "Zapamiętane mapowanie planu nie pasuje do pliku: "
+                    f"{exc}",
+                    "WARN",
+                )
+                parsed = None
+
+        if parsed is None:
+            try:
+                parsed = read_plan_snapshot(snapshot_info.path)
+            except ValueError as auto_exc:
+                app_log(
+                    f"Automatyczne rozpoznanie planu nieudane: {auto_exc}",
+                    "WARN",
+                )
+                self._open_manual_plan_mapping(
+                    snapshot_info,
+                    previous_rows,
+                    reason=str(auto_exc),
+                )
+                return
+            except Exception as exc:
+                app_log(
+                    f"Nieoczekiwany błąd odczytu snapshotu planu: {exc}",
+                    "ERROR",
+                )
+                QMessageBox.critical(
+                    self,
+                    "Błąd importu planu",
+                    "Nie udało się przeanalizować snapshotu. "
+                    "Szczegóły zapisano w logu.",
+                )
+                return
+
+        self._complete_snapshot_import(
+            snapshot_info,
+            parsed,
+            previous_rows,
         )
 
     def _render_rows(self, rows: list[dict], diff: dict) -> None:
