@@ -65,6 +65,8 @@ class MetalboxStoreTests(unittest.TestCase):
         self.assertIn("accepted_plan_items", tables)
         self.assertIn("accepted_plan_requirements", tables)
         self.assertIn("accepted_plan_operation_loads", tables)
+        self.assertIn("plan_publications", tables)
+        self.assertIn("plan_published_subjects", tables)
 
     def test_migrates_v7_session_workers_employee_id(self) -> None:
         legacy_path = Path(self.temp_dir.name) / "legacy-v7.sqlite3"
@@ -807,6 +809,226 @@ class MetalboxStoreTests(unittest.TestCase):
         laser_rows = self.store.list_accepted_department_plan("Laser")
         self.assertEqual(len(laser_rows), 1)
         self.assertEqual(laser_rows[0]["operation_name"], "Cięcie")
+
+    def test_plan_publication_creates_real_queues_and_is_idempotent(self) -> None:
+        self.store.create_product(symbol="PUB.ROOT", name="Produkt publikowany")
+        self.store.create_product(
+            symbol="PUB.SEMI",
+            name="Półprodukt publikowany",
+            kind="PÓŁPRODUKT",
+        )
+        self.store.add_product_bom_item(
+            "PUB.ROOT",
+            item_type="PÓŁPRODUKT",
+            symbol="PUB.SEMI",
+            name="Półprodukt publikowany",
+            quantity_per_set=2,
+        )
+        self.store.add_product_operation(
+            "PUB.ROOT",
+            department="Laser",
+            operation_name="Cięcie",
+            setup_minutes=10,
+            minutes_per_unit=0.2,
+        )
+        self.store.add_product_operation(
+            "PUB.ROOT",
+            department="Giętarki",
+            operation_name="Gięcie",
+            setup_minutes=5,
+            minutes_per_unit=0.1,
+        )
+        self.store.add_product_operation(
+            "PUB.SEMI",
+            department="Zgrzewarki",
+            operation_name="Zgrzewanie",
+            setup_minutes=8,
+            minutes_per_unit=0.3,
+        )
+
+        snapshot = self.store.create_plan_snapshot(
+            source_name="Plan Produkcji 2026.xlsx",
+            snapshot_path="publish.xlsx",
+            sha256="publish-plan",
+            size_bytes=100,
+            sheet_name="PLAN 2026",
+            header_row=1,
+            rows=[
+                {
+                    "row_key": "10001|pub.root|produkt publikowany#1",
+                    "row_no": 2,
+                    "order_code": "10001",
+                    "symbol": "PUB.ROOT",
+                    "name": "Produkt publikowany",
+                    "quantity": 10.0,
+                    "shipping": "20.10",
+                    "ral": "9011",
+                },
+                {
+                    "row_key": "10002|pub.unknown|produkt nieznany#1",
+                    "row_no": 3,
+                    "order_code": "10002",
+                    "symbol": "PUB.UNKNOWN",
+                    "name": "Produkt nieznany",
+                    "quantity": 5.0,
+                    "shipping": "21.10",
+                    "ral": "7042",
+                },
+            ],
+        )
+        self.store.accept_plan_snapshot(int(snapshot["id"]))
+
+        before_orders = len(self.store.list_orders())
+        preview = self.store.get_plan_publication_preview()
+
+        self.assertEqual(preview["eligible_count"], 1)
+        self.assertEqual(preview["blocked_count"], 1)
+        self.assertEqual(preview["eligible_subject_count"], 2)
+        self.assertEqual(
+            preview["eligible_rows"][0]["normalized_order_code"],
+            "ZL-10001",
+        )
+        self.assertIn(
+            "DO WERYFIKACJI",
+            " ".join(preview["blocked_rows"][0]["reasons"]),
+        )
+
+        first = self.store.publish_accepted_department_plan()
+
+        self.assertTrue(first["orders_changed"])
+        self.assertEqual(first["created_orders"], 1)
+        self.assertEqual(first["created_items"], 2)
+        self.assertEqual(first["operation_count"], 3)
+        self.assertEqual(len(self.store.list_orders()), before_orders + 1)
+
+        order = self.store.get_order("ZL-10001")
+        self.assertIsNotNone(order)
+        self.assertEqual(len(order["items"]), 2)
+
+        laser = [
+            row
+            for row in self.store.list_department_queue("Laser")
+            if row["code"] == "ZL-10001"
+        ]
+        bending = [
+            row
+            for row in self.store.list_department_queue("Giętarki")
+            if row["code"] == "ZL-10001"
+        ]
+        welding = [
+            row
+            for row in self.store.list_department_queue("Zgrzewarki")
+            if row["code"] == "ZL-10001"
+        ]
+        self.assertEqual(len(laser), 1)
+        self.assertEqual(len(bending), 1)
+        self.assertEqual(len(welding), 1)
+        self.assertEqual(int(laser[0]["planned_qty"]), 10)
+        self.assertEqual(int(welding[0]["planned_qty"]), 20)
+
+        with self.store._connect() as db:
+            published_items = db.execute(
+                """
+                SELECT symbol, quantity, ral, source_kind, plan_row_key
+                FROM order_items
+                WHERE order_id = (
+                    SELECT id FROM orders WHERE code = 'ZL-10001'
+                )
+                ORDER BY position_no
+                """
+            ).fetchall()
+            operations = db.execute(
+                """
+                SELECT oi.symbol, op.department, op.operation_name, op.sequence_no
+                FROM operation_progress op
+                JOIN order_items oi ON oi.id = op.order_item_id
+                JOIN orders o ON o.id = oi.order_id
+                WHERE o.code = 'ZL-10001'
+                ORDER BY oi.position_no, op.sequence_no
+                """
+            ).fetchall()
+
+        self.assertEqual(
+            {str(row["source_kind"]) for row in published_items},
+            {"PRODUKT", "PÓŁPRODUKT"},
+        )
+        self.assertEqual(
+            {str(row["ral"]) for row in published_items},
+            {"9011"},
+        )
+        self.assertEqual(
+            [str(row["operation_name"]) for row in operations],
+            ["Cięcie", "Gięcie", "Zgrzewanie"],
+        )
+
+        second = self.store.publish_accepted_department_plan()
+        self.assertEqual(second["created_orders"], 0)
+        self.assertEqual(second["created_items"], 0)
+        self.assertEqual(second["updated_items"], 2)
+        self.assertEqual(len(self.store.list_orders()), before_orders + 1)
+
+        with self.store._connect() as db:
+            item_count = int(
+                db.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM order_items oi
+                    JOIN orders o ON o.id = oi.order_id
+                    WHERE o.code = 'ZL-10001'
+                    """
+                ).fetchone()[0]
+            )
+        self.assertEqual(item_count, 2)
+
+    def test_plan_publication_protects_started_work(self) -> None:
+        self.store.create_product(symbol="PUB.ACTIVE", name="Produkt aktywny")
+        self.store.add_product_operation(
+            "PUB.ACTIVE",
+            department="Laser",
+            operation_name="Cięcie",
+            setup_minutes=1,
+            minutes_per_unit=0.1,
+        )
+        snapshot = self.store.create_plan_snapshot(
+            source_name="Plan Produkcji 2026.xlsx",
+            snapshot_path="publish-active.xlsx",
+            sha256="publish-active",
+            size_bytes=100,
+            sheet_name="PLAN 2026",
+            header_row=1,
+            rows=[
+                {
+                    "row_key": "10003|pub.active|produkt aktywny#1",
+                    "row_no": 2,
+                    "order_code": "10003",
+                    "symbol": "PUB.ACTIVE",
+                    "name": "Produkt aktywny",
+                    "quantity": 10.0,
+                    "shipping": "22.10",
+                    "ral": "9011",
+                }
+            ],
+        )
+        self.store.accept_plan_snapshot(int(snapshot["id"]))
+        self.store.publish_accepted_department_plan()
+
+        order = self.store.get_order("ZL-10003")
+        self.assertIsNotNone(order)
+        order_item_id = int(order["items"][0]["id"])
+        self.store.start_production_session(
+            "ZL-10003",
+            "Laser",
+            ["Tester"],
+            order_item_id=order_item_id,
+        )
+
+        preview = self.store.get_plan_publication_preview()
+        self.assertEqual(preview["eligible_count"], 0)
+        self.assertEqual(preview["blocked_count"], 1)
+        self.assertIn(
+            "rozpoczętą produkcję",
+            " ".join(preview["blocked_rows"][0]["reasons"]),
+        )
 
     def test_product_hints_are_raw_idempotent_and_do_not_create_products(self) -> None:
         entries = [
