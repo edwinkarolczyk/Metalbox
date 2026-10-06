@@ -1,23 +1,23 @@
 {
   "schema": 1,
-  "version": "0.1.29",
-  "title": "Planista — plan operacji według działów",
-  "description": "Zaakceptowany plan Excel, BOM i technologie tworzą kontrolowany podgląd operacji według działów. Każda pozycja pozostaje PLANOWANA i nie staje się jeszcze aktywnym zleceniem produkcyjnym.",
+  "version": "0.1.30",
+  "title": "Planista — kontrolowana publikacja planu do kolejek działów",
+  "description": "Kierownik/Administrator może świadomie opublikować gotowe pozycje zaakceptowanego planu do realnych kolejek produkcyjnych. Preflight blokuje pozycje niezweryfikowane, bez technologii, z konfliktem ZL albo z rozpoczętą produkcją. Ponowna publikacja nie dubluje pozycji.",
   "checks": [
     {
-      "id": "planner-department-plan-open",
-      "text": "1. PLANISTA → „Plan działów”. Widok ma otworzyć się wewnątrz tego samego okna i pokazać operacje przypisane do Laser / Giętarki / Zgrzewarki itd. z Nr ZL, terminem, RAL, produktem/półproduktem, ilością i operacją.",
-      "trigger": "planner:department_plan_open"
+      "id": "planner-publication-preview",
+      "text": "1. PLANISTA → „Publikacja planu”. Widok ma otworzyć się w tym samym oknie i pokazać pozycje GOTOWE oraz BLOKADA z konkretnym powodem. Zablokowane pozycje nie mogą zostać opublikowane.",
+      "trigger": "planner:publication_preview"
     },
     {
-      "id": "planner-department-plan-calculated",
-      "text": "2. Sprawdź filtrowanie po dziale oraz kolejność technologii: PIERWSZY ETAP / KOLEJNY ETAP / OSTATNI ETAP lub JEDYNY ETAP. Wszystkie pozycje mają status PLANOWANE.",
-      "trigger": "planner:department_plan_calculated"
+      "id": "planner-publication-done",
+      "text": "2. Kliknij „Publikuj gotowe pozycje” i potwierdź. Tylko pozycje GOTOWE mają trafić do realnych kolejek odpowiednich działów zgodnie z technologią; od tej chwili pracownik może rozpocząć pierwszy etap.",
+      "trigger": "planner:publication_done"
     },
     {
-      "id": "planner-department-plan-no-orders",
-      "text": "3. Zbudowanie planu działów nie może utworzyć ani zmienić zleceń produkcyjnych i nie może jeszcze pozwalać pracownikowi rozpocząć produkcji. To nadal kontrolowany podgląd przed publikacją.",
-      "trigger": "planner:department_plan_no_orders"
+      "id": "planner-publication-repeat-safe",
+      "text": "3. Opublikuj ten sam niezmieniony plan ponownie. Metalbox ma zaktualizować istniejące nieaktywne pozycje bez tworzenia duplikatów. Pozycja z rozpoczętą produkcją ma być chroniona przed automatycznym nadpisaniem.",
+      "trigger": "planner:publication_repeat_safe"
     }
   ]
 }
