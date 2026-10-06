@@ -99,6 +99,7 @@ class MetalboxStore:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     order_item_id INTEGER NOT NULL REFERENCES order_items(id) ON DELETE CASCADE,
                     department TEXT NOT NULL,
+                    operation_name TEXT NOT NULL DEFAULT '',
                     sequence_no INTEGER NOT NULL,
                     planned_qty INTEGER NOT NULL CHECK(planned_qty >= 0),
                     good_qty INTEGER NOT NULL DEFAULT 0 CHECK(good_qty >= 0),
@@ -509,6 +510,12 @@ class MetalboxStore:
                 db,
                 "order_items",
                 "plan_row_key",
+                "TEXT NOT NULL DEFAULT ''",
+            )
+            self._ensure_column(
+                db,
+                "operation_progress",
+                "operation_name",
                 "TEXT NOT NULL DEFAULT ''",
             )
 
