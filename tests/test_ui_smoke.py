@@ -206,6 +206,70 @@ class UiSmokeTest(unittest.TestCase):
             self.assertEqual(len(store.list_accepted_plan_items()), 2)
             dialog.close()
 
+    def test_plan_bom_requirements_dialog_shows_recursive_requirements(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            store = MetalboxStore(Path(temp) / "plan-bom-ui.sqlite3")
+            store.create_product(symbol="ROOT.UI", name="Produkt")
+            store.create_product(
+                symbol="SEMI.UI2",
+                name="Półprodukt",
+                kind="PÓŁPRODUKT",
+            )
+            store.add_product_bom_item(
+                "ROOT.UI",
+                item_type="PÓŁPRODUKT",
+                symbol="SEMI.UI2",
+                name="Półprodukt",
+                quantity_per_set=2,
+                unit="szt.",
+            )
+            store.add_product_bom_item(
+                "SEMI.UI2",
+                item_type="MATERIAŁ",
+                symbol="MAT.UI",
+                name="Materiał",
+                quantity_per_set=0.5,
+                unit="kg",
+            )
+            snapshot = store.create_plan_snapshot(
+                source_name="Plan Produkcji 2026.xlsx",
+                snapshot_path="snapshot-bom-ui.xlsx",
+                sha256="bom-ui",
+                size_bytes=123,
+                sheet_name="PLAN 2026",
+                header_row=1,
+                rows=[
+                    {
+                        "row_key": "zl-ui|root.ui|produkt#1",
+                        "row_no": 2,
+                        "order_code": "ZL-UI",
+                        "symbol": "ROOT.UI",
+                        "name": "Produkt",
+                        "quantity": 10.0,
+                        "shipping": "20.10",
+                        "ral": "9011",
+                    }
+                ],
+            )
+            store.accept_plan_snapshot(int(snapshot["id"]))
+            summary = store.rebuild_accepted_plan_requirements()
+
+            dialog = metalbox_app.PlanBomRequirementsDialog(
+                store,
+                summary,
+            )
+            self.qt_app.processEvents()
+
+            self.assertEqual(dialog.table.rowCount(), 2)
+            self.assertEqual(dialog.table.item(0, 5).text(), "SEMI.UI2 • Półprodukt")
+            self.assertEqual(dialog.table.item(0, 6).text(), "20")
+            self.assertEqual(dialog.table.item(0, 8).text(), "POWIĄZANY")
+            self.assertEqual(dialog.table.item(1, 5).text(), "MAT.UI • Materiał")
+            self.assertEqual(dialog.table.item(1, 6).text(), "10")
+            self.assertEqual(dialog.table.item(1, 7).text(), "kg")
+            self.assertEqual(dialog.table.item(1, 8).text(), "TYLKO BOM")
+            dialog.close()
+
     def test_main_window_constructs(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             db_path = Path(temp) / "metalbox-smoke.sqlite3"
