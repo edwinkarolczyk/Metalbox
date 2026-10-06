@@ -1,23 +1,23 @@
 {
   "schema": 1,
-  "version": "0.1.27",
-  "title": "Planista — zapotrzebowanie BOM z zaakceptowanego planu",
-  "description": "Metalbox rozwija zaakceptowane pozycje planu przez BOM, także wielopoziomowo. Pokazuje wymagane półprodukty/detale/materiały, pozycje bez BOM i pozycje nadal do weryfikacji. Nie tworzy jeszcze zleceń ani nie wysyła pracy do działów.",
+  "version": "0.1.28",
+  "title": "Planista — obciążenie działów z BOM i technologii",
+  "description": "Metalbox przelicza zaakceptowany plan przez BOM i technologie produktów/półproduktów. Pokazuje operacje, ilości oraz przewidywane minuty/godziny działów. Operacje bez normy czasu są oznaczone osobno. Ten etap nie tworzy ani nie zmienia zleceń.",
   "checks": [
     {
-      "id": "planner-bom-open",
-      "text": "1. PLANISTA → „Zapotrzebowanie BOM”. Ma pojawić się podgląd zaakceptowanego planu z licznikami: dopasowane, do weryfikacji, bez BOM oraz wygenerowane pozycje BOM.",
-      "trigger": "planner:bom_requirements_open"
+      "id": "planner-load-open",
+      "text": "1. PLANISTA → „Obciążenie działów”. Ma pojawić się podsumowanie działów oraz tabela szczegółów operacji z produktem/półproduktem, ilością, działem, operacją i RAL.",
+      "trigger": "planner:department_load_open"
     },
     {
-      "id": "planner-bom-calculated",
-      "text": "2. Metalbox ma przeliczyć BOM zaakceptowanego planu. Dla produktu z BOM ilość wymagana = ilość planu × ilość z BOM; przy wielopoziomowym BOM mnożenie ma przechodzić także na kolejne poziomy. Jeśli dopasowany produkt nie ma BOM, ma wejść do licznika „Bez BOM”.",
-      "trigger": "planner:bom_requirements_calculated"
+      "id": "planner-load-calculated",
+      "text": "2. Metalbox ma liczyć czas jako przygotowanie + (min/szt. × ilość). Produkt główny i produkowane półprodukty/detale z BOM mają wejść do obciążenia; materiał i element kupowany nie mogą sztucznie obciążać działów. Operacje bez czasów mają być oznaczone jako BRAK NORMY.",
+      "trigger": "planner:department_load_calculated"
     },
     {
-      "id": "planner-bom-no-orders",
-      "text": "3. Samo przeliczenie zapotrzebowania BOM nie może utworzyć ani zmienić zleceń produkcyjnych. Ten etap pozostaje wyłącznie podglądem przygotowania produkcji.",
-      "trigger": "planner:bom_requirements_no_orders"
+      "id": "planner-load-no-orders",
+      "text": "3. Samo przeliczenie obciążenia działów nie może utworzyć ani zmienić zleceń produkcyjnych. To nadal wyłącznie planowanie i podgląd.",
+      "trigger": "planner:department_load_no_orders"
     }
   ]
 }
