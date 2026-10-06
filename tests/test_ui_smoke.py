@@ -270,6 +270,97 @@ class UiSmokeTest(unittest.TestCase):
             self.assertEqual(dialog.table.item(1, 8).text(), "TYLKO BOM")
             dialog.close()
 
+    def test_plan_department_load_dialog_shows_hours_and_missing_norms(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            store = MetalboxStore(Path(temp) / "plan-load-ui.sqlite3")
+            store.create_product(symbol="LOAD.UI", name="Produkt")
+            store.create_product(
+                symbol="LOAD.SEMI.UI",
+                name="Półprodukt",
+                kind="PÓŁPRODUKT",
+            )
+            store.add_product_bom_item(
+                "LOAD.UI",
+                item_type="PÓŁPRODUKT",
+                symbol="LOAD.SEMI.UI",
+                name="Półprodukt",
+                quantity_per_set=2,
+                unit="szt.",
+            )
+            store.add_product_operation(
+                "LOAD.UI",
+                department="Laser",
+                operation_name="Cięcie",
+                setup_minutes=30,
+                minutes_per_unit=0.5,
+            )
+            store.add_product_operation(
+                "LOAD.SEMI.UI",
+                department="Giętarki",
+                operation_name="Gięcie",
+                setup_minutes=0,
+                minutes_per_unit=0,
+            )
+
+            snapshot = store.create_plan_snapshot(
+                source_name="Plan Produkcji 2026.xlsx",
+                snapshot_path="snapshot-load-ui.xlsx",
+                sha256="load-ui",
+                size_bytes=123,
+                sheet_name="PLAN 2026",
+                header_row=1,
+                rows=[
+                    {
+                        "row_key": "zl-ui-load|load.ui|produkt#1",
+                        "row_no": 2,
+                        "order_code": "ZL-UI-LOAD",
+                        "symbol": "LOAD.UI",
+                        "name": "Produkt",
+                        "quantity": 100.0,
+                        "shipping": "20.10",
+                        "ral": "9011",
+                    }
+                ],
+            )
+            store.accept_plan_snapshot(int(snapshot["id"]))
+            summary = store.rebuild_accepted_plan_operation_loads()
+
+            dialog = metalbox_app.PlanDepartmentLoadDialog(
+                store,
+                summary,
+            )
+            self.qt_app.processEvents()
+
+            self.assertEqual(dialog.department_table.rowCount(), 2)
+            self.assertEqual(dialog.operation_table.rowCount(), 2)
+
+            departments = {
+                dialog.department_table.item(row, 0).text()
+                for row in range(dialog.department_table.rowCount())
+            }
+            self.assertEqual(departments, {"Laser", "Giętarki"})
+
+            rows = {
+                dialog.operation_table.item(row, 3).text(): row
+                for row in range(dialog.operation_table.rowCount())
+            }
+            laser_row = rows["Laser"]
+            bending_row = rows["Giętarki"]
+
+            self.assertEqual(
+                dialog.operation_table.item(laser_row, 8).text(),
+                "80 min",
+            )
+            self.assertEqual(
+                dialog.operation_table.item(bending_row, 8).text(),
+                "BRAK NORMY",
+            )
+            self.assertEqual(
+                dialog.operation_table.item(laser_row, 9).text(),
+                "9011",
+            )
+            dialog.close()
+
     def test_main_window_constructs(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             db_path = Path(temp) / "metalbox-smoke.sqlite3"
