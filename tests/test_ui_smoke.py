@@ -440,6 +440,90 @@ class UiSmokeTest(unittest.TestCase):
             self.assertIs(page.view_stack.currentWidget(), page.main_view)
             page.close()
 
+    def test_plan_department_schedule_stays_inline_and_filters_department(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            store = MetalboxStore(Path(temp) / "department-plan-ui.sqlite3")
+            store.create_product(symbol="UIQ.ROOT", name="Produkt")
+            store.create_product(
+                symbol="UIQ.SEMI",
+                name="Półprodukt",
+                kind="PÓŁPRODUKT",
+            )
+            store.add_product_bom_item(
+                "UIQ.ROOT",
+                item_type="PÓŁPRODUKT",
+                symbol="UIQ.SEMI",
+                name="Półprodukt",
+                quantity_per_set=2,
+            )
+            store.add_product_operation(
+                "UIQ.ROOT",
+                department="Laser",
+                operation_name="Cięcie",
+                setup_minutes=10,
+                minutes_per_unit=0.2,
+            )
+            store.add_product_operation(
+                "UIQ.ROOT",
+                department="Giętarki",
+                operation_name="Gięcie",
+                setup_minutes=5,
+                minutes_per_unit=0.1,
+            )
+            store.add_product_operation(
+                "UIQ.SEMI",
+                department="Zgrzewarki",
+                operation_name="Zgrzewanie",
+                setup_minutes=8,
+                minutes_per_unit=0.3,
+            )
+
+            snapshot = store.create_plan_snapshot(
+                source_name="Plan Produkcji 2026.xlsx",
+                snapshot_path="department-plan-ui.xlsx",
+                sha256="department-plan-ui",
+                size_bytes=123,
+                sheet_name="PLAN 2026",
+                header_row=1,
+                rows=[
+                    {
+                        "row_key": "zl-uiq|uiq.root|produkt#1",
+                        "row_no": 2,
+                        "order_code": "ZL-UIQ",
+                        "symbol": "UIQ.ROOT",
+                        "name": "Produkt",
+                        "quantity": 10.0,
+                        "shipping": "2026-10-20",
+                        "ral": "9011",
+                    }
+                ],
+            )
+            store.accept_plan_snapshot(int(snapshot["id"]))
+
+            page = metalbox_app.PlannerPage(lambda: None, store)
+            page._open_department_plan()
+            self.qt_app.processEvents()
+
+            view = page.findChild(metalbox_app.PlanDepartmentScheduleView)
+            self.assertIsNotNone(view)
+            self.assertFalse(view.isWindow())
+            self.assertIsNot(page.view_stack.currentWidget(), page.main_view)
+            self.assertEqual(view.table.rowCount(), 3)
+
+            laser_index = view.department_combo.findData("Laser")
+            self.assertGreaterEqual(laser_index, 0)
+            view.department_combo.setCurrentIndex(laser_index)
+            self.qt_app.processEvents()
+
+            self.assertEqual(view.table.rowCount(), 1)
+            self.assertEqual(view.table.item(0, 0).text(), "Laser")
+            self.assertEqual(view.table.item(0, 1).text(), "ZL-UIQ")
+            self.assertEqual(view.table.item(0, 10).text(), "PLANOWANE")
+
+            page._return_to_plan()
+            self.assertIs(page.view_stack.currentWidget(), page.main_view)
+            page.close()
+
     def test_main_window_constructs(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             db_path = Path(temp) / "metalbox-smoke.sqlite3"
