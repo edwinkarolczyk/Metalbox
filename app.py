@@ -51,7 +51,7 @@ from PySide6.QtWidgets import (
 )
 
 APP_NAME = "Metalbox"
-APP_VERSION = "0.1.27"
+APP_VERSION = "0.1.28"
 LOCAL_DATA_ROOT = Path(
     os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
 ) / "Metalbox"
@@ -4227,6 +4227,210 @@ class PlanBomRequirementsDialog(QDialog):
         return f"{number:.3f}".rstrip("0").rstrip(".")
 
 
+class PlanDepartmentLoadDialog(QDialog):
+    def __init__(self, store: MetalboxStore, summary: dict, parent=None):
+        super().__init__(parent)
+        self.store = store
+        self.summary = dict(summary)
+
+        self.setWindowTitle("Metalbox — obciążenie działów")
+        self.setModal(True)
+        self.resize(sp(1500), sp(860))
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(sp(18), sp(18), sp(18), sp(18))
+        root.setSpacing(sp(10))
+
+        title = QLabel("Obciążenie działów z zaakceptowanego planu")
+        title.setObjectName("detailTitle")
+        root.addWidget(title)
+
+        info = QLabel(
+            "Obciążenie powstaje z technologii produktu głównego oraz powiązanych "
+            "PÓŁPRODUKTÓW/DETALI z BOM. Materiały i elementy kupowane nie obciążają "
+            "działów produkcyjnych. Czas = przygotowanie + min/szt. × ilość."
+        )
+        info.setObjectName("hint")
+        info.setWordWrap(True)
+        root.addWidget(info)
+
+        cards = QHBoxLayout()
+        cards.addWidget(
+            card(
+                "Działy",
+                str(summary.get("department_count", 0)),
+                "z operacjami",
+                190,
+            )
+        )
+        cards.addWidget(
+            card(
+                "Operacje",
+                str(summary.get("operation_count", 0)),
+                "pozycje technologii",
+                190,
+            )
+        )
+        cards.addWidget(
+            card(
+                "Łączny czas",
+                self._format_hours(summary.get("total_load_hours", 0)),
+                "tylko operacje z normą",
+                220,
+            )
+        )
+        cards.addWidget(
+            card(
+                "Bez normy czasu",
+                str(summary.get("untimed_operation_count", 0)),
+                "operacji do uzupełnienia",
+                210,
+            )
+        )
+        cards.addWidget(
+            card(
+                "Bez technologii",
+                str(summary.get("subjects_without_technology_count", 0)),
+                "produkty/półprodukty",
+                210,
+            )
+        )
+        cards.addWidget(
+            card(
+                "Do weryfikacji",
+                str(summary.get("review_plan_items_count", 0)),
+                "pozycje planu",
+                190,
+            )
+        )
+        cards.addStretch(1)
+        root.addLayout(cards)
+
+        root.addWidget(section_heading("Podsumowanie działów"))
+        self.department_table = compact_table(
+            [
+                "Dział",
+                "Operacje",
+                "Z normą czasu",
+                "Bez normy",
+                "Obciążenie [min]",
+                "Obciążenie [h]",
+            ],
+            [],
+            [180, 100, 130, 120, 150, 140],
+            230,
+        )
+        root.addWidget(self.department_table)
+
+        departments = list(summary.get("departments", []))
+        self.department_table.setRowCount(len(departments))
+        for row_index, row in enumerate(departments):
+            values = [
+                row.get("department") or "—",
+                row.get("operation_count", 0),
+                row.get("timed_operation_count", 0),
+                row.get("untimed_operation_count", 0),
+                self._format_number(row.get("load_minutes", 0)),
+                self._format_number(row.get("load_hours", 0)),
+            ]
+            self.department_table.setRowHeight(row_index, sp(36))
+            for column_index, value in enumerate(values):
+                self.department_table.setItem(
+                    row_index,
+                    column_index,
+                    QTableWidgetItem(str(value)),
+                )
+
+        root.addWidget(section_heading("Szczegóły operacji"))
+        self.operation_table = compact_table(
+            [
+                "Nr ZL",
+                "Źródło",
+                "Produkt / półprodukt",
+                "Dział",
+                "Operacja",
+                "Ilość",
+                "Przygot.",
+                "min/szt.",
+                "Obciążenie",
+                "RAL",
+            ],
+            [],
+            [105, 105, 230, 150, 220, 100, 100, 100, 130, 85],
+            330,
+        )
+        root.addWidget(self.operation_table)
+
+        loads = self.store.list_accepted_plan_operation_loads()
+        self.operation_table.setRowCount(len(loads))
+        for row_index, row in enumerate(loads):
+            subject = (
+                f'{row.get("subject_symbol") or "—"} • '
+                f'{row.get("subject_name") or ""}'
+            ).strip(" •")
+            if int(row.get("has_time_norm") or 0):
+                load_text = f'{self._format_number(row.get("load_minutes", 0))} min'
+            else:
+                load_text = "BRAK NORMY"
+
+            values = [
+                row.get("order_code") or "—",
+                row.get("source_kind") or "—",
+                subject,
+                row.get("department") or "—",
+                row.get("operation_name") or "—",
+                self._format_number(row.get("planned_quantity", 0)),
+                self._format_minutes(row.get("setup_minutes", 0)),
+                self._format_number(row.get("minutes_per_unit", 0)),
+                load_text,
+                row.get("ral") or "—",
+            ]
+            self.operation_table.setRowHeight(row_index, sp(38))
+            for column_index, value in enumerate(values):
+                self.operation_table.setItem(
+                    row_index,
+                    column_index,
+                    QTableWidgetItem(str(value)),
+                )
+
+        note = QLabel(
+            "Jeżeli operacja nie ma jeszcze czasu przygotowania ani min/szt., "
+            "Metalbox pokazuje ją jako „BRAK NORMY” i nie dodaje jej do sumy godzin. "
+            "Procent wykorzystania działu pojawi się dopiero po zdefiniowaniu "
+            "dostępnej pojemności zmianowej."
+        )
+        note.setObjectName("hint")
+        note.setWordWrap(True)
+        root.addWidget(note)
+
+        footer = QHBoxLayout()
+        footer.addStretch(1)
+        close_btn = QPushButton("Zamknij")
+        close_btn.clicked.connect(self.accept)
+        footer.addWidget(close_btn)
+        root.addLayout(footer)
+
+        mark_update_check("planner:department_load_open")
+
+    @staticmethod
+    def _format_number(value: object) -> str:
+        number = float(value or 0)
+        if number.is_integer():
+            return str(int(number))
+        return f"{number:.2f}".rstrip("0").rstrip(".")
+
+    @classmethod
+    def _format_hours(cls, value: object) -> str:
+        return f"{cls._format_number(value)} h"
+
+    @classmethod
+    def _format_minutes(cls, value: object) -> str:
+        number = float(value or 0)
+        if number == 0:
+            return "—"
+        return f"{cls._format_number(number)} min"
+
+
 class PlannerPage(PageBase):
     def __init__(self, go_home: Callable, store: MetalboxStore):
         super().__init__(
@@ -4255,6 +4459,10 @@ class PlannerPage(PageBase):
         bom_btn = QPushButton("Zapotrzebowanie BOM")
         bom_btn.clicked.connect(self._open_bom_requirements)
         controls.addWidget(bom_btn)
+
+        load_btn = QPushButton("Obciążenie działów")
+        load_btn.clicked.connect(self._open_department_load)
+        controls.addWidget(load_btn)
 
         changes_btn = QPushButton("Zmiany Excel")
         changes_btn.clicked.connect(self._show_changes)
@@ -4558,6 +4766,64 @@ class PlannerPage(PageBase):
         self._set_card_value(self.added_card, len(diff.get("added", [])))
         self._set_card_value(self.changed_card, len(diff.get("changed", [])))
         self._set_card_value(self.removed_card, len(diff.get("removed", [])))
+
+    def _open_department_load(self) -> None:
+        accepted = self.store.list_accepted_plan_items()
+        if not accepted:
+            QMessageBox.information(
+                self,
+                "Obciążenie działów",
+                "Najpierw zaakceptuj plan Excel w „Do akceptacji”.",
+            )
+            return
+
+        before_orders = len(self.store.list_orders())
+        try:
+            summary = self.store.rebuild_accepted_plan_operation_loads()
+        except ValueError as exc:
+            app_log(f"Nie można policzyć obciążenia działów: {exc}", "ERROR")
+            QMessageBox.warning(
+                self,
+                "Nie można policzyć obciążenia",
+                str(exc),
+            )
+            return
+        except Exception as exc:
+            app_log(f"Błąd obciążenia działów: {exc}", "ERROR")
+            QMessageBox.critical(
+                self,
+                "Błąd obciążenia działów",
+                "Nie udało się policzyć obciążenia działów. "
+                "Szczegóły zapisano w logu.",
+            )
+            return
+
+        after_orders = len(self.store.list_orders())
+        if before_orders != after_orders:
+            raise RuntimeError(
+                "Naruszono zasadę bezpieczeństwa: obliczenie obciążenia zmieniło liczbę zleceń."
+            )
+
+        mark_update_check("planner:department_load_calculated")
+        if not summary.get("orders_changed", True):
+            mark_update_check("planner:department_load_no_orders")
+        app_log(
+            "Plan technologie: policzono obciążenie działów; "
+            f"działy={summary['department_count']}, "
+            f"operacje={summary['operation_count']}, "
+            f"z_normą={summary['timed_operation_count']}, "
+            f"bez_normy={summary['untimed_operation_count']}, "
+            f"bez_technologii={summary['subjects_without_technology_count']}, "
+            f"godziny={summary['total_load_hours']:.2f}, "
+            "zlecenia_zmienione=nie"
+        )
+
+        dialog = PlanDepartmentLoadDialog(
+            self.store,
+            summary,
+            self,
+        )
+        dialog.exec()
 
     def _open_bom_requirements(self) -> None:
         accepted = self.store.list_accepted_plan_items()
