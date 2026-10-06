@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Iterator
 
 
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 DEFAULT_ROUTE = ("Laser", "Giętarki", "Zgrzewarki", "Malarnia", "Pakownia")
 QUALITY_REASON_CODES = (
     "NIEZGODNY_WYMIAR",
@@ -281,6 +281,35 @@ class MetalboxStore:
 
                 CREATE INDEX IF NOT EXISTS idx_accepted_plan_product
                     ON accepted_plan_items(product_id, product_match_status);
+
+                CREATE TABLE IF NOT EXISTS accepted_plan_requirements (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    accepted_plan_item_id INTEGER NOT NULL REFERENCES accepted_plan_items(id) ON DELETE CASCADE,
+                    root_product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+                    parent_product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+                    component_product_id INTEGER REFERENCES products(id) ON DELETE SET NULL,
+                    source_bom_item_id INTEGER NOT NULL REFERENCES product_bom_items(id) ON DELETE CASCADE,
+                    level_no INTEGER NOT NULL CHECK(level_no >= 1),
+                    path TEXT NOT NULL,
+                    item_type TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    quantity_per_parent REAL NOT NULL CHECK(quantity_per_parent > 0),
+                    required_quantity REAL NOT NULL CHECK(required_quantity >= 0),
+                    unit TEXT NOT NULL DEFAULT 'szt.',
+                    link_status TEXT NOT NULL DEFAULT 'TYLKO BOM',
+                    created_at TEXT NOT NULL,
+                    UNIQUE(accepted_plan_item_id, path)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_plan_requirements_item
+                    ON accepted_plan_requirements(accepted_plan_item_id, level_no, id);
+
+                CREATE INDEX IF NOT EXISTS idx_plan_requirements_symbol
+                    ON accepted_plan_requirements(symbol, item_type);
+
+                CREATE INDEX IF NOT EXISTS idx_plan_requirements_component
+                    ON accepted_plan_requirements(component_product_id, link_status);
 
                 CREATE TABLE IF NOT EXISTS session_workers (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1794,6 +1823,307 @@ class MetalboxStore:
             "removed": len(preview["removed"]),
             "matched_count": matched_count,
             "review_count": review_count,
+            "orders_changed": False,
+        }
+
+    def list_accepted_plan_requirements(self) -> list[dict]:
+        with self._connect() as db:
+            rows = db.execute(
+                """
+                SELECT
+                    r.id,
+                    r.accepted_plan_item_id,
+                    api.order_code,
+                    api.symbol AS root_symbol,
+                    api.name AS root_name,
+                    api.quantity AS root_quantity,
+                    api.shipping,
+                    api.ral,
+                    r.root_product_id,
+                    r.parent_product_id,
+                    r.component_product_id,
+                    r.source_bom_item_id,
+                    r.level_no,
+                    r.path,
+                    r.item_type,
+                    r.symbol,
+                    r.name,
+                    r.quantity_per_parent,
+                    r.required_quantity,
+                    r.unit,
+                    r.link_status,
+                    r.created_at,
+                    cp.kind AS component_kind,
+                    cp.status AS component_status
+                FROM accepted_plan_requirements r
+                JOIN accepted_plan_items api ON api.id = r.accepted_plan_item_id
+                LEFT JOIN products cp ON cp.id = r.component_product_id
+                ORDER BY api.row_no, r.level_no, r.id
+                """
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_accepted_plan_bom_summary(self) -> dict:
+        accepted = self.list_accepted_plan_items()
+        requirements = self.list_accepted_plan_requirements()
+
+        matched_items = [
+            row for row in accepted
+            if row.get("product_id") is not None
+            and row.get("product_match_status") == "DOPASOWANY"
+        ]
+        review_items = [
+            row for row in accepted
+            if row.get("product_match_status") != "DOPASOWANY"
+            or row.get("product_id") is None
+        ]
+
+        item_ids_with_requirements = {
+            int(row["accepted_plan_item_id"])
+            for row in requirements
+        }
+        matched_without_bom = [
+            row for row in matched_items
+            if int(row["id"]) not in item_ids_with_requirements
+        ]
+
+        linked_requirements = sum(
+            1
+            for row in requirements
+            if row.get("component_product_id") is not None
+        )
+        unlinked_requirements = len(requirements) - linked_requirements
+
+        return {
+            "accepted_count": len(accepted),
+            "matched_count": len(matched_items),
+            "review_count": len(review_items),
+            "matched_without_bom_count": len(matched_without_bom),
+            "requirement_count": len(requirements),
+            "linked_requirement_count": linked_requirements,
+            "unlinked_requirement_count": unlinked_requirements,
+        }
+
+    def rebuild_accepted_plan_requirements(
+        self,
+        *,
+        actor: str = "development-user",
+    ) -> dict:
+        now = datetime.now(timezone.utc).isoformat()
+
+        with self._connect() as db:
+            accepted_rows = [
+                dict(row)
+                for row in db.execute(
+                    """
+                    SELECT
+                        id, row_key, row_no, order_code, symbol, name,
+                        quantity, shipping, ral, product_id, product_match_status
+                    FROM accepted_plan_items
+                    ORDER BY row_no, id
+                    """
+                ).fetchall()
+            ]
+
+            product_rows = [
+                dict(row)
+                for row in db.execute(
+                    """
+                    SELECT id, symbol, name, kind, status
+                    FROM products
+                    """
+                ).fetchall()
+            ]
+            products_by_id = {
+                int(row["id"]): row
+                for row in product_rows
+            }
+
+            bom_rows = [
+                dict(row)
+                for row in db.execute(
+                    """
+                    SELECT
+                        id, parent_product_id, child_product_id, item_type,
+                        symbol, name, quantity_per_set, unit, notes, sequence_no
+                    FROM product_bom_items
+                    ORDER BY parent_product_id, sequence_no, id
+                    """
+                ).fetchall()
+            ]
+            bom_by_parent: dict[int, list[dict]] = {}
+            for row in bom_rows:
+                bom_by_parent.setdefault(
+                    int(row["parent_product_id"]),
+                    [],
+                ).append(row)
+
+            db.execute("DELETE FROM accepted_plan_requirements")
+
+            generated = 0
+            linked = 0
+            unlinked = 0
+            matched_plan_items = 0
+            review_plan_items = 0
+            matched_without_bom = 0
+
+            def explode(
+                *,
+                accepted_plan_item_id: int,
+                root_product_id: int,
+                parent_product_id: int,
+                parent_required_quantity: float,
+                level_no: int,
+                path_product_ids: tuple[int, ...],
+                path_labels: tuple[str, ...],
+            ) -> None:
+                nonlocal generated, linked, unlinked
+
+                parent_bom = bom_by_parent.get(parent_product_id, [])
+                for bom_item in parent_bom:
+                    child_product_id = (
+                        int(bom_item["child_product_id"])
+                        if bom_item["child_product_id"] is not None
+                        else None
+                    )
+                    required_quantity = (
+                        float(parent_required_quantity)
+                        * float(bom_item["quantity_per_set"])
+                    )
+
+                    next_labels = path_labels + (str(bom_item["symbol"]),)
+                    path = " → ".join(next_labels)
+                    link_status = (
+                        "POWIĄZANY"
+                        if child_product_id is not None
+                        else "TYLKO BOM"
+                    )
+
+                    db.execute(
+                        """
+                        INSERT INTO accepted_plan_requirements(
+                            accepted_plan_item_id,
+                            root_product_id,
+                            parent_product_id,
+                            component_product_id,
+                            source_bom_item_id,
+                            level_no,
+                            path,
+                            item_type,
+                            symbol,
+                            name,
+                            quantity_per_parent,
+                            required_quantity,
+                            unit,
+                            link_status,
+                            created_at
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            accepted_plan_item_id,
+                            root_product_id,
+                            parent_product_id,
+                            child_product_id,
+                            int(bom_item["id"]),
+                            level_no,
+                            path,
+                            str(bom_item["item_type"]),
+                            str(bom_item["symbol"]),
+                            str(bom_item["name"]),
+                            float(bom_item["quantity_per_set"]),
+                            required_quantity,
+                            str(bom_item["unit"] or "szt."),
+                            link_status,
+                            now,
+                        ),
+                    )
+                    generated += 1
+                    if child_product_id is None:
+                        unlinked += 1
+                        continue
+
+                    linked += 1
+                    if child_product_id in path_product_ids:
+                        cycle_ids = path_product_ids + (child_product_id,)
+                        cycle_labels = [
+                            str(products_by_id.get(product_id, {}).get("symbol", product_id))
+                            for product_id in cycle_ids
+                        ]
+                        raise ValueError(
+                            "Wykryto cykl BOM: "
+                            + " → ".join(cycle_labels)
+                            + ". Popraw BOM przed rozwinięciem planu."
+                        )
+
+                    if bom_by_parent.get(child_product_id):
+                        explode(
+                            accepted_plan_item_id=accepted_plan_item_id,
+                            root_product_id=root_product_id,
+                            parent_product_id=child_product_id,
+                            parent_required_quantity=required_quantity,
+                            level_no=level_no + 1,
+                            path_product_ids=path_product_ids + (child_product_id,),
+                            path_labels=next_labels,
+                        )
+
+            for accepted in accepted_rows:
+                if (
+                    accepted["product_id"] is None
+                    or accepted["product_match_status"] != "DOPASOWANY"
+                ):
+                    review_plan_items += 1
+                    continue
+
+                matched_plan_items += 1
+                product_id = int(accepted["product_id"])
+                quantity = float(accepted["quantity"] or 0)
+                if not bom_by_parent.get(product_id):
+                    matched_without_bom += 1
+                    continue
+
+                root_symbol = str(
+                    products_by_id.get(product_id, {}).get(
+                        "symbol",
+                        accepted["symbol"],
+                    )
+                )
+                explode(
+                    accepted_plan_item_id=int(accepted["id"]),
+                    root_product_id=product_id,
+                    parent_product_id=product_id,
+                    parent_required_quantity=quantity,
+                    level_no=1,
+                    path_product_ids=(product_id,),
+                    path_labels=(root_symbol,),
+                )
+
+            self._audit_in_connection(
+                db,
+                actor=actor,
+                action="accepted_plan_bom_rebuilt",
+                entity_type="accepted_plan",
+                entity_id="current",
+                payload={
+                    "accepted_count": len(accepted_rows),
+                    "matched_plan_items": matched_plan_items,
+                    "review_plan_items": review_plan_items,
+                    "matched_without_bom": matched_without_bom,
+                    "requirements": generated,
+                    "linked_requirements": linked,
+                    "unlinked_requirements": unlinked,
+                    "orders_changed": False,
+                },
+            )
+
+        return {
+            "accepted_count": len(accepted_rows),
+            "matched_plan_items": matched_plan_items,
+            "review_plan_items": review_plan_items,
+            "matched_without_bom": matched_without_bom,
+            "requirements": generated,
+            "linked_requirements": linked,
+            "unlinked_requirements": unlinked,
             "orders_changed": False,
         }
 
