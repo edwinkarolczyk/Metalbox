@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Iterator
 
 
-SCHEMA_VERSION = 15
+SCHEMA_VERSION = 16
 DEFAULT_ROUTE = ("Laser", "Giętarki", "Zgrzewarki", "Malarnia", "Pakownia")
 QUALITY_REASON_CODES = (
     "NIEZGODNY_WYMIAR",
@@ -310,6 +310,32 @@ class MetalboxStore:
 
                 CREATE INDEX IF NOT EXISTS idx_plan_requirements_component
                     ON accepted_plan_requirements(component_product_id, link_status);
+
+                CREATE TABLE IF NOT EXISTS accepted_plan_operation_loads (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    accepted_plan_item_id INTEGER NOT NULL REFERENCES accepted_plan_items(id) ON DELETE CASCADE,
+                    subject_product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+                    source_kind TEXT NOT NULL,
+                    subject_symbol TEXT NOT NULL,
+                    subject_name TEXT NOT NULL,
+                    planned_quantity REAL NOT NULL CHECK(planned_quantity >= 0),
+                    operation_id INTEGER NOT NULL REFERENCES product_operations(id) ON DELETE CASCADE,
+                    sequence_no INTEGER NOT NULL,
+                    department TEXT NOT NULL,
+                    operation_name TEXT NOT NULL,
+                    setup_minutes REAL NOT NULL DEFAULT 0 CHECK(setup_minutes >= 0),
+                    minutes_per_unit REAL NOT NULL DEFAULT 0 CHECK(minutes_per_unit >= 0),
+                    load_minutes REAL NOT NULL DEFAULT 0 CHECK(load_minutes >= 0),
+                    has_time_norm INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(accepted_plan_item_id, subject_product_id, operation_id)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_plan_operation_loads_item
+                    ON accepted_plan_operation_loads(accepted_plan_item_id, subject_product_id);
+
+                CREATE INDEX IF NOT EXISTS idx_plan_operation_loads_department
+                    ON accepted_plan_operation_loads(department, sequence_no);
 
                 CREATE TABLE IF NOT EXISTS session_workers (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2126,6 +2152,356 @@ class MetalboxStore:
             "unlinked_requirements": unlinked,
             "orders_changed": False,
         }
+
+    def list_accepted_plan_operation_loads(self) -> list[dict]:
+        with self._connect() as db:
+            rows = db.execute(
+                """
+                SELECT
+                    l.id,
+                    l.accepted_plan_item_id,
+                    api.order_code,
+                    api.shipping,
+                    api.ral,
+                    api.symbol AS root_symbol,
+                    api.name AS root_name,
+                    l.subject_product_id,
+                    l.source_kind,
+                    l.subject_symbol,
+                    l.subject_name,
+                    l.planned_quantity,
+                    l.operation_id,
+                    l.sequence_no,
+                    l.department,
+                    l.operation_name,
+                    l.setup_minutes,
+                    l.minutes_per_unit,
+                    l.load_minutes,
+                    l.has_time_norm,
+                    l.created_at
+                FROM accepted_plan_operation_loads l
+                JOIN accepted_plan_items api ON api.id = l.accepted_plan_item_id
+                ORDER BY api.row_no, l.subject_symbol, l.sequence_no, l.id
+                """
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_accepted_plan_department_load_summary(self) -> dict:
+        loads = self.list_accepted_plan_operation_loads()
+        accepted = self.list_accepted_plan_items()
+        requirements = self.list_accepted_plan_requirements()
+
+        departments: dict[str, dict] = {}
+        for row in loads:
+            department = str(row["department"])
+            item = departments.setdefault(
+                department,
+                {
+                    "department": department,
+                    "operation_count": 0,
+                    "timed_operation_count": 0,
+                    "untimed_operation_count": 0,
+                    "load_minutes": 0.0,
+                    "load_hours": 0.0,
+                },
+            )
+            item["operation_count"] += 1
+            if int(row["has_time_norm"]):
+                item["timed_operation_count"] += 1
+                item["load_minutes"] += float(row["load_minutes"])
+            else:
+                item["untimed_operation_count"] += 1
+
+        for item in departments.values():
+            item["load_hours"] = item["load_minutes"] / 60.0
+
+        production_component_ids = {
+            (
+                int(row["accepted_plan_item_id"]),
+                int(row["component_product_id"]),
+            )
+            for row in requirements
+            if (
+                row.get("component_product_id") is not None
+                and str(row.get("item_type") or "").upper()
+                in {"PÓŁPRODUKT", "DETAL"}
+            )
+        }
+
+        eligible_subjects: set[tuple[int, int]] = {
+            (int(row["id"]), int(row["product_id"]))
+            for row in accepted
+            if (
+                row.get("product_id") is not None
+                and row.get("product_match_status") == "DOPASOWANY"
+            )
+        }
+        eligible_subjects.update(production_component_ids)
+
+        subjects_with_loads = {
+            (int(row["accepted_plan_item_id"]), int(row["subject_product_id"]))
+            for row in loads
+        }
+
+        return {
+            "departments": sorted(
+                departments.values(),
+                key=lambda item: (-float(item["load_minutes"]), item["department"]),
+            ),
+            "operation_count": len(loads),
+            "timed_operation_count": sum(
+                1 for row in loads if int(row["has_time_norm"])
+            ),
+            "untimed_operation_count": sum(
+                1 for row in loads if not int(row["has_time_norm"])
+            ),
+            "total_load_minutes": sum(
+                float(row["load_minutes"])
+                for row in loads
+                if int(row["has_time_norm"])
+            ),
+            "total_load_hours": sum(
+                float(row["load_minutes"])
+                for row in loads
+                if int(row["has_time_norm"])
+            ) / 60.0,
+            "department_count": len(departments),
+            "subjects_without_technology_count": len(
+                eligible_subjects - subjects_with_loads
+            ),
+            "review_plan_items_count": sum(
+                1
+                for row in accepted
+                if (
+                    row.get("product_id") is None
+                    or row.get("product_match_status") != "DOPASOWANY"
+                )
+            ),
+        }
+
+    def rebuild_accepted_plan_operation_loads(
+        self,
+        *,
+        actor: str = "development-user",
+    ) -> dict:
+        # BOM jest przebudowywany przed obciążeniem, aby technologia zawsze liczyła
+        # najnowszą strukturę produktu.
+        bom_summary = self.rebuild_accepted_plan_requirements(actor=actor)
+        now = datetime.now(timezone.utc).isoformat()
+
+        with self._connect() as db:
+            accepted_rows = [
+                dict(row)
+                for row in db.execute(
+                    """
+                    SELECT
+                        id, row_no, order_code, symbol, name, quantity,
+                        product_id, product_match_status
+                    FROM accepted_plan_items
+                    ORDER BY row_no, id
+                    """
+                ).fetchall()
+            ]
+            requirement_rows = [
+                dict(row)
+                for row in db.execute(
+                    """
+                    SELECT
+                        accepted_plan_item_id,
+                        component_product_id,
+                        item_type,
+                        required_quantity
+                    FROM accepted_plan_requirements
+                    WHERE component_product_id IS NOT NULL
+                    ORDER BY accepted_plan_item_id, id
+                    """
+                ).fetchall()
+            ]
+            product_rows = [
+                dict(row)
+                for row in db.execute(
+                    "SELECT id, symbol, name, kind, status FROM products"
+                ).fetchall()
+            ]
+            products_by_id = {
+                int(row["id"]): row
+                for row in product_rows
+            }
+            operation_rows = [
+                dict(row)
+                for row in db.execute(
+                    """
+                    SELECT
+                        id, product_id, sequence_no, department, operation_name,
+                        setup_minutes, minutes_per_unit
+                    FROM product_operations
+                    ORDER BY product_id, sequence_no, id
+                    """
+                ).fetchall()
+            ]
+            operations_by_product: dict[int, list[dict]] = {}
+            for row in operation_rows:
+                operations_by_product.setdefault(
+                    int(row["product_id"]),
+                    [],
+                ).append(row)
+
+            db.execute("DELETE FROM accepted_plan_operation_loads")
+
+            # (pozycja planu, produkt) -> ilość. Ta agregacja powoduje, że ten sam
+            # półprodukt pojawiający się kilkoma ścieżkami BOM ma jeden batch i
+            # jedno przygotowanie operacji dla danej pozycji planu.
+            subjects: dict[tuple[int, int], dict] = {}
+
+            for accepted in accepted_rows:
+                if (
+                    accepted["product_id"] is None
+                    or accepted["product_match_status"] != "DOPASOWANY"
+                ):
+                    continue
+
+                product_id = int(accepted["product_id"])
+                subjects[(int(accepted["id"]), product_id)] = {
+                    "accepted_plan_item_id": int(accepted["id"]),
+                    "product_id": product_id,
+                    "source_kind": "PRODUKT",
+                    "quantity": float(accepted["quantity"] or 0),
+                }
+
+            for requirement in requirement_rows:
+                item_type = str(requirement["item_type"] or "").upper()
+                if item_type not in {"PÓŁPRODUKT", "DETAL"}:
+                    continue
+
+                accepted_plan_item_id = int(requirement["accepted_plan_item_id"])
+                product_id = int(requirement["component_product_id"])
+                key = (accepted_plan_item_id, product_id)
+                existing = subjects.get(key)
+                if existing is None:
+                    subjects[key] = {
+                        "accepted_plan_item_id": accepted_plan_item_id,
+                        "product_id": product_id,
+                        "source_kind": item_type,
+                        "quantity": float(requirement["required_quantity"] or 0),
+                    }
+                else:
+                    # Nie sumujemy ilości produktu głównego z pozycją potomną.
+                    # Dla komponentów tego samego produktu sumujemy wymagania z
+                    # różnych ścieżek BOM do jednego batcha.
+                    if existing["source_kind"] != "PRODUKT":
+                        existing["quantity"] += float(
+                            requirement["required_quantity"] or 0
+                        )
+
+            generated = 0
+            timed = 0
+            untimed = 0
+            subjects_without_technology = 0
+
+            for subject in subjects.values():
+                product_id = int(subject["product_id"])
+                product = products_by_id.get(product_id)
+                if product is None:
+                    continue
+
+                operations = operations_by_product.get(product_id, [])
+                if not operations:
+                    subjects_without_technology += 1
+                    continue
+
+                quantity = float(subject["quantity"])
+                for operation in operations:
+                    setup_minutes = float(operation["setup_minutes"] or 0)
+                    minutes_per_unit = float(operation["minutes_per_unit"] or 0)
+                    has_time_norm = int(
+                        setup_minutes > 0 or minutes_per_unit > 0
+                    )
+                    load_minutes = (
+                        setup_minutes + minutes_per_unit * quantity
+                        if has_time_norm
+                        else 0.0
+                    )
+
+                    db.execute(
+                        """
+                        INSERT INTO accepted_plan_operation_loads(
+                            accepted_plan_item_id,
+                            subject_product_id,
+                            source_kind,
+                            subject_symbol,
+                            subject_name,
+                            planned_quantity,
+                            operation_id,
+                            sequence_no,
+                            department,
+                            operation_name,
+                            setup_minutes,
+                            minutes_per_unit,
+                            load_minutes,
+                            has_time_norm,
+                            created_at
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            int(subject["accepted_plan_item_id"]),
+                            product_id,
+                            str(subject["source_kind"]),
+                            str(product["symbol"]),
+                            str(product["name"]),
+                            quantity,
+                            int(operation["id"]),
+                            int(operation["sequence_no"]),
+                            str(operation["department"]),
+                            str(operation["operation_name"]),
+                            setup_minutes,
+                            minutes_per_unit,
+                            load_minutes,
+                            has_time_norm,
+                            now,
+                        ),
+                    )
+                    generated += 1
+                    if has_time_norm:
+                        timed += 1
+                    else:
+                        untimed += 1
+
+            review_plan_items = sum(
+                1
+                for row in accepted_rows
+                if (
+                    row["product_id"] is None
+                    or row["product_match_status"] != "DOPASOWANY"
+                )
+            )
+
+            self._audit_in_connection(
+                db,
+                actor=actor,
+                action="accepted_plan_operation_loads_rebuilt",
+                entity_type="accepted_plan",
+                entity_id="current",
+                payload={
+                    "accepted_count": len(accepted_rows),
+                    "bom_requirements": bom_summary["requirements"],
+                    "operation_loads": generated,
+                    "timed_operations": timed,
+                    "untimed_operations": untimed,
+                    "subjects_without_technology": subjects_without_technology,
+                    "review_plan_items": review_plan_items,
+                    "orders_changed": False,
+                },
+            )
+
+        summary = self.get_accepted_plan_department_load_summary()
+        summary.update(
+            {
+                "bom_requirements": bom_summary["requirements"],
+                "orders_changed": False,
+            }
+        )
+        return summary
 
     def create_employee(
         self,
