@@ -4911,7 +4911,10 @@ class PlannerPage(PageBase):
             summary,
             self,
         )
-        dialog.exec()
+        self._show_inline_dialog(
+            dialog,
+            "Planista / Obciążenie działów",
+        )
 
     def _open_bom_requirements(self) -> None:
         accepted = self.store.list_accepted_plan_items()
@@ -4968,7 +4971,10 @@ class PlannerPage(PageBase):
             summary,
             self,
         )
-        dialog.exec()
+        self._show_inline_dialog(
+            dialog,
+            "Planista / Zapotrzebowanie BOM",
+        )
 
     def _open_approval(self) -> None:
         snapshot = self.store.get_latest_plan_snapshot()
@@ -4985,9 +4991,10 @@ class PlannerPage(PageBase):
             int(snapshot["id"]),
             self,
         )
-        result = dialog.exec()
-        if result == QDialog.Accepted and dialog.accepted_summary is not None:
-            self._load_latest_snapshot()
+        self._show_inline_dialog(
+            dialog,
+            "Planista / Do akceptacji",
+        )
 
     def _show_changes(self) -> None:
         if self.current_snapshot is None:
@@ -4998,13 +5005,56 @@ class PlannerPage(PageBase):
             )
             return
 
-        QMessageBox.information(
-            self,
-            "Zmiany względem poprzedniego snapshotu",
-            f'Nowe: {len(self.current_diff.get("added", []))}\n'
-            f'Zmienione: {len(self.current_diff.get("changed", []))}\n'
-            f'Usunięte: {len(self.current_diff.get("removed", []))}\n\n'
-            "Zmiany są tylko podglądem i nie zostały jeszcze zastosowane do zleceń.",
+        panel = QFrame()
+        panel.setObjectName("panel")
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(sp(18), sp(18), sp(18), sp(18))
+        layout.setSpacing(sp(12))
+
+        title = QLabel("Zmiany względem poprzedniego snapshotu")
+        title.setObjectName("detailTitle")
+        layout.addWidget(title)
+
+        summary = QHBoxLayout()
+        summary.addWidget(
+            card(
+                "Nowe",
+                str(len(self.current_diff.get("added", []))),
+                "pozycji",
+                220,
+            )
+        )
+        summary.addWidget(
+            card(
+                "Zmienione",
+                str(len(self.current_diff.get("changed", []))),
+                "pozycji",
+                220,
+            )
+        )
+        summary.addWidget(
+            card(
+                "Usunięte",
+                str(len(self.current_diff.get("removed", []))),
+                "pozycji",
+                220,
+            )
+        )
+        summary.addStretch(1)
+        layout.addLayout(summary)
+
+        note = QLabel(
+            "Zmiany są tylko podglądem i nie zostały jeszcze zastosowane do zleceń. "
+            "Akceptacja planu odbywa się osobno w widoku „Do akceptacji”."
+        )
+        note.setObjectName("hint")
+        note.setWordWrap(True)
+        layout.addWidget(note)
+
+        layout.addStretch(1)
+        self._show_inline_widget(
+            panel,
+            "Planista / Zmiany Excel",
         )
 
 
