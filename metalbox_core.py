@@ -2503,6 +2503,132 @@ class MetalboxStore:
         )
         return summary
 
+    def list_accepted_department_plan(
+        self,
+        department: str = "",
+    ) -> list[dict]:
+        rows = self.list_accepted_plan_operation_loads()
+        department = str(department or "").strip()
+
+        grouped: dict[tuple[int, int], list[dict]] = {}
+        for row in rows:
+            key = (
+                int(row["accepted_plan_item_id"]),
+                int(row["subject_product_id"]),
+            )
+            grouped.setdefault(key, []).append(row)
+
+        result: list[dict] = []
+        for group_rows in grouped.values():
+            ordered = sorted(
+                group_rows,
+                key=lambda item: (
+                    int(item["sequence_no"]),
+                    int(item["operation_id"]),
+                ),
+            )
+            operation_count = len(ordered)
+            for index, row in enumerate(ordered):
+                if department and str(row["department"]) != department:
+                    continue
+
+                item = dict(row)
+                item["operation_index"] = index + 1
+                item["operation_count"] = operation_count
+                item["is_first_operation"] = index == 0
+                item["is_last_operation"] = index == operation_count - 1
+
+                if operation_count == 1:
+                    item["plan_stage"] = "JEDYNY ETAP"
+                elif index == 0:
+                    item["plan_stage"] = "PIERWSZY ETAP"
+                elif index == operation_count - 1:
+                    item["plan_stage"] = "OSTATNI ETAP"
+                else:
+                    item["plan_stage"] = "KOLEJNY ETAP"
+
+                item["plan_status"] = "PLANOWANE"
+                result.append(item)
+
+        result.sort(
+            key=lambda item: (
+                str(item.get("shipping") or "9999-99-99"),
+                int(item.get("accepted_plan_item_id") or 0),
+                str(item.get("department") or ""),
+                int(item.get("sequence_no") or 0),
+                str(item.get("subject_symbol") or ""),
+            )
+        )
+        return result
+
+    def accepted_department_plan_summary(self) -> dict:
+        rows = self.list_accepted_department_plan()
+        departments: dict[str, dict] = {}
+
+        for row in rows:
+            department = str(row["department"])
+            item = departments.setdefault(
+                department,
+                {
+                    "department": department,
+                    "operation_count": 0,
+                    "subject_count": 0,
+                    "planned_quantity": 0.0,
+                    "timed_operation_count": 0,
+                    "untimed_operation_count": 0,
+                    "load_minutes": 0.0,
+                },
+            )
+            item["operation_count"] += 1
+            item["planned_quantity"] += float(row["planned_quantity"] or 0)
+            if int(row["has_time_norm"] or 0):
+                item["timed_operation_count"] += 1
+                item["load_minutes"] += float(row["load_minutes"] or 0)
+            else:
+                item["untimed_operation_count"] += 1
+
+        subject_keys_by_department: dict[str, set[tuple[int, int]]] = {}
+        for row in rows:
+            department = str(row["department"])
+            subject_keys_by_department.setdefault(department, set()).add(
+                (
+                    int(row["accepted_plan_item_id"]),
+                    int(row["subject_product_id"]),
+                )
+            )
+        for department, keys in subject_keys_by_department.items():
+            departments[department]["subject_count"] = len(keys)
+
+        for item in departments.values():
+            item["load_hours"] = float(item["load_minutes"]) / 60.0
+
+        return {
+            "rows": rows,
+            "row_count": len(rows),
+            "department_count": len(departments),
+            "departments": sorted(
+                departments.values(),
+                key=lambda item: item["department"],
+            ),
+            "timed_operation_count": sum(
+                int(item["timed_operation_count"])
+                for item in departments.values()
+            ),
+            "untimed_operation_count": sum(
+                int(item["untimed_operation_count"])
+                for item in departments.values()
+            ),
+            "total_load_minutes": sum(
+                float(item["load_minutes"])
+                for item in departments.values()
+            ),
+            "total_load_hours": sum(
+                float(item["load_minutes"])
+                for item in departments.values()
+            ) / 60.0,
+            "orders_changed": False,
+        }
+
     def create_employee(
         self,
         *,
