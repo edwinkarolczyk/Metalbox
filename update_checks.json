@@ -1,23 +1,23 @@
 {
   "schema": 1,
-  "version": "0.1.26",
-  "title": "Planista — zmiany do akceptacji",
-  "description": "Pierwsza kontrolowana synchronizacja planu: snapshot Excel pokazuje zmiany względem ostatniego zaakceptowanego planu. Akceptacja aktualizuje wyłącznie plan Metalbox, nie tworzy ani nie modyfikuje jeszcze zleceń produkcyjnych.",
+  "version": "0.1.27",
+  "title": "Planista — zapotrzebowanie BOM z zaakceptowanego planu",
+  "description": "Metalbox rozwija zaakceptowane pozycje planu przez BOM, także wielopoziomowo. Pokazuje wymagane półprodukty/detale/materiały, pozycje bez BOM i pozycje nadal do weryfikacji. Nie tworzy jeszcze zleceń ani nie wysyła pracy do działów.",
   "checks": [
     {
-      "id": "planner-approval-open",
-      "text": "1. PLANISTA → „Do akceptacji”. Ma pojawić się lista zmian względem zaakceptowanego planu z typem NOWY/ZMIENIONY/USUNIĘTY, szczegółami zmian oraz statusem produktu DOPASOWANY lub DO WERYFIKACJI.",
-      "trigger": "planner:approval_open"
+      "id": "planner-bom-open",
+      "text": "1. PLANISTA → „Zapotrzebowanie BOM”. Ma pojawić się podgląd zaakceptowanego planu z licznikami: dopasowane, do weryfikacji, bez BOM oraz wygenerowane pozycje BOM.",
+      "trigger": "planner:bom_requirements_open"
     },
     {
-      "id": "planner-approval-accept",
-      "text": "2. Kliknij „Zaakceptuj zmiany” i potwierdź. Metalbox ma zapisać zaakceptowany plan, zachować RAL przy pozycji planu i NIE tworzyć ani nie zmieniać zleceń produkcyjnych.",
-      "trigger": "planner:approval_accept"
+      "id": "planner-bom-calculated",
+      "text": "2. Metalbox ma przeliczyć BOM zaakceptowanego planu. Dla produktu z BOM ilość wymagana = ilość planu × ilość z BOM; przy wielopoziomowym BOM mnożenie ma przechodzić także na kolejne poziomy. Jeśli dopasowany produkt nie ma BOM, ma wejść do licznika „Bez BOM”.",
+      "trigger": "planner:bom_requirements_calculated"
     },
     {
-      "id": "planner-approval-clean",
-      "text": "3. Otwórz ponownie „Do akceptacji”. Jeśli nie było nowego snapshotu, liczba zmian ma wynosić 0, a przycisk „Zaakceptuj zmiany” ma być nieaktywny.",
-      "trigger": "planner:approval_clean"
+      "id": "planner-bom-no-orders",
+      "text": "3. Samo przeliczenie zapotrzebowania BOM nie może utworzyć ani zmienić zleceń produkcyjnych. Ten etap pozostaje wyłącznie podglądem przygotowania produkcji.",
+      "trigger": "planner:bom_requirements_no_orders"
     }
   ]
 }
