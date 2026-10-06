@@ -2694,6 +2694,778 @@ class MetalboxStore:
             "orders_changed": False,
         }
 
+    @staticmethod
+    def _normalize_plan_order_code(value: object) -> str:
+        code = str(value or "").strip().upper().replace(" ", "")
+        if not code:
+            return ""
+        if code.isdigit():
+            return f"ZL-{code}"
+        if code.startswith("ZL") and not code.startswith("ZL-"):
+            suffix = code[2:].lstrip("-_/")
+            return f"ZL-{suffix}" if suffix else ""
+        return code
+
+    @staticmethod
+    def _normalize_plan_deadline(value: object) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return ""
+
+        candidate = text.split("T", 1)[0]
+        for fmt in ("%Y-%m-%d", "%d.%m.%Y", "%d.%m.%y"):
+            try:
+                return datetime.strptime(candidate, fmt).strftime("%Y-%m-%d")
+            except ValueError:
+                pass
+
+        parts = candidate.rstrip(".").split(".")
+        if len(parts) == 2 and all(part.isdigit() for part in parts):
+            try:
+                day, month = (int(part) for part in parts)
+                year = datetime.now(timezone.utc).year
+                return datetime(year, month, day).strftime("%Y-%m-%d")
+            except ValueError:
+                return ""
+        return ""
+
+    @staticmethod
+    def _order_item_has_activity_in_connection(
+        db: sqlite3.Connection,
+        order_item_id: int,
+    ) -> bool:
+        row = db.execute(
+            """
+            SELECT
+                CASE
+                    WHEN EXISTS(
+                        SELECT 1
+                        FROM production_sessions s
+                        WHERE s.order_item_id = ?
+                    ) THEN 1
+                    WHEN EXISTS(
+                        SELECT 1
+                        FROM operation_progress op
+                        WHERE op.order_item_id = ?
+                          AND (
+                              op.good_qty > 0
+                              OR op.reject_qty > 0
+                              OR op.rework_qty > 0
+                              OR op.scrap_qty > 0
+                              OR op.status IN ('AKTYWNE', 'WSTRZYMANE', 'GOTOWE')
+                          )
+                    ) THEN 1
+                    ELSE 0
+                END AS active
+            """,
+            (int(order_item_id), int(order_item_id)),
+        ).fetchone()
+        return bool(int(row["active"])) if row is not None else False
+
+    def get_plan_publication_preview(
+        self,
+        *,
+        rebuild: bool = True,
+    ) -> dict:
+        if rebuild:
+            self.rebuild_accepted_plan_operation_loads(
+                actor="plan-publication-preview"
+            )
+
+        accepted = self.list_accepted_plan_items()
+        requirements = self.list_accepted_plan_requirements()
+        loads = self.list_accepted_plan_operation_loads()
+
+        requirements_by_item: dict[int, list[dict]] = {}
+        for row in requirements:
+            requirements_by_item.setdefault(
+                int(row["accepted_plan_item_id"]),
+                [],
+            ).append(row)
+
+        loads_by_subject: dict[tuple[int, int], list[dict]] = {}
+        for row in loads:
+            key = (
+                int(row["accepted_plan_item_id"]),
+                int(row["subject_product_id"]),
+            )
+            loads_by_subject.setdefault(key, []).append(row)
+
+        for rows in loads_by_subject.values():
+            rows.sort(
+                key=lambda item: (
+                    int(item["sequence_no"]),
+                    int(item["operation_id"]),
+                )
+            )
+
+        expected_by_item: dict[int, dict[int, dict]] = {}
+        current_keys: set[tuple[str, int]] = set()
+
+        for item in accepted:
+            item_id = int(item["id"])
+            subjects: dict[int, dict] = {}
+
+            if (
+                item.get("product_id") is not None
+                and item.get("product_match_status") == "DOPASOWANY"
+            ):
+                product_id = int(item["product_id"])
+                subjects[product_id] = {
+                    "product_id": product_id,
+                    "source_kind": "PRODUKT",
+                    "symbol": str(item.get("symbol") or ""),
+                    "name": str(
+                        item.get("matched_product_name")
+                        or item.get("name")
+                        or ""
+                    ),
+                    "quantity": float(item.get("quantity") or 0),
+                }
+
+                for requirement in requirements_by_item.get(item_id, []):
+                    if requirement.get("component_product_id") is None:
+                        continue
+                    item_type = str(
+                        requirement.get("item_type") or ""
+                    ).upper()
+                    if item_type not in {"PÓŁPRODUKT", "DETAL"}:
+                        continue
+
+                    product_id = int(requirement["component_product_id"])
+                    quantity = float(
+                        requirement.get("required_quantity") or 0
+                    )
+                    existing = subjects.get(product_id)
+                    if existing is None:
+                        subjects[product_id] = {
+                            "product_id": product_id,
+                            "source_kind": item_type,
+                            "symbol": str(requirement.get("symbol") or ""),
+                            "name": str(requirement.get("name") or ""),
+                            "quantity": quantity,
+                        }
+                    elif existing["source_kind"] != "PRODUKT":
+                        existing["quantity"] += quantity
+
+            expected_by_item[item_id] = subjects
+            for product_id in subjects:
+                current_keys.add(
+                    (str(item["row_key"]), int(product_id))
+                )
+
+        with self._connect() as db:
+            mapping_rows = [
+                dict(row)
+                for row in db.execute(
+                    """
+                    SELECT
+                        pps.id,
+                        pps.plan_row_key,
+                        pps.subject_product_id,
+                        pps.source_kind,
+                        pps.order_id,
+                        pps.order_item_id,
+                        pps.publication_id,
+                        o.code AS order_code,
+                        oi.symbol,
+                        oi.name,
+                        oi.quantity,
+                        oi.ral
+                    FROM plan_published_subjects pps
+                    JOIN orders o ON o.id = pps.order_id
+                    JOIN order_items oi ON oi.id = pps.order_item_id
+                    ORDER BY pps.id
+                    """
+                ).fetchall()
+            ]
+
+            mapping_by_key = {
+                (
+                    str(row["plan_row_key"]),
+                    int(row["subject_product_id"]),
+                ): row
+                for row in mapping_rows
+            }
+
+            order_activity: dict[int, bool] = {}
+            for row in mapping_rows:
+                order_id = int(row["order_id"])
+                if order_id in order_activity:
+                    continue
+                mapped_items = db.execute(
+                    """
+                    SELECT order_item_id
+                    FROM plan_published_subjects
+                    WHERE order_id = ?
+                    """,
+                    (order_id,),
+                ).fetchall()
+                order_activity[order_id] = any(
+                    self._order_item_has_activity_in_connection(
+                        db,
+                        int(item_row["order_item_id"]),
+                    )
+                    for item_row in mapped_items
+                )
+
+            removable_stale: list[dict] = []
+            protected_stale: list[dict] = []
+            for row in mapping_rows:
+                key = (
+                    str(row["plan_row_key"]),
+                    int(row["subject_product_id"]),
+                )
+                if key in current_keys:
+                    continue
+                target = (
+                    protected_stale
+                    if self._order_item_has_activity_in_connection(
+                        db,
+                        int(row["order_item_id"]),
+                    )
+                    else removable_stale
+                )
+                target.append(dict(row))
+
+            protected_order_ids = {
+                int(row["order_id"])
+                for row in protected_stale
+            }
+
+            eligible_rows: list[dict] = []
+            blocked_rows: list[dict] = []
+
+            for item in accepted:
+                item_id = int(item["id"])
+                row_key = str(item["row_key"])
+                order_code = self._normalize_plan_order_code(
+                    item.get("order_code")
+                )
+                subjects = expected_by_item.get(item_id, {})
+                reasons: list[str] = []
+
+                if (
+                    item.get("product_id") is None
+                    or item.get("product_match_status") != "DOPASOWANY"
+                ):
+                    reasons.append("Produkt ma status DO WERYFIKACJI.")
+
+                if not order_code:
+                    reasons.append("Brak numeru ZL.")
+
+                existing_order = None
+                if order_code:
+                    existing_order = db.execute(
+                        "SELECT id, code FROM orders WHERE code = ?",
+                        (order_code,),
+                    ).fetchone()
+
+                if existing_order is not None:
+                    order_id = int(existing_order["id"])
+                    linked_count = int(
+                        db.execute(
+                            """
+                            SELECT COUNT(*)
+                            FROM plan_published_subjects
+                            WHERE order_id = ?
+                            """,
+                            (order_id,),
+                        ).fetchone()[0]
+                    )
+                    if linked_count == 0:
+                        reasons.append(
+                            "Numer ZL istnieje już jako ręczne zlecenie."
+                        )
+                    elif order_activity.get(order_id, False):
+                        reasons.append(
+                            "Opublikowane ZL ma już rozpoczętą produkcję."
+                        )
+                    if order_id in protected_order_ids:
+                        reasons.append(
+                            "W ZL jest rozpoczęta pozycja, której nie ma już w aktualnym planie."
+                        )
+
+                subject_payloads: list[dict] = []
+                if subjects:
+                    for product_id, subject in subjects.items():
+                        quantity = float(subject["quantity"])
+                        if (
+                            quantity <= 0
+                            or abs(quantity - round(quantity)) > 1e-9
+                        ):
+                            reasons.append(
+                                f'{subject["symbol"]}: ilość {quantity:g} nie jest dodatnią liczbą całkowitą.'
+                            )
+
+                        operations = loads_by_subject.get(
+                            (item_id, int(product_id)),
+                            [],
+                        )
+                        if not operations:
+                            reasons.append(
+                                f'{subject["symbol"]}: brak technologii.'
+                            )
+                            continue
+
+                        departments = [
+                            str(operation["department"])
+                            for operation in operations
+                        ]
+                        if len(departments) != len(set(departments)):
+                            reasons.append(
+                                f'{subject["symbol"]}: technologia zawiera ten sam dział więcej niż raz.'
+                            )
+
+                        mapping = mapping_by_key.get(
+                            (row_key, int(product_id))
+                        )
+                        if mapping is not None and self._order_item_has_activity_in_connection(
+                            db,
+                            int(mapping["order_item_id"]),
+                        ):
+                            reasons.append(
+                                f'{subject["symbol"]}: produkcja tej pozycji została już rozpoczęta.'
+                            )
+
+                        subject_payloads.append(
+                            {
+                                **subject,
+                                "quantity": quantity,
+                                "operations": [
+                                    dict(operation)
+                                    for operation in operations
+                                ],
+                                "published": mapping is not None,
+                                "order_item_id": (
+                                    int(mapping["order_item_id"])
+                                    if mapping is not None
+                                    else None
+                                ),
+                            }
+                        )
+
+                if not subject_payloads and not reasons:
+                    reasons.append(
+                        "Brak produkowanych elementów do publikacji."
+                    )
+
+                payload = {
+                    "accepted_plan_item_id": item_id,
+                    "row_key": row_key,
+                    "order_code": str(item.get("order_code") or ""),
+                    "normalized_order_code": order_code,
+                    "shipping": str(item.get("shipping") or ""),
+                    "deadline": self._normalize_plan_deadline(
+                        item.get("shipping")
+                    ),
+                    "ral": str(item.get("ral") or ""),
+                    "symbol": str(item.get("symbol") or ""),
+                    "name": str(item.get("name") or ""),
+                    "subjects": subject_payloads,
+                    "reasons": list(dict.fromkeys(reasons)),
+                }
+                payload["action"] = (
+                    "AKTUALIZACJA"
+                    if subject_payloads
+                    and all(subject["published"] for subject in subject_payloads)
+                    else "NOWA PUBLIKACJA"
+                )
+
+                if payload["reasons"]:
+                    blocked_rows.append(payload)
+                else:
+                    eligible_rows.append(payload)
+
+        snapshot_ids = {
+            int(row["source_snapshot_id"])
+            for row in accepted
+            if row.get("source_snapshot_id") is not None
+        }
+        snapshot_id = max(snapshot_ids) if snapshot_ids else None
+
+        return {
+            "snapshot_id": snapshot_id,
+            "eligible_rows": eligible_rows,
+            "blocked_rows": blocked_rows,
+            "eligible_count": len(eligible_rows),
+            "blocked_count": len(blocked_rows),
+            "eligible_subject_count": sum(
+                len(row["subjects"])
+                for row in eligible_rows
+            ),
+            "removable_stale": removable_stale,
+            "protected_stale": protected_stale,
+            "removable_stale_count": len(removable_stale),
+            "protected_stale_count": len(protected_stale),
+            "orders_changed": False,
+        }
+
+    def publish_accepted_department_plan(
+        self,
+        *,
+        actor: str = "development-user",
+    ) -> dict:
+        preview = self.get_plan_publication_preview(rebuild=True)
+        now = datetime.now(timezone.utc).isoformat()
+
+        with self._connect() as db:
+            cursor = db.execute(
+                """
+                INSERT INTO plan_publications(
+                    snapshot_id,
+                    actor,
+                    published_at,
+                    eligible_rows,
+                    blocked_rows
+                )
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    preview.get("snapshot_id"),
+                    actor,
+                    now,
+                    int(preview["eligible_count"]),
+                    int(preview["blocked_count"]),
+                ),
+            )
+            publication_id = int(cursor.lastrowid)
+
+            created_orders = 0
+            created_items = 0
+            updated_items = 0
+            removed_items = 0
+            operation_count = 0
+            touched_orders: set[int] = set()
+
+            for stale in preview["removable_stale"]:
+                order_item_id = int(stale["order_item_id"])
+                if self._order_item_has_activity_in_connection(
+                    db,
+                    order_item_id,
+                ):
+                    continue
+                order_id = int(stale["order_id"])
+                db.execute(
+                    "DELETE FROM order_items WHERE id = ?",
+                    (order_item_id,),
+                )
+                removed_items += 1
+                touched_orders.add(order_id)
+
+            for row in preview["eligible_rows"]:
+                order_code = str(row["normalized_order_code"])
+                order = db.execute(
+                    "SELECT id, code FROM orders WHERE code = ?",
+                    (order_code,),
+                ).fetchone()
+
+                if order is None:
+                    order_cursor = db.execute(
+                        """
+                        INSERT INTO orders(
+                            code,
+                            client,
+                            deadline,
+                            priority,
+                            status,
+                            progress,
+                            ready_percent,
+                            created_at,
+                            updated_at
+                        )
+                        VALUES (?, 'PLAN EXCEL', ?, 'NORMALNY', 'NOWE', 0, 0, ?, ?)
+                        """,
+                        (
+                            order_code,
+                            str(row.get("deadline") or ""),
+                            now,
+                            now,
+                        ),
+                    )
+                    order_id = int(order_cursor.lastrowid)
+                    created_orders += 1
+                else:
+                    order_id = int(order["id"])
+                    linked_count = int(
+                        db.execute(
+                            """
+                            SELECT COUNT(*)
+                            FROM plan_published_subjects
+                            WHERE order_id = ?
+                            """,
+                            (order_id,),
+                        ).fetchone()[0]
+                    )
+                    if linked_count == 0:
+                        raise ValueError(
+                            f"{order_code} istnieje jako ręczne zlecenie. Publikacja została przerwana."
+                        )
+
+                touched_orders.add(order_id)
+
+                deadline = str(row.get("deadline") or "")
+                if deadline:
+                    db.execute(
+                        """
+                        UPDATE orders
+                        SET
+                            deadline = CASE
+                                WHEN deadline = '' THEN ?
+                                WHEN ? < deadline THEN ?
+                                ELSE deadline
+                            END,
+                            updated_at = ?
+                        WHERE id = ?
+                        """,
+                        (
+                            deadline,
+                            deadline,
+                            deadline,
+                            now,
+                            order_id,
+                        ),
+                    )
+
+                for subject in row["subjects"]:
+                    product_id = int(subject["product_id"])
+                    quantity = int(round(float(subject["quantity"])))
+                    mapping = db.execute(
+                        """
+                        SELECT id, order_item_id
+                        FROM plan_published_subjects
+                        WHERE plan_row_key = ?
+                          AND subject_product_id = ?
+                        """,
+                        (str(row["row_key"]), product_id),
+                    ).fetchone()
+
+                    if mapping is not None:
+                        order_item_id = int(mapping["order_item_id"])
+                        if self._order_item_has_activity_in_connection(
+                            db,
+                            order_item_id,
+                        ):
+                            raise ValueError(
+                                f'{order_code} • {subject["symbol"]}: produkcja została rozpoczęta. Publikacja nie może nadpisać pozycji.'
+                            )
+                        db.execute(
+                            "DELETE FROM operation_progress WHERE order_item_id = ?",
+                            (order_item_id,),
+                        )
+                        db.execute(
+                            """
+                            UPDATE order_items
+                            SET
+                                order_id = ?,
+                                symbol = ?,
+                                name = ?,
+                                quantity = ?,
+                                ral = ?,
+                                source_kind = ?,
+                                plan_row_key = ?
+                            WHERE id = ?
+                            """,
+                            (
+                                order_id,
+                                str(subject["symbol"]),
+                                str(subject["name"]),
+                                quantity,
+                                str(row.get("ral") or ""),
+                                str(subject["source_kind"]),
+                                str(row["row_key"]),
+                                order_item_id,
+                            ),
+                        )
+                        db.execute(
+                            """
+                            UPDATE plan_published_subjects
+                            SET
+                                source_kind = ?,
+                                order_id = ?,
+                                publication_id = ?,
+                                updated_at = ?
+                            WHERE id = ?
+                            """,
+                            (
+                                str(subject["source_kind"]),
+                                order_id,
+                                publication_id,
+                                now,
+                                int(mapping["id"]),
+                            ),
+                        )
+                        updated_items += 1
+                    else:
+                        position_no = int(
+                            db.execute(
+                                """
+                                SELECT COALESCE(MAX(position_no), 0) + 1
+                                FROM order_items
+                                WHERE order_id = ?
+                                """,
+                                (order_id,),
+                            ).fetchone()[0]
+                        )
+                        item_cursor = db.execute(
+                            """
+                            INSERT INTO order_items(
+                                order_id,
+                                position_no,
+                                symbol,
+                                name,
+                                quantity,
+                                ral,
+                                source_kind,
+                                plan_row_key
+                            )
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                order_id,
+                                position_no,
+                                str(subject["symbol"]),
+                                str(subject["name"]),
+                                quantity,
+                                str(row.get("ral") or ""),
+                                str(subject["source_kind"]),
+                                str(row["row_key"]),
+                            ),
+                        )
+                        order_item_id = int(item_cursor.lastrowid)
+                        db.execute(
+                            """
+                            INSERT INTO plan_published_subjects(
+                                plan_row_key,
+                                subject_product_id,
+                                source_kind,
+                                order_id,
+                                order_item_id,
+                                publication_id,
+                                created_at,
+                                updated_at
+                            )
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                str(row["row_key"]),
+                                product_id,
+                                str(subject["source_kind"]),
+                                order_id,
+                                order_item_id,
+                                publication_id,
+                                now,
+                                now,
+                            ),
+                        )
+                        created_items += 1
+
+                    for route_index, operation in enumerate(
+                        subject["operations"],
+                        start=1,
+                    ):
+                        db.execute(
+                            """
+                            INSERT INTO operation_progress(
+                                order_item_id,
+                                department,
+                                operation_name,
+                                sequence_no,
+                                planned_qty,
+                                good_qty,
+                                reject_qty,
+                                rework_qty,
+                                scrap_qty,
+                                status,
+                                updated_at
+                            )
+                            VALUES (?, ?, ?, ?, ?, 0, 0, 0, 0, 'OCZEKUJE', ?)
+                            """,
+                            (
+                                order_item_id,
+                                str(operation["department"]),
+                                str(operation["operation_name"]),
+                                route_index,
+                                quantity,
+                                now,
+                            ),
+                        )
+                        operation_count += 1
+
+            for order_id in list(touched_orders):
+                remaining = int(
+                    db.execute(
+                        "SELECT COUNT(*) FROM order_items WHERE order_id = ?",
+                        (order_id,),
+                    ).fetchone()[0]
+                )
+                if remaining == 0:
+                    db.execute(
+                        "DELETE FROM orders WHERE id = ?",
+                        (order_id,),
+                    )
+                    touched_orders.discard(order_id)
+                    continue
+                self._recalculate_order_percentages(db, order_id)
+
+            db.execute(
+                """
+                UPDATE plan_publications
+                SET
+                    created_orders = ?,
+                    created_items = ?,
+                    updated_items = ?,
+                    removed_items = ?,
+                    operation_count = ?
+                WHERE id = ?
+                """,
+                (
+                    created_orders,
+                    created_items,
+                    updated_items,
+                    removed_items,
+                    operation_count,
+                    publication_id,
+                ),
+            )
+
+            self._audit_in_connection(
+                db,
+                actor=actor,
+                action="accepted_plan_published",
+                entity_type="plan_publication",
+                entity_id=str(publication_id),
+                payload={
+                    "snapshot_id": preview.get("snapshot_id"),
+                    "eligible_rows": preview["eligible_count"],
+                    "blocked_rows": preview["blocked_count"],
+                    "created_orders": created_orders,
+                    "created_items": created_items,
+                    "updated_items": updated_items,
+                    "removed_items": removed_items,
+                    "operation_count": operation_count,
+                    "protected_stale": preview["protected_stale_count"],
+                },
+            )
+
+        return {
+            "publication_id": publication_id,
+            "eligible_rows": preview["eligible_count"],
+            "blocked_rows": preview["blocked_count"],
+            "created_orders": created_orders,
+            "created_items": created_items,
+            "updated_items": updated_items,
+            "removed_items": removed_items,
+            "operation_count": operation_count,
+            "protected_stale": preview["protected_stale_count"],
+            "orders_changed": bool(
+                created_orders
+                or created_items
+                or updated_items
+                or removed_items
+            ),
+        }
+
     def create_employee(
         self,
         *,
