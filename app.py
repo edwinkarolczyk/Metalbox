@@ -51,7 +51,7 @@ from PySide6.QtWidgets import (
 )
 
 APP_NAME = "Metalbox"
-APP_VERSION = "0.1.29"
+APP_VERSION = "0.1.30"
 LOCAL_DATA_ROOT = Path(
     os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
 ) / "Metalbox"
@@ -4585,6 +4585,238 @@ class PlanDepartmentScheduleView(QWidget):
                 )
 
 
+class PlanPublicationView(QWidget):
+    def __init__(self, store: MetalboxStore, parent=None):
+        super().__init__(parent)
+        self.store = store
+        self.preview: dict = {}
+        self.last_result: dict | None = None
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(sp(8), sp(8), sp(8), sp(8))
+        root.setSpacing(sp(12))
+
+        info = QLabel(
+            "Publikacja jest świadomym przejściem z planowania do realnej kolejki produkcyjnej. "
+            "Tylko pozycje oznaczone GOTOWE zostaną opublikowane. Pozycje z brakującą kartą "
+            "produktu, technologią, numerem ZL albo konfliktem z rozpoczętą produkcją pozostaną "
+            "zablokowane. Planista jest modułem Kierownika / Administratora."
+        )
+        info.setObjectName("hint")
+        info.setWordWrap(True)
+        root.addWidget(info)
+
+        cards = QHBoxLayout()
+        self.ready_card = card("Gotowe", "0", "pozycji planu", 190)
+        self.blocked_card = card("Zablokowane", "0", "wymagają poprawy", 200)
+        self.subject_card = card("Elementy", "0", "produktów / półproduktów", 210)
+        self.stale_card = card("Do wycofania", "0", "stare nieaktywne pozycje", 210)
+        self.protected_card = card("Chronione", "0", "rozpoczęta produkcja", 210)
+        cards.addWidget(self.ready_card)
+        cards.addWidget(self.blocked_card)
+        cards.addWidget(self.subject_card)
+        cards.addWidget(self.stale_card)
+        cards.addWidget(self.protected_card)
+        cards.addStretch(1)
+        root.addLayout(cards)
+
+        self.table = compact_table(
+            [
+                "Stan",
+                "Akcja",
+                "Nr ZL",
+                "Symbol",
+                "Nazwa",
+                "Termin",
+                "RAL",
+                "Elementy",
+                "Powód / uwagi",
+            ],
+            [],
+            [110, 135, 115, 160, 235, 115, 80, 250, 420],
+            470,
+        )
+        root.addWidget(self.table, 1)
+
+        warning = QLabel(
+            "Po publikacji pozycje GOTOWE stają się realnymi kolejkami produkcyjnymi. "
+            "Pracownik może wtedy rozpocząć pierwszą operację zgodnie z technologią. "
+            "Ponowna publikacja tego samego planu aktualizuje nieaktywne pozycje zamiast je dublować. "
+            "Pozycja z rozpoczętą produkcją nie jest nadpisywana automatycznie."
+        )
+        warning.setObjectName("hint")
+        warning.setWordWrap(True)
+        root.addWidget(warning)
+
+        footer = QHBoxLayout()
+        footer.addStretch(1)
+        self.publish_button = QPushButton("Publikuj gotowe pozycje")
+        self.publish_button.setObjectName("primary")
+        self.publish_button.clicked.connect(self._publish)
+        footer.addWidget(self.publish_button)
+        root.addLayout(footer)
+
+        self._refresh()
+        mark_update_check("planner:publication_preview")
+
+    @staticmethod
+    def _set_card_value(frame: QFrame, value: object) -> None:
+        label = frame.findChild(QLabel, "cardValue")
+        if label is not None:
+            label.setText(str(value))
+
+    def _refresh(self) -> None:
+        try:
+            self.preview = self.store.get_plan_publication_preview(rebuild=True)
+        except Exception as exc:
+            app_log(f"Błąd podglądu publikacji planu: {exc}", "ERROR")
+            QMessageBox.critical(
+                self,
+                "Błąd publikacji planu",
+                "Nie udało się przygotować podglądu publikacji. "
+                "Szczegóły zapisano w logu.",
+            )
+            self.preview = {
+                "eligible_rows": [],
+                "blocked_rows": [],
+                "eligible_count": 0,
+                "blocked_count": 0,
+                "eligible_subject_count": 0,
+                "removable_stale_count": 0,
+                "protected_stale_count": 0,
+            }
+
+        self._set_card_value(self.ready_card, self.preview.get("eligible_count", 0))
+        self._set_card_value(self.blocked_card, self.preview.get("blocked_count", 0))
+        self._set_card_value(
+            self.subject_card,
+            self.preview.get("eligible_subject_count", 0),
+        )
+        self._set_card_value(
+            self.stale_card,
+            self.preview.get("removable_stale_count", 0),
+        )
+        self._set_card_value(
+            self.protected_card,
+            self.preview.get("protected_stale_count", 0),
+        )
+
+        rows: list[dict] = []
+        for row in self.preview.get("eligible_rows", []):
+            rows.append({**row, "_state": "GOTOWE"})
+        for row in self.preview.get("blocked_rows", []):
+            rows.append({**row, "_state": "BLOKADA"})
+
+        self.table.setRowCount(len(rows))
+        for row_index, row in enumerate(rows):
+            subjects = ", ".join(
+                f'{subject.get("source_kind", "")}: {subject.get("symbol", "")}'
+                for subject in row.get("subjects", [])
+            ) or "—"
+            reasons = " • ".join(row.get("reasons", [])) or (
+                "Pozycja gotowa do publikacji."
+            )
+            values = [
+                row.get("_state", "—"),
+                row.get("action", "—"),
+                row.get("normalized_order_code") or row.get("order_code") or "—",
+                row.get("symbol") or "—",
+                row.get("name") or "—",
+                row.get("deadline") or row.get("shipping") or "—",
+                row.get("ral") or "—",
+                subjects,
+                reasons,
+            ]
+            self.table.setRowHeight(row_index, sp(40))
+            for column_index, value in enumerate(values):
+                self.table.setItem(
+                    row_index,
+                    column_index,
+                    QTableWidgetItem(str(value)),
+                )
+
+        can_publish = (
+            int(self.preview.get("eligible_count", 0)) > 0
+            or int(self.preview.get("removable_stale_count", 0)) > 0
+        )
+        self.publish_button.setEnabled(can_publish)
+
+    def _publish(self) -> None:
+        eligible = int(self.preview.get("eligible_count", 0))
+        blocked = int(self.preview.get("blocked_count", 0))
+        stale = int(self.preview.get("removable_stale_count", 0))
+
+        if eligible <= 0 and stale <= 0:
+            return
+
+        answer = QMessageBox.question(
+            self,
+            "Publikuj plan do produkcji",
+            f"Gotowe pozycje: {eligible}\n"
+            f"Zablokowane: {blocked}\n"
+            f"Stare nieaktywne do wycofania: {stale}\n\n"
+            "Po potwierdzeniu gotowe pozycje pojawią się w realnych kolejkach działów "
+            "i pracownik będzie mógł rozpocząć produkcję. Kontynuować?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+
+        try:
+            result = self.store.publish_accepted_department_plan(
+                actor="development-user"
+            )
+        except ValueError as exc:
+            app_log(f"Publikacja planu zablokowana: {exc}", "ERROR")
+            QMessageBox.warning(
+                self,
+                "Publikacja zablokowana",
+                str(exc),
+            )
+            self._refresh()
+            return
+        except Exception as exc:
+            app_log(f"Błąd publikacji planu: {exc}", "ERROR")
+            QMessageBox.critical(
+                self,
+                "Błąd publikacji planu",
+                "Nie udało się opublikować planu. Szczegóły zapisano w logu.",
+            )
+            return
+
+        self.last_result = result
+        mark_update_check("planner:publication_done")
+        if (
+            int(result.get("created_orders", 0)) == 0
+            and int(result.get("created_items", 0)) == 0
+            and int(result.get("removed_items", 0)) == 0
+        ):
+            mark_update_check("planner:publication_repeat_safe")
+
+        app_log(
+            "Publikacja planu: "
+            f"nowe_zl={result['created_orders']}, "
+            f"nowe_pozycje={result['created_items']}, "
+            f"aktualizacje={result['updated_items']}, "
+            f"wycofane={result['removed_items']}, "
+            f"operacje={result['operation_count']}, "
+            f"blokady={result['blocked_rows']}"
+        )
+
+        QMessageBox.information(
+            self,
+            "Plan opublikowany",
+            f'Nowe ZL: {result["created_orders"]}\n'
+            f'Nowe pozycje: {result["created_items"]}\n'
+            f'Zaktualizowane pozycje: {result["updated_items"]}\n'
+            f'Wycofane nieaktywne: {result["removed_items"]}\n'
+            f'Operacje w kolejkach: {result["operation_count"]}\n'
+            f'Pozycje zablokowane: {result["blocked_rows"]}',
+        )
+        self._refresh()
+
+
 class PlannerPage(PageBase):
     def __init__(self, go_home: Callable, store: MetalboxStore):
         super().__init__(
@@ -4631,6 +4863,10 @@ class PlannerPage(PageBase):
         department_plan_btn = QPushButton("Plan działów")
         department_plan_btn.clicked.connect(self._open_department_plan)
         controls.addWidget(department_plan_btn)
+
+        publish_btn = QPushButton("Publikacja planu")
+        publish_btn.clicked.connect(self._open_publication)
+        controls.addWidget(publish_btn)
 
         changes_btn = QPushButton("Zmiany Excel")
         changes_btn.clicked.connect(self._show_changes)
@@ -5071,6 +5307,25 @@ class PlannerPage(PageBase):
         self._set_card_value(self.added_card, len(diff.get("added", [])))
         self._set_card_value(self.changed_card, len(diff.get("changed", [])))
         self._set_card_value(self.removed_card, len(diff.get("removed", [])))
+
+    def _open_publication(self) -> None:
+        accepted = self.store.list_accepted_plan_items()
+        if not accepted:
+            QMessageBox.information(
+                self,
+                "Publikacja planu",
+                "Najpierw zaakceptuj plan Excel w „Do akceptacji”.",
+            )
+            return
+
+        view = PlanPublicationView(
+            self.store,
+            self,
+        )
+        self._show_inline_widget(
+            view,
+            "Planista / Publikacja planu",
+        )
 
     def _open_department_plan(self) -> None:
         accepted = self.store.list_accepted_plan_items()
