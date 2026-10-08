@@ -115,6 +115,41 @@ class MultiSourceTests(unittest.TestCase):
         self.assertEqual(len(restarted.list_sources()), 2)
         self.assertEqual(restarted.get_state(self.source_a["id"])["row_count"], 1)
 
+    def test_combined_preview_blocks_conflict_and_does_not_touch_originals(self) -> None:
+        original_a = self.plan_a.read_bytes()
+        original_b = self.plan_b.read_bytes()
+        self.registry.scan(self.source_a["id"])
+        self.registry.scan(self.source_b["id"])
+        with self.assertRaisesRegex(ValueError, "wspólnych pozycji"):
+            self.registry.build_combined_preview()
+        self.assertEqual(self.plan_a.read_bytes(), original_a)
+        self.assertEqual(self.plan_b.read_bytes(), original_b)
+
+    def test_combined_preview_keeps_provenance_and_unique_keys(self) -> None:
+        make_excel(self.plan_b, qty=30, symbol="1.325.68")
+        self.registry.scan(self.source_a["id"])
+        self.registry.scan(self.source_b["id"])
+        preview = self.registry.build_combined_preview()
+        self.assertEqual(preview["row_count"], 2)
+        self.assertEqual({x["source_name"] for x in preview["rows"]},
+                         {"Excel 1", "Excel 2"})
+        self.assertEqual(len({x["row_key"] for x in preview["rows"]}), 2)
+        self.assertEqual([x["row_no"] for x in preview["rows"]], [1, 2])
+        self.assertEqual(len(preview["sources"]), 2)
+
+    def test_combined_preview_blocks_unavailable_or_stale_source(self) -> None:
+        make_excel(self.plan_b, qty=30, symbol="1.325.68")
+        self.registry.scan(self.source_a["id"])
+        self.registry.scan(self.source_b["id"])
+        self.plan_a.unlink()
+        with self.assertRaisesRegex(ValueError, "niedostępny"):
+            self.registry.build_combined_preview()
+        make_excel(self.plan_a, qty=71)
+        with self.assertRaisesRegex(ValueError, "zmieniło się"):
+            self.registry.build_combined_preview()
+        self.registry.scan(self.source_a["id"])
+        self.assertEqual(self.registry.build_combined_preview()["row_count"], 2)
+
     def test_disable_source_does_not_remove_history(self) -> None:
         state = self.registry.scan(self.source_a["id"])
         self.registry.update_source(self.source_a["id"], enabled=False)
