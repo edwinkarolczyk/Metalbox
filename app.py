@@ -5343,7 +5343,7 @@ class PlanSourcesView(QWidget):
     def _resolve_conflict(self) -> None:
         unresolved = [
             item for item in self.sources.check_conflicts()
-            if not item.get("chosen_source_id")
+            if not item.get("chosen_source_id") and not item.get("keep_all")
         ]
         if not unresolved:
             QMessageBox.information(
@@ -5361,25 +5361,45 @@ class PlanSourcesView(QWidget):
         if not ok:
             return
         item = unresolved[labels.index(chosen)]
-        options = [
-            f'{detail["source"]} • {detail["quantity"]} szt. • '
-            f'termin {detail["shipping"] or "—"} • RAL {detail["ral"] or "—"}'
-            for detail in item["details"]
+        grouped: dict[str, list[dict]] = {}
+        for detail in item["details"]:
+            grouped.setdefault(detail["source_id"], []).append(detail)
+        all_option = "Zachowaj wszystkie — osobne partie z każdego Excela"
+        source_ids = list(grouped)
+        options = [all_option] + [
+            f'{grouped[source_id][0]["source"]} • '
+            f'{len(grouped[source_id])} pozycji w tym Excelu'
+            for source_id in source_ids
         ]
         selected, ok = QInputDialog.getItem(
-            self, "Źródło właściwe dla ZL",
-            "Który Excel jest źródłem nadrzędnym dla tej pozycji?",
+            self, "Rozstrzygnij partie produktu",
+            "Wybierz źródło nadrzędne lub zachowaj odrębne partie:",
             options, 0, False,
         )
         if not ok:
             return
-        detail = item["details"][options.index(selected)]
+        keep_all = selected == all_option
+        source_id = "" if keep_all else source_ids[options.index(selected) - 1]
+        details = "\n".join(
+            f'{item_detail["source"]}: {item_detail["quantity"]} szt., '
+            f'termin {item_detail["shipping"] or "—"}, '
+            f'RAL {item_detail["ral"] or "—"}'
+            for item_detail in item["details"]
+        )
+        warning = (
+            "Wszystkie pozycje z obu Exceli zostaną zachowane oddzielnie. "
+            "To może podwoić ilość, jeżeli są to w rzeczywistości kopie "
+            "tej samej partii. Potwierdź tylko dla rzeczywiście różnych partii."
+            if keep_all else
+            "We wspólnym podglądzie pozostaną pozycje wyłącznie z wybranego "
+            "źródła. Pozostałe wiersze nie będą doliczane."
+        )
         confirm = QMessageBox.question(
-            self, "Potwierdź wybór źródła",
-            f'Pozycja {item["order_code"]} / {item["symbol"]}\n'
-            f'Wybór: {detail["source"]}, {detail["quantity"]} szt.\n\n'
-            "Pozostałe kopie nie zostaną doliczone do wspólnego podglądu. "
-            "Wybór wygaśnie po zmianie zawartości któregokolwiek Excela.",
+            self, "Potwierdź rozstrzygnięcie ZL",
+            f'Pozycja {item["order_code"]} / {item["symbol"]}\n\n'
+            f'{details}\n\n{warning}\n\n'
+            "Wybór wygaśnie po zmianie zawartości któregokolwiek Excela. "
+            "Sama decyzja nie zatwierdza ani nie publikuje planu.",
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
         )
         if confirm != QMessageBox.Yes:
@@ -5388,7 +5408,8 @@ class PlanSourcesView(QWidget):
             self.sources.resolve_conflict(
                 order_code=item["order_code"],
                 symbol=item["symbol"],
-                chosen_source_id=detail["source_id"],
+                chosen_source_id=source_id,
+                keep_all=keep_all,
             )
         except ValueError as exc:
             QMessageBox.warning(self, "Nie zapisano wyboru", str(exc))
@@ -5420,7 +5441,10 @@ class PlanSourcesView(QWidget):
                 self.table.setItem(row_index, col, QTableWidgetItem(str(value)))
         self.table.resizeColumnsToContents()
         conflicts = self.sources.check_conflicts()
-        pending = sum(not c.get("chosen_source_id") for c in conflicts)
+        pending = sum(
+            not c.get("chosen_source_id") and not c.get("keep_all")
+            for c in conflicts
+        )
         self.conflict_label.setText(
             f"Pozycje wymagające rozstrzygnięcia: {pending} • "
             f"rozstrzygnięte: {len(conflicts) - pending}. "
@@ -5697,7 +5721,10 @@ class PlannerPage(PageBase):
             s for s in active if self.plan_sources.get_state(s["id"]).get("status") == "NOWE ZMIANY"
         ]
         conflicts = self.plan_sources.check_conflicts()
-        serious = sum(not c.get("chosen_source_id") for c in conflicts)
+        serious = sum(
+            not c.get("chosen_source_id") and not c.get("keep_all")
+            for c in conflicts
+        )
         self.multi_source_status.setText(
             f'Automatyczne źródła Excel: {len(active)}/{len(sources)} aktywnych '
             f'• w kontroli: {len(self._source_tasks)} '
