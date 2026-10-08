@@ -38,7 +38,7 @@ jobs:
       - name: Build Dev Runner
         shell: pwsh
         run: |
-          python -m PyInstaller --noconfirm --clean --windowed --onefile --name MetalboxDev --collect-all PySide6 --hidden-import PySide6.QtCore --hidden-import PySide6.QtGui --hidden-import PySide6.QtWidgets --hidden-import sqlite3 --hidden-import _sqlite3 --hidden-import metalbox_core dev_launcher.py
+          python -m PyInstaller --noconfirm --clean --windowed --onefile --name MetalboxDev --collect-all PySide6 --hidden-import PySide6.QtCore --hidden-import PySide6.QtGui --hidden-import PySide6.QtWidgets --hidden-import sqlite3 --hidden-import _sqlite3 --hidden-import uuid --hidden-import fnmatch --hidden-import xml.etree.ElementTree --hidden-import xml.sax.saxutils dev_launcher.py
 
       - name: Smoke test packaged Qt and SQLite runtime
         shell: pwsh
@@ -46,6 +46,16 @@ jobs:
           $proc = Start-Process -FilePath "dist\MetalboxDev.exe" -ArgumentList "--self-test-qt" -Wait -PassThru
           if ($proc.ExitCode -ne 0) {
             throw "MetalboxDev Qt self-test failed with exit code $($proc.ExitCode)"
+          }
+
+      - name: Smoke test dynamic source in frozen Runner
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          $proc = Start-Process -FilePath "dist\\MetalboxDev.exe" -ArgumentList @("--self-test-source", "$env:GITHUB_WORKSPACE") -Wait -PassThru
+          if ($proc.ExitCode -ne 0) {
+            throw "MetalboxDev failed dynamic source import and UI smoke test ($($proc.ExitCode))"
           }
 
       - name: Create Dev Runner manifest
