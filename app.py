@@ -5212,11 +5212,15 @@ class PlanSourcesView(QWidget):
         if not conflicts:
             QMessageBox.information(self, "Konflikty planów", "Brak wspólnych pozycji między źródłami.")
             return
-        lines = [
-            f'{row["status"]}: {row["order_code"]} / {row["symbol"]} '
-            f'({", ".join(row["sources"])})'
-            for row in conflicts
-        ]
+        lines = []
+        for row in conflicts:
+            lines.append(f'{row["status"]}: {row["order_code"]} / {row["symbol"]}')
+            for detail in row.get("details", []):
+                lines.append(
+                    f'    {detail["source"]}: {detail["quantity"]} szt., '
+                    f'termin {detail["shipping"] or "—"}, '
+                    f'RAL {detail["ral"] or "—"}'
+                )
         dialog = QMessageBox(self)
         dialog.setWindowTitle("Konflikty i duplikaty Excel")
         dialog.setText(
