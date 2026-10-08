@@ -829,6 +829,32 @@ class UiSmokeTest(unittest.TestCase):
             self.assertIs(page.view_stack.currentWidget(), page.main_view)
             page.close()
 
+    def test_home_department_grid_does_not_expand_into_empty_gap(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            store = MetalboxStore(Path(folder) / "home-layout.sqlite3")
+            store.seed_development_data()
+            store.ensure_development_progress_seeded()
+            config = metalbox_app.ClientConfig(
+                server_ip="127.0.0.1",
+                station_name="TEST — Development",
+                inactivity_seconds=90,
+                configured=True,
+                test_mode=True,
+            )
+            window = metalbox_app.MainWindow(config, store)
+            window.resize(1500, 900)
+            window.show()
+            self.qt_app.processEvents()
+            title = window.department_section_title
+            grid = window.grid_wrap
+            self.assertTrue(grid.isVisible())
+            self.assertLess(
+                grid.geometry().top() - title.geometry().bottom(),
+                metalbox_app.sp(42),
+            )
+            self.assertLessEqual(grid.height(), metalbox_app.sp(235))
+            window.close()
+
     def test_main_window_constructs(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             db_path = Path(temp) / "metalbox-smoke.sqlite3"
@@ -1176,6 +1202,18 @@ class UiSmokeTest(unittest.TestCase):
                 self.assertEqual(before, after)
                 self.assertIs(window.update_test_panel.parent(), window)
                 self.assertTrue(window.update_test_panel.isVisible())
+                panel = window.update_test_panel
+                self.assertTrue(panel.collapsed)
+                self.assertFalse(panel.scroll.isVisible())
+                self.assertEqual(panel.height(), metalbox_app.sp(50))
+                panel._toggle_collapsed()
+                self.qt_app.processEvents()
+                self.assertFalse(panel.collapsed)
+                self.assertTrue(panel.scroll.isVisible())
+                self.assertEqual(panel.height(), metalbox_app.sp(240))
+                panel._toggle_collapsed()
+                self.qt_app.processEvents()
+                self.assertEqual(panel.height(), metalbox_app.sp(50))
                 window.close()
             finally:
                 metalbox_app.DEV_UPDATE_STATE_FILE = original
