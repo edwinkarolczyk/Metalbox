@@ -146,7 +146,8 @@ class PlanSources:
             signature = f"{before.st_size}:{before.st_mtime_ns}"
             if (previous.get("signature") == signature and
                     previous.get("status") in {"BEZ ZMIAN", "NOWE ZMIANY", "GOTOWE"}):
-                state = {**previous, "status": "BEZ ZMIAN", "checked_at": checked_at}
+                # Oczekująca zmiana nie znika przy następnym odczycie bez zmian.
+                state = {**previous, "checked_at": checked_at}
                 self._write(self._state_path(source_id), state)
                 return {**state, "source_id": source_id}
             snapshot = safe_snapshot(src, self.root / "snapshots" / source_id)
@@ -157,7 +158,7 @@ class PlanSources:
             if previous.get("sha256") == snapshot.sha256:
                 snapshot.path.unlink(missing_ok=True)
                 state = {
-                    **previous, "status": "BEZ ZMIAN",
+                    **previous,
                     "signature": signature, "checked_at": checked_at, "error": "",
                 }
                 self._write(self._state_path(source_id), state)
