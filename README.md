@@ -12,6 +12,17 @@ W 0.1.30.2 pojawił się ekran **Planista → Źródła Excel (2+)**. Pozwala do
 
 W 0.1.30 uruchomiono kontrolowaną publikację zaakceptowanego planu do kolejek działów z uwzględnieniem zależności BOM. W 0.1.30.1 dodano opcjonalne, ręcznie potwierdzane lokalizacje palet, z powiązaniem na pozycję ZL, wyszukiwaniem, podziałem ilości i historią przekazania między zmianami. Lokalizacja to ostatni potwierdzony stan, a nie automatyczny pomiar położenia; nie blokuje prowadzenia produkcji. Przed użyciem na hali funkcję trzeba potwierdzić testami CI i odbiorem użytkownika.
 
+### Dwa równoległe pliki Excel — obsługa krok po kroku
+
+1. Otwórz **Planista → Źródła Excel (2+)** i dodaj **Excel 1** oraz **Excel 2** (lub więcej).
+2. Ustaw dla każdego interwał kontroli i włącz monitorowanie. Sprawdź stan źródeł w tabeli.
+3. Zmiany są wykrywane osobno dla każdego pliku; Excel jest otwierany tylko do skopiowania bajtów. Błąd jednego źródła nie kasuje zapamiętanego planu.
+4. **Pokaż konflikty** wyświetla wspólne ZL/produkt i rozbieżne wartości. **Rozstrzygnij ZL** pozwala wskazać właściwy Excel; decyzja wygasa po zmianie danych.
+5. Kliknij **Przygotuj do akceptacji**, aby otrzymać wspólny, niezmieniający produkcji snapshot. Jeśli którakolwiek aktywna kopia jest nieaktualna/niedostępna albo zawiera nierozstrzygnięty konflikt, operacja zostaje zablokowana.
+6. Wybierz **Do akceptacji** i zatwierdź wspólny podgląd jako kierownik. Dopiero osobna, świadoma **Publikacja planu** aktualizuje kolejki działów, zgodnie z istniejącymi blokadami pracy w toku.
+
+W tym etapie monitorowane są **konkretne pliki** Excel, nie całe katalogi. Skan folderów, wyłączenia nazw i automatyczne mapowanie oddzielnych struktur kolumn pozostają do wdrożenia przed pełną 0.1.31.
+
 ## Metalbox Launcher
 
 Docelowym punktem uruchamiania programu jest:
