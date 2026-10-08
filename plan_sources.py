@@ -353,7 +353,10 @@ class PlanSources:
         if not active:
             raise ValueError("Włącz przynajmniej jedno źródło Excel.")
         conflicts = self.check_conflicts()
-        undecided = [item for item in conflicts if not item.get("chosen_source_id")]
+        undecided = [
+            item for item in conflicts
+            if not item.get("chosen_source_id") and not item.get("keep_all")
+        ]
         if undecided:
             raise ValueError(
                 f"Źródła zawierają {len(undecided)} nierozstrzygniętych pozycji ZL/produkt. "
@@ -443,7 +446,8 @@ class PlanSources:
 
     def resolve_conflict(
         self, *, order_code: str, symbol: str,
-        chosen_source_id: str, actor: str = "development-user",
+        chosen_source_id: str = "", keep_all: bool = False,
+        actor: str = "development-user",
     ) -> dict:
         """Zapamiętuje świadomy wybór źródła z kontrolą wersji obu Exceli."""
         code = str(order_code or "").strip().upper()
@@ -455,8 +459,12 @@ class PlanSources:
         )
         if item is None:
             raise ValueError("Brak konfliktu lub duplikatu do rozstrzygnięcia.")
-        if chosen_source_id not in item["source_ids"]:
+        if not keep_all and chosen_source_id not in item["source_ids"]:
             raise ValueError("Wybrane źródło nie zawiera tej pozycji.")
+        if keep_all and chosen_source_id:
+            raise ValueError(
+                "Wybierz albo jedno źródło, albo pozostaw wszystkie osobne partie."
+            )
         signatures = {
             source_id: str(self.get_state(source_id).get("sha256") or "")
             for source_id in item["source_ids"]
@@ -467,7 +475,8 @@ class PlanSources:
         with self.lock:
             decisions = self._load(self.resolutions_path)
             decisions[key] = {
-                "chosen_source_id": chosen_source_id,
+                "chosen_source_id": "" if keep_all else chosen_source_id,
+                "mode": "keep_all" if keep_all else "choose_source",
                 "signatures": signatures,
                 "actor": str(actor).strip() or "development-user",
                 "resolved_at": datetime.now(timezone.utc).isoformat(),
@@ -508,20 +517,26 @@ class PlanSources:
                 match["source_id"]: str(self.get_state(match["source_id"]).get("sha256") or "")
                 for match in matches
             }
+            versions_valid = decision.get("signatures") == versions
             chosen = (
                 decision.get("chosen_source_id")
-                if decision.get("signatures") == versions
-                and decision.get("chosen_source_id") in versions
+                if versions_valid and decision.get("chosen_source_id") in versions
                 else None
+            )
+            keep_all = bool(
+                versions_valid and decision.get("mode") == "keep_all"
+                and len(versions) >= 2
             )
             conflicts.append({
                 "order_code": code, "symbol": symbol,
                 "status": (
-                    "ROZSTRZYGNIĘTY" if chosen
+                    "ODRĘBNE PARTIE" if keep_all
+                    else "ROZSTRZYGNIĘTY" if chosen
                     else "DO ROZSTRZYGNIĘCIA" if len(signatures) > 1
                     else "DUPLIKAT"
                 ),
                 "chosen_source_id": chosen,
+                "keep_all": keep_all,
                 "source_ids": [m["source_id"] for m in matches],
                 "sources": [m["source"] for m in matches],
                 "details": [
