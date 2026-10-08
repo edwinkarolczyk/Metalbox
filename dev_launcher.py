@@ -2,6 +2,12 @@ from __future__ import annotations
 
 import base64 as _bundle_base64
 import dataclasses as _bundle_dataclasses
+import fnmatch as _bundle_fnmatch
+import importlib
+import re as _bundle_re
+import uuid as _bundle_uuid
+from xml.etree import ElementTree as _bundle_elementtree
+from xml.sax import saxutils as _bundle_saxutils
 import hashlib
 import hmac as _bundle_hmac
 import json
@@ -21,7 +27,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from tkinter import Tk, messagebox, ttk
 
-DEV_RUNNER_VERSION = "1.3.4"
+DEV_RUNNER_VERSION = "1.3.5"
 REPO = "edwinkarolczyk/Metalbox"
 BRANCH = "main"
 API_BASE = f"https://api.github.com/repos/{REPO}"
@@ -383,6 +389,13 @@ def qt_self_test() -> int:
         finally:
             connection.close()
 
+        # W wersji zamrożonej muszą być dostępne również moduły standardowe,
+        # z których korzystają nowe pliki źródłowe pobierane po aktualizacji.
+        for name in ("uuid", "fnmatch", "xml.etree.ElementTree", "xml.sax.saxutils"):
+            module = importlib.import_module(name)
+            if module is None:
+                raise RuntimeError(f"Brak wymaganego modułu standardowego: {name}")
+
         from PySide6.QtWidgets import QApplication
 
         app = QApplication.instance() or QApplication(["MetalboxDevQtSelfTest"])
@@ -396,6 +409,73 @@ def qt_self_test() -> int:
             "ERROR",
         )
         return 22
+
+
+def source_self_test(source_dir: Path) -> int:
+    """Sprawdza aktualny kod uruchamiany przez spakowanego Runnera.
+
+    Sprawdza moduły z folderu źródłowego, a nie ich zamrożone wersje z EXE.
+    """
+    source_dir = Path(source_dir).resolve()
+    if not (source_dir / "app.py").is_file():
+        log(f"Test źródeł: brak app.py w {source_dir}", "ERROR")
+        return 24
+
+    prepare_qt_runtime()
+    import tempfile
+
+    modules = ("metalbox_core", "plan_excel", "plan_sources", "app")
+    existing = {name: sys.modules.pop(name, None) for name in modules}
+    sys.path.insert(0, str(source_dir))
+    try:
+        import metalbox_core
+        import plan_excel
+        import plan_sources
+        import app as metalbox_app
+        for name, module in (
+            ("metalbox_core", metalbox_core),
+            ("plan_excel", plan_excel),
+            ("plan_sources", plan_sources),
+            ("app", metalbox_app),
+        ):
+            actual = Path(module.__file__).resolve()
+            expected = (source_dir / f"{name}.py").resolve()
+            if actual != expected:
+                raise RuntimeError(
+                    f"Runner załadował niewłaściwy kod {name}: {actual} zamiast {expected}."
+                )
+
+        with tempfile.TemporaryDirectory(prefix="metalbox-runner-smoke-") as folder:
+            base = Path(folder)
+            store = metalbox_core.MetalboxStore(base / "test.sqlite3")
+            sources = plan_sources.PlanSources(base / "sources")
+            if store is None or sources.list_sources() != []:
+                raise RuntimeError("Test magazynu danych lub źródeł Excel nie przeszedł.")
+            # Sprawdzamy instancję prawdziwego widoku nowej wersji, bez uruchamiania okna.
+            from PySide6.QtWidgets import QApplication
+            application = QApplication.instance() or QApplication(["MetalboxDevSourceTest"])
+            page = metalbox_app.PlanSourcesView(sources, lambda: None)
+            page.close()
+            application.processEvents()
+
+        log(
+            f"Test kodu zewnętrznego OK: {metalbox_app.APP_VERSION}, "
+            "metalbox_core, plan_excel, plan_sources, Qt."
+        )
+        return 0
+    except Exception as exc:
+        log(
+            f"Test kodu zewnętrznego NIEUDANY: {type(exc).__name__}: {exc}\\n"
+            + traceback.format_exc(),
+            "ERROR",
+        )
+        return 25
+    finally:
+        sys.path.remove(str(source_dir))
+        for name in modules:
+            sys.modules.pop(name, None)
+            if existing[name] is not None:
+                sys.modules[name] = existing[name]
 
 
 def latest_commit() -> str:
@@ -725,6 +805,11 @@ def main() -> int:
 
     if "--self-test-qt" in sys.argv:
         return qt_self_test()
+    if "--self-test-source" in sys.argv:
+        index = sys.argv.index("--self-test-source")
+        if index + 1 >= len(sys.argv):
+            return 24
+        return source_self_test(Path(sys.argv[index + 1]))
 
     status = LauncherStatus()
     status.set("Uruchamianie MetalboxDev…")
