@@ -2274,6 +2274,217 @@ class SessionWorkersDialog(QDialog):
             QMessageBox.warning(self, "Nie można usunąć pracownika", str(exc))
 
 
+
+class TransportLocationsDialog(QDialog):
+    """Opcjonalny rejestr ostatniej potwierdzonej lokalizacji palet."""
+
+    def __init__(
+        self, store: MetalboxStore, *,
+        order_item_id: int | None = None,
+        order_code: str = "", product: str = "", parent=None,
+    ):
+        super().__init__(parent)
+        self.store = store
+        self.order_item_id = order_item_id
+        self.rows: list[dict] = []
+        self.setWindowTitle("Gdzie jest materiał? — lokalizacja palet")
+        self.setMinimumSize(sp(920), sp(690))
+        layout = QVBoxLayout(self)
+
+        heading = f"{order_code} • {product}" if order_item_id is not None else "Wszystkie zlecenia"
+        label = QLabel(
+            f"{heading}\nLokalizacja oznacza ostatnie potwierdzone miejsce, nie pomiar GPS."
+        )
+        label.setWordWrap(True)
+        label.setObjectName("hint")
+        layout.addWidget(label)
+
+        search_line = QHBoxLayout()
+        search_line.addWidget(QLabel("Szukaj ZL / produktu / palety / hali:"))
+        self.search_edit = QLineEdit()
+        self.search_edit.setPlaceholderText("Wpisz ZL, symbol, nazwę, paletę lub halę")
+        self.search_edit.textChanged.connect(self.refresh_data)
+        search_line.addWidget(self.search_edit, 1)
+        layout.addLayout(search_line)
+
+        self.table = QTableWidget(0, 9)
+        self.table.setHorizontalHeaderLabels([
+            "Paleta", "ZL", "Produkt", "Szt.", "Hala", "Strefa",
+            "Miejsce", "Przekazanie", "Potwierdzono",
+        ])
+        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.setMinimumHeight(sp(190))
+        self.table.itemSelectionChanged.connect(self._selected)
+        layout.addWidget(self.table, 1)
+
+        if self.order_item_id is not None:
+            form = QGridLayout()
+            self.unit_edit = QLineEdit()
+            self.unit_edit.setPlaceholderText("np. PAL-024")
+            self.quantity_edit = QSpinBox()
+            self.quantity_edit.setRange(1, 100000000)
+            self.hall_edit = QLineEdit()
+            self.hall_edit.setPlaceholderText("np. Hala 2")
+            self.zone_edit = QLineEdit()
+            self.zone_edit.setPlaceholderText("np. Przy zgrzewarkach")
+            self.place_edit = QLineEdit()
+            self.place_edit.setPlaceholderText("np. Regał A / stanowisko 3")
+            self.stage_edit = QLineEdit()
+            self.stage_edit.setPlaceholderText("np. Po gięciu")
+            self.target_edit = QLineEdit()
+            self.target_edit.setPlaceholderText("Wypełnij tylko przy podziale partii")
+            fields = [
+                ("Numer palety:", self.unit_edit),
+                ("Ilość sztuk:", self.quantity_edit),
+                ("Hala:", self.hall_edit),
+                ("Strefa:", self.zone_edit),
+                ("Miejsce:", self.place_edit),
+                ("Etap:", self.stage_edit),
+                ("Nowa paleta (podział):", self.target_edit),
+            ]
+            for index, (name, field) in enumerate(fields):
+                form.addWidget(QLabel(name), index // 2, (index % 2) * 2)
+                form.addWidget(field, index // 2, (index % 2) * 2 + 1)
+            layout.addLayout(form)
+            note = QLabel(
+                "Dodawanie lokalizacji jest dobrowolne. Aby przenieść całą paletę, "
+                "pozostaw jej ilość i zmień miejsce. Aby przenieść część, "
+                "wpisz mniejszą ilość i numer palety docelowej."
+            )
+            note.setWordWrap(True)
+            note.setObjectName("hint")
+            layout.addWidget(note)
+
+            actions = QHBoxLayout()
+            for title, handler in [
+                ("Dodaj paletę", self._register),
+                ("Przenieś / podziel", self._move),
+                ("Przekaż zmianie", lambda: self._handover("OCZEKUJE NA ODBIÓR")),
+                ("Potwierdź odbiór", lambda: self._handover("ODEBRANE")),
+            ]:
+                button = QPushButton(title)
+                if title == "Dodaj paletę":
+                    button.setObjectName("primary")
+                button.clicked.connect(handler)
+                actions.addWidget(button)
+            layout.addLayout(actions)
+
+        bottom = QHBoxLayout()
+        history_button = QPushButton("Historia zaznaczonej palety")
+        history_button.clicked.connect(self._show_history)
+        bottom.addWidget(history_button)
+        bottom.addStretch(1)
+        close_button = QPushButton("Zamknij")
+        close_button.clicked.connect(self.accept)
+        bottom.addWidget(close_button)
+        layout.addLayout(bottom)
+        self.refresh_data()
+
+    def refresh_data(self, *_args) -> None:
+        self.rows = self.store.list_transport_units(
+            search=self.search_edit.text(),
+            order_item_id=self.order_item_id,
+        )
+        self.table.setRowCount(len(self.rows))
+        for idx, row in enumerate(self.rows):
+            values = [
+                row["unit_code"], row["order_code"],
+                f'{row["symbol"]} • {row["name"]}', str(row["quantity"]),
+                row["hall"] or "NIEPOTWIERDZONA", row["zone"], row["place"],
+                row["handover_status"],
+                str(row["updated_at"])[:19].replace("T", " "),
+            ]
+            for col, value in enumerate(values):
+                self.table.setItem(idx, col, QTableWidgetItem(str(value)))
+        self.table.resizeColumnsToContents()
+
+    def _selected_row(self) -> dict | None:
+        index = self.table.currentRow()
+        return self.rows[index] if 0 <= index < len(self.rows) else None
+
+    def _selected(self) -> None:
+        if self.order_item_id is None:
+            return
+        row = self._selected_row()
+        if row is None:
+            return
+        self.unit_edit.setText(str(row["unit_code"]))
+        self.quantity_edit.setValue(int(row["quantity"]))
+        self.hall_edit.setText(str(row["hall"]))
+        self.zone_edit.setText(str(row["zone"]))
+        self.place_edit.setText(str(row["place"]))
+        self.stage_edit.setText(str(row["stage"]))
+        self.target_edit.clear()
+
+    def _register(self) -> None:
+        try:
+            self.store.register_transport_unit(
+                order_item_id=int(self.order_item_id),
+                unit_code=self.unit_edit.text(),
+                quantity=self.quantity_edit.value(),
+                hall=self.hall_edit.text(),
+                zone=self.zone_edit.text(),
+                place=self.place_edit.text(),
+                stage=self.stage_edit.text(),
+            )
+        except ValueError as exc:
+            QMessageBox.warning(self, "Nie zapisano palety", str(exc))
+            return
+        self.refresh_data()
+
+    def _move(self) -> None:
+        try:
+            self.store.move_transport_unit(
+                self.unit_edit.text(),
+                quantity=self.quantity_edit.value(),
+                hall=self.hall_edit.text(),
+                zone=self.zone_edit.text(),
+                place=self.place_edit.text(),
+                stage=self.stage_edit.text(),
+                target_unit_code=self.target_edit.text(),
+            )
+        except ValueError as exc:
+            QMessageBox.warning(self, "Nie przeniesiono palety", str(exc))
+            return
+        self.refresh_data()
+
+    def _handover(self, status: str) -> None:
+        try:
+            self.store.set_transport_handover(
+                self.unit_edit.text(), status=status,
+            )
+        except ValueError as exc:
+            QMessageBox.warning(self, "Nie zmieniono przekazania", str(exc))
+            return
+        self.refresh_data()
+
+    def _show_history(self) -> None:
+        row = self._selected_row()
+        if row is None:
+            QMessageBox.information(
+                self, "Historia palety", "Najpierw zaznacz paletę na liście."
+            )
+            return
+        records = self.store.list_transport_movements(unit_code=row["unit_code"])
+        lines = [
+            (
+                f'{record["occurred_at"][:19].replace("T", " ")} • '
+                f'{record["action"]} • {record["quantity"]} szt.\n'
+                f'{record["from_hall"]} / {record["from_zone"]} / {record["from_place"]}'
+                f' → {record["to_hall"]} / {record["to_zone"]} / {record["to_place"]}'
+                f' • {record["actor"]}'
+            )
+            for record in records
+        ]
+        QMessageBox.information(
+            self, f'Historia {row["unit_code"]}',
+            "\n\n".join(lines[:20]) if lines else "Nie ma zapisanych ruchów.",
+        )
+
+
 class DepartmentPage(PageBase):
     def __init__(self, department: str, go_home: Callable, store: MetalboxStore):
         super().__init__(
@@ -2316,6 +2527,10 @@ class DepartmentPage(PageBase):
             future.setObjectName("ghostGreen")
             future.clicked.connect(lambda: mock_message(self, "Półprodukty na zapas"))
             controls.addWidget(future)
+        find_location = QPushButton("Gdzie jest materiał?")
+        find_location.setObjectName("ghostGreen")
+        find_location.clicked.connect(self._show_locations)
+        controls.addWidget(find_location)
         controls.addStretch(1)
         self.root.addLayout(controls)
 
@@ -2515,6 +2730,7 @@ class DepartmentPage(PageBase):
             "Dodaj ilość",
             "Jakość",
             "Obsada",
+            "Lokalizacja",
             "Zakończ sesję",
             "Problem",
             "Szczegóły",
@@ -2574,6 +2790,11 @@ class DepartmentPage(PageBase):
                     lambda checked=False, z=code, i=item_id:
                     self._manage_workers(z, i)
                 )
+            elif text == "Lokalizacja":
+                btn.clicked.connect(
+                    lambda checked=False, i=item_id, z=code, p=product:
+                    self._show_locations(order_item_id=i, code=z, product=p)
+                )
             elif text == "Zakończ sesję":
                 btn.setEnabled(session is not None)
                 btn.clicked.connect(
@@ -2593,6 +2814,16 @@ class DepartmentPage(PageBase):
 
         box.addLayout(bottom)
         return frame
+
+    def _show_locations(
+        self, *, order_item_id: int | None = None,
+        code: str = "", product: str = "",
+    ) -> None:
+        dialog = TransportLocationsDialog(
+            self.store, order_item_id=order_item_id,
+            order_code=code, product=product, parent=self,
+        )
+        dialog.exec()
 
     def refresh_data(self) -> None:
         self.queue_rows = self.store.list_department_queue(self.department)
