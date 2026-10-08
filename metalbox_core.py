@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Iterator
 
 
-SCHEMA_VERSION = 18
+SCHEMA_VERSION = 19
 DEFAULT_ROUTE = ("Laser", "Giętarki", "Zgrzewarki", "Malarnia", "Pakownia")
 QUALITY_REASON_CODES = (
     "NIEZGODNY_WYMIAR",
@@ -392,6 +392,49 @@ class MetalboxStore:
 
                 CREATE INDEX IF NOT EXISTS idx_order_item_dependencies_child
                     ON order_item_dependencies(child_order_item_id, parent_order_item_id);
+
+
+                CREATE TABLE IF NOT EXISTS transport_units (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    unit_code TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                    order_item_id INTEGER NOT NULL REFERENCES order_items(id) ON DELETE CASCADE,
+                    quantity INTEGER NOT NULL CHECK(quantity > 0),
+                    hall TEXT NOT NULL DEFAULT '',
+                    zone TEXT NOT NULL DEFAULT '',
+                    place TEXT NOT NULL DEFAULT '',
+                    stage TEXT NOT NULL DEFAULT '',
+                    handover_status TEXT NOT NULL DEFAULT 'NA MIEJSCU',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    actor TEXT NOT NULL DEFAULT 'system'
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_transport_units_item
+                    ON transport_units(order_item_id, updated_at);
+
+                CREATE TABLE IF NOT EXISTS transport_movements (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    order_item_id INTEGER REFERENCES order_items(id) ON DELETE SET NULL,
+                    unit_code TEXT NOT NULL,
+                    target_unit_code TEXT NOT NULL DEFAULT '',
+                    action TEXT NOT NULL,
+                    quantity INTEGER NOT NULL CHECK(quantity > 0),
+                    from_hall TEXT NOT NULL DEFAULT '',
+                    from_zone TEXT NOT NULL DEFAULT '',
+                    from_place TEXT NOT NULL DEFAULT '',
+                    to_hall TEXT NOT NULL DEFAULT '',
+                    to_zone TEXT NOT NULL DEFAULT '',
+                    to_place TEXT NOT NULL DEFAULT '',
+                    note TEXT NOT NULL DEFAULT '',
+                    actor TEXT NOT NULL,
+                    occurred_at TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_transport_movements_unit
+                    ON transport_movements(unit_code, occurred_at);
+
+                CREATE INDEX IF NOT EXISTS idx_transport_movements_item
+                    ON transport_movements(order_item_id, occurred_at);
 
                 CREATE TABLE IF NOT EXISTS session_workers (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -4677,6 +4720,291 @@ class MetalboxStore:
         result = dict(order)
         result["items"] = [dict(row) for row in items]
         return result
+
+
+    @staticmethod
+    def _transport_label(value: object, field: str, *, required: bool = False) -> str:
+        result = str(value or "").strip()
+        if required and not result:
+            raise ValueError(f"Pole {field} nie może być puste.")
+        if len(result) > 120:
+            raise ValueError(f"Pole {field} może mieć maksymalnie 120 znaków.")
+        return result
+
+    def get_transport_unit(self, unit_code: str) -> dict | None:
+        with self._connect() as db:
+            row = db.execute(
+                """
+                SELECT tu.*, o.code AS order_code, oi.position_no,
+                       oi.symbol, oi.name, oi.quantity AS order_quantity
+                FROM transport_units tu
+                JOIN order_items oi ON oi.id = tu.order_item_id
+                JOIN orders o ON o.id = oi.order_id
+                WHERE tu.unit_code = ? COLLATE NOCASE
+                """,
+                (str(unit_code).strip(),),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def list_transport_units(
+        self, *, search: str = "", order_item_id: int | None = None,
+        limit: int = 200,
+    ) -> list[dict]:
+        clauses = []
+        params: list[object] = []
+        if order_item_id is not None:
+            clauses.append("tu.order_item_id = ?")
+            params.append(int(order_item_id))
+        if search.strip():
+            clauses.append(
+                """(tu.unit_code LIKE ? OR o.code LIKE ? OR
+                    oi.symbol LIKE ? OR oi.name LIKE ? OR
+                    tu.hall LIKE ? OR tu.zone LIKE ? OR tu.place LIKE ?)"""
+            )
+            params.extend([f"%{search.strip()}%"] * 7)
+        where = "WHERE " + " AND ".join(clauses) if clauses else ""
+        params.append(max(1, min(int(limit), 1000)))
+        with self._connect() as db:
+            rows = db.execute(
+                f"""
+                SELECT tu.*, o.code AS order_code, oi.position_no,
+                       oi.symbol, oi.name, oi.quantity AS order_quantity
+                FROM transport_units tu
+                JOIN order_items oi ON oi.id = tu.order_item_id
+                JOIN orders o ON o.id = oi.order_id
+                {where}
+                ORDER BY tu.updated_at DESC, tu.id DESC
+                LIMIT ?
+                """,
+                params,
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def list_transport_movements(self, *, unit_code: str = "", order_item_id: int | None = None,
+                                 limit: int = 100) -> list[dict]:
+        clauses = []
+        params: list[object] = []
+        if unit_code.strip():
+            clauses.append("(unit_code = ? COLLATE NOCASE OR target_unit_code = ? COLLATE NOCASE)")
+            params.extend([unit_code.strip()] * 2)
+        if order_item_id is not None:
+            clauses.append("order_item_id = ?")
+            params.append(int(order_item_id))
+        where = "WHERE " + " AND ".join(clauses) if clauses else ""
+        params.append(max(1, min(int(limit), 1000)))
+        with self._connect() as db:
+            rows = db.execute(
+                f"SELECT * FROM transport_movements {where} ORDER BY id DESC LIMIT ?",
+                params,
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def register_transport_unit(
+        self, *, order_item_id: int, unit_code: str, quantity: int,
+        hall: str, zone: str = "", place: str = "", stage: str = "",
+        actor: str = "development-user",
+    ) -> dict:
+        code = self._transport_label(unit_code, "ID palety", required=True)
+        hall = self._transport_label(hall, "hala", required=True)
+        zone = self._transport_label(zone, "strefa")
+        place = self._transport_label(place, "miejsce")
+        stage = self._transport_label(stage, "etap")
+        actor = self._transport_label(actor, "operator", required=True)
+        quantity = int(quantity)
+        if quantity <= 0:
+            raise ValueError("Ilość sztuk musi być większa od zera.")
+        now = datetime.now(timezone.utc).isoformat()
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            item = db.execute(
+                "SELECT id, quantity FROM order_items WHERE id = ?",
+                (int(order_item_id),),
+            ).fetchone()
+            if item is None:
+                raise ValueError("Nie znaleziono pozycji produkcyjnej.")
+            assigned = db.execute(
+                "SELECT COALESCE(SUM(quantity), 0) FROM transport_units WHERE order_item_id = ?",
+                (int(order_item_id),),
+            ).fetchone()[0]
+            if quantity + int(assigned) > int(item["quantity"]):
+                raise ValueError(
+                    "Ilość na paletach przekroczyłaby planowaną ilość pozycji ZL."
+                )
+            if db.execute(
+                "SELECT 1 FROM transport_units WHERE unit_code = ? COLLATE NOCASE",
+                (code,),
+            ).fetchone():
+                raise ValueError(f"Identyfikator {code} jest już przypisany do palety.")
+            db.execute(
+                """
+                INSERT INTO transport_units (
+                    unit_code, order_item_id, quantity, hall, zone, place,
+                    stage, created_at, updated_at, actor
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (code, int(order_item_id), quantity, hall, zone, place,
+                 stage, now, now, actor),
+            )
+            self._transport_event(
+                db, order_item_id=int(order_item_id), unit_code=code,
+                target_unit_code=code, action="UTWORZONO", quantity=quantity,
+                from_location=("", "", ""), to_location=(hall, zone, place),
+                actor=actor, now=now,
+            )
+        return self.get_transport_unit(code)
+
+    @staticmethod
+    def _transport_event(
+        db: sqlite3.Connection, *, order_item_id: int, unit_code: str,
+        target_unit_code: str, action: str, quantity: int,
+        from_location: tuple[str, str, str], to_location: tuple[str, str, str],
+        actor: str, now: str, note: str = "",
+    ) -> None:
+        db.execute(
+            """
+            INSERT INTO transport_movements (
+                order_item_id, unit_code, target_unit_code, action, quantity,
+                from_hall, from_zone, from_place, to_hall, to_zone, to_place,
+                note, actor, occurred_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (order_item_id, unit_code, target_unit_code, action, quantity,
+             *from_location, *to_location, note, actor, now),
+        )
+        MetalboxStore._audit_in_connection(
+            db, actor=actor, action=f"transport_{action.lower()}",
+            entity_type="transport_unit", entity_id=unit_code,
+            payload={
+                "target_unit_code": target_unit_code,
+                "order_item_id": order_item_id, "quantity": quantity,
+                "from": from_location, "to": to_location, "note": note,
+            },
+        )
+
+    def move_transport_unit(
+        self, unit_code: str, *, quantity: int, hall: str, zone: str = "",
+        place: str = "", target_unit_code: str = "", stage: str | None = None,
+        actor: str = "development-user",
+    ) -> dict:
+        code = self._transport_label(unit_code, "ID palety", required=True)
+        hall = self._transport_label(hall, "hala", required=True)
+        zone = self._transport_label(zone, "strefa")
+        place = self._transport_label(place, "miejsce")
+        target_code = self._transport_label(target_unit_code, "nowa paleta")
+        actor = self._transport_label(actor, "operator", required=True)
+        if stage is not None:
+            stage = self._transport_label(stage, "etap")
+        quantity = int(quantity)
+        if quantity <= 0:
+            raise ValueError("Przenoszona ilość musi być większa od zera.")
+        now = datetime.now(timezone.utc).isoformat()
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            source = db.execute(
+                "SELECT * FROM transport_units WHERE unit_code = ? COLLATE NOCASE",
+                (code,),
+            ).fetchone()
+            if source is None:
+                raise ValueError("Nie znaleziono palety do przeniesienia.")
+            if quantity > int(source["quantity"]):
+                raise ValueError("Nie można przenieść więcej sztuk niż na palecie.")
+            old_location = (source["hall"], source["zone"], source["place"])
+            new_location = (hall, zone, place)
+            remaining = int(source["quantity"]) - quantity
+            if remaining == 0:
+                if target_code and target_code.casefold() != code.casefold():
+                    raise ValueError("Przy przenoszeniu całej palety pozostaw ten sam identyfikator.")
+                db.execute(
+                    """
+                    UPDATE transport_units SET hall = ?, zone = ?, place = ?,
+                        stage = ?, handover_status = 'NA MIEJSCU',
+                        actor = ?, updated_at = ? WHERE id = ?
+                    """,
+                    (hall, zone, place, source["stage"] if stage is None else stage,
+                     actor, now, source["id"]),
+                )
+                target_code = source["unit_code"]
+                action = "PRZENIESIONO"
+            else:
+                if not target_code or target_code.casefold() == code.casefold():
+                    raise ValueError("Przy podziale podaj inny identyfikator palety docelowej.")
+                target = db.execute(
+                    "SELECT * FROM transport_units WHERE unit_code = ? COLLATE NOCASE",
+                    (target_code,),
+                ).fetchone()
+                if target is not None:
+                    if int(target["order_item_id"]) != int(source["order_item_id"]):
+                        raise ValueError("Nie można mieszać pozycji ZL na tej samej palecie.")
+                    if (target["hall"], target["zone"], target["place"]) != new_location:
+                        raise ValueError("Lokalizacja palety docelowej jest inna niż wskazana.")
+                    db.execute(
+                        """
+                        UPDATE transport_units SET quantity = quantity + ?,
+                            stage = ?, handover_status = 'NA MIEJSCU',
+                            updated_at = ?, actor = ? WHERE id = ?
+                        """,
+                        (quantity, target["stage"] if stage is None else stage,
+                         now, actor, target["id"]),
+                    )
+                else:
+                    db.execute(
+                        """
+                        INSERT INTO transport_units (
+                            unit_code, order_item_id, quantity, hall, zone, place,
+                            stage, handover_status, created_at, updated_at, actor
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'NA MIEJSCU', ?, ?, ?)
+                        """,
+                        (target_code, source["order_item_id"], quantity, hall, zone,
+                         place, source["stage"] if stage is None else stage,
+                         now, now, actor),
+                    )
+                db.execute(
+                    "UPDATE transport_units SET quantity = ?, updated_at = ?, actor = ? WHERE id = ?",
+                    (remaining, now, actor, source["id"]),
+                )
+                action = "PODZIELONO"
+            self._transport_event(
+                db, order_item_id=int(source["order_item_id"]),
+                unit_code=str(source["unit_code"]), target_unit_code=target_code,
+                action=action, quantity=quantity, from_location=old_location,
+                to_location=new_location, actor=actor, now=now,
+            )
+        return self.get_transport_unit(target_code)
+
+    def set_transport_handover(
+        self, unit_code: str, *, status: str,
+        actor: str = "development-user",
+    ) -> dict:
+        if status not in {"OCZEKUJE NA ODBIÓR", "ODEBRANE"}:
+            raise ValueError("Nieprawidłowy status przekazania.")
+        code = self._transport_label(unit_code, "ID palety", required=True)
+        actor = self._transport_label(actor, "operator", required=True)
+        now = datetime.now(timezone.utc).isoformat()
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            unit = db.execute(
+                "SELECT * FROM transport_units WHERE unit_code = ? COLLATE NOCASE",
+                (code,),
+            ).fetchone()
+            if unit is None:
+                raise ValueError("Nie znaleziono palety.")
+            if status == "ODEBRANE" and unit["handover_status"] != "OCZEKUJE NA ODBIÓR":
+                raise ValueError("Najpierw oznacz paletę jako oczekującą na odbiór.")
+            if status == unit["handover_status"]:
+                return dict(unit)
+            db.execute(
+                "UPDATE transport_units SET handover_status = ?, actor = ?, updated_at = ? WHERE id = ?",
+                (status, actor, now, unit["id"]),
+            )
+            loc = (unit["hall"], unit["zone"], unit["place"])
+            self._transport_event(
+                db, order_item_id=int(unit["order_item_id"]),
+                unit_code=str(unit["unit_code"]), target_unit_code=str(unit["unit_code"]),
+                action="PRZEKAZANIE" if status == "OCZEKUJE NA ODBIÓR" else "ODBIÓR",
+                quantity=int(unit["quantity"]), from_location=loc,
+                to_location=loc, actor=actor, now=now, note=status,
+            )
+        return self.get_transport_unit(code)
 
     def list_department_queue(self, department: str) -> list[dict]:
         with self._connect() as db:
