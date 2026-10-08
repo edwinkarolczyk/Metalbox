@@ -364,7 +364,8 @@ Na etapie pilotażu obecny Excel pozostaje nadrzędnym planem firmy.
 - [x] Odczyt tylko z kopii, zamykanie źródła przed parsowaniem; w przypadku błędu źródła dane nie są usuwane.
 - [x] Rozpoznawanie wspólnego ZL/produktu w dwóch Excelach oraz pokazanie rozbieżnych ilości, terminów i RAL.
 - [x] Świadome przygotowanie **wspólnego PODGLĄDU**, z blokadą konfliktów, awarii i nieaktualnych źródeł; osobne zatwierdzenie planu przez istniejący panel kierownika.
-- [ ] Rozstrzyganie wspólnych pozycji na poziomie konkretnych wierszy bez konieczności wyłączania całego źródła.
+- [x] Wstępne rozstrzyganie wspólnych pozycji ZL/produkt bez wyłączania całego źródła: kierownik wybiera właściwy Excel dla danej pozycji; wybór wygasa po zmianie snapshotu któregokolwiek źródła.
+- [ ] Rozwinięcie rozstrzygania dla kilku osobnych partii tego samego symbolu w ramach jednego ZL (gdy pozycje nie są rzeczywistymi duplikatami).
 - [ ] Monitorowanie folderów, wybór kopii oraz listy ignorowanych plików (np. blokad Excel ~$ i archiwa).
 - [ ] Osobne mapowanie kolumn dla każdego źródła także w automatycznym skanerze (na teraz mapowanie ręczne dotyczy dotychczasowego importu).
 - [ ] Odbiór produkcyjny na dwóch prawdziwych firmowych Excelach i test publikacji z ochroną aktywnych sesji.
