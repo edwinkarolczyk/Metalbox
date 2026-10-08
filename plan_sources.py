@@ -5,6 +5,7 @@ import json
 import os
 import threading
 import uuid
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -187,7 +188,7 @@ class PlanSources:
             # Nie podmieniamy zaakceptowanego planu. Osobne stany chronią każde źródło.
             self._write(self._state_path(source_id), state)
             return {**state, "source_id": source_id}
-        except (OSError, ValueError, KeyError, TypeError) as exc:
+        except (OSError, ValueError, KeyError, TypeError, zipfile.BadZipFile) as exc:
             # Awaria źródła nie oznacza usunięcia pozycji, a innego źródła nie blokuje.
             state = {
                 **previous, "status": "BŁĄD ODCZYTU", "error": str(exc),
