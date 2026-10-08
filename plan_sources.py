@@ -19,6 +19,7 @@ class PlanSources:
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
         self.config_path = self.root / "sources.json"
+        self.resolutions_path = self.root / "conflict_resolutions.json"
         self.lock = threading.RLock()
         (self.root / "states").mkdir(exist_ok=True)
         (self.root / "snapshots").mkdir(exist_ok=True)
@@ -206,11 +207,16 @@ class PlanSources:
         if not active:
             raise ValueError("Włącz przynajmniej jedno źródło Excel.")
         conflicts = self.check_conflicts()
-        if conflicts:
+        undecided = [item for item in conflicts if not item.get("chosen_source_id")]
+        if undecided:
             raise ValueError(
-                f"Źródła zawierają {len(conflicts)} wspólnych pozycji ZL/produkt. "
-                "Najpierw rozstrzygnij konflikty i duplikaty — nie wolno ich sumować."
+                f"Źródła zawierają {len(undecided)} nierozstrzygniętych pozycji ZL/produkt. "
+                "Wybierz właściwe źródło dla każdego konfliktu lub duplikatu."
             )
+        winners = {
+            (item["order_code"], item["symbol"]): item["chosen_source_id"]
+            for item in conflicts
+        }
 
         rows = []
         versions = []
@@ -247,6 +253,13 @@ class PlanSources:
                 "sha256": state["sha256"], "checked_at": state["checked_at"],
             })
             for row in state["rows"]:
+                pair = (
+                    str(row.get("order_code") or "").strip().upper(),
+                    str(row.get("symbol") or "").strip().upper(),
+                )
+                chosen = winners.get(pair)
+                if chosen and chosen != src["id"]:
+                    continue
                 entry = dict(row)
                 entry["source_name"] = src["name"]
                 entry["source_id"] = src["id"]
@@ -255,6 +268,40 @@ class PlanSources:
                 entry["row_no"] = len(rows) + 1
                 rows.append(entry)
         return {"rows": rows, "sources": versions, "row_count": len(rows)}
+
+    def resolve_conflict(
+        self, *, order_code: str, symbol: str,
+        chosen_source_id: str, actor: str = "development-user",
+    ) -> dict:
+        """Zapamiętuje świadomy wybór źródła z kontrolą wersji obu Exceli."""
+        code = str(order_code or "").strip().upper()
+        symbol = str(symbol or "").strip().upper()
+        item = next(
+            (row for row in self.check_conflicts()
+             if row["order_code"] == code and row["symbol"] == symbol),
+            None,
+        )
+        if item is None:
+            raise ValueError("Brak konfliktu lub duplikatu do rozstrzygnięcia.")
+        if chosen_source_id not in item["source_ids"]:
+            raise ValueError("Wybrane źródło nie zawiera tej pozycji.")
+        signatures = {
+            source_id: str(self.get_state(source_id).get("sha256") or "")
+            for source_id in item["source_ids"]
+        }
+        if not all(signatures.values()):
+            raise ValueError("Wymagany poprawny snapshot każdego źródła.")
+        key = f"{code}|{symbol}"
+        with self.lock:
+            decisions = self._load(self.resolutions_path)
+            decisions[key] = {
+                "chosen_source_id": chosen_source_id,
+                "signatures": signatures,
+                "actor": str(actor).strip() or "development-user",
+                "resolved_at": datetime.now(timezone.utc).isoformat(),
+            }
+            self._write(self.resolutions_path, decisions)
+        return dict(decisions[key])
 
     def check_conflicts(self) -> list[dict]:
         """Konflikty między aktywnymi źródłami, wyłącznie informacyjnie."""
@@ -272,6 +319,7 @@ class PlanSources:
                     {"source_id": src["id"], "source": src["name"], "row": row}
                 )
         conflicts = []
+        decisions = self._load(self.resolutions_path)
         for (code, symbol), matches in values.items():
             if len({m["source_id"] for m in matches}) < 2:
                 continue
@@ -283,13 +331,31 @@ class PlanSources:
                     str(m["row"].get("name") or ""),
                 ) for m in matches
             }
+            decision = decisions.get(f"{code}|{symbol}", {})
+            versions = {
+                match["source_id"]: str(self.get_state(match["source_id"]).get("sha256") or "")
+                for match in matches
+            }
+            chosen = (
+                decision.get("chosen_source_id")
+                if decision.get("signatures") == versions
+                and decision.get("chosen_source_id") in versions
+                else None
+            )
             conflicts.append({
                 "order_code": code, "symbol": symbol,
-                "status": "DO ROZSTRZYGNIĘCIA" if len(signatures) > 1 else "DUPLIKAT",
+                "status": (
+                    "ROZSTRZYGNIĘTY" if chosen
+                    else "DO ROZSTRZYGNIĘCIA" if len(signatures) > 1
+                    else "DUPLIKAT"
+                ),
+                "chosen_source_id": chosen,
+                "source_ids": [m["source_id"] for m in matches],
                 "sources": [m["source"] for m in matches],
                 "details": [
                     {
                         "source": m["source"],
+                        "source_id": m["source_id"],
                         "quantity": m["row"].get("quantity"),
                         "shipping": m["row"].get("shipping"),
                         "ral": m["row"].get("ral"),
