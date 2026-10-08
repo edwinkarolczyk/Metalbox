@@ -53,6 +53,41 @@ class UiSmokeTest(unittest.TestCase):
             dialog.close()
             global_search.close()
 
+    def test_two_real_batches_are_distinct_after_explicit_acceptance(self) -> None:
+        from plan_sources import PlanSources
+        from test_plan_sources import make_excel
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            left, right = root / "a.xlsx", root / "b.xlsx"
+            make_excel(left, qty=65)
+            make_excel(right, qty=35)
+            source_registry = PlanSources(root / "sources")
+            first = source_registry.add_source(name="Excel A", path=str(left))
+            second = source_registry.add_source(name="Excel B", path=str(right))
+            source_registry.scan(first["id"])
+            source_registry.scan(second["id"])
+            source_registry.resolve_conflict(
+                order_code="740", symbol="1.435.135", keep_all=True, actor="Kierownik",
+            )
+            preview = source_registry.build_combined_preview()
+            store = MetalboxStore(root / "metalbox.sqlite3")
+            snapshot = store.create_plan_snapshot(
+                source_name="WSPÓLNY PLAN: Excel A, Excel B",
+                snapshot_path=str(root / "combined.json"), sha256="smoke-test",
+                size_bytes=1, sheet_name="WIELE ŹRÓDEŁ", header_row=1,
+                rows=preview["rows"],
+            )
+            self.assertEqual(store.list_accepted_plan_items(), [])
+            self.assertEqual(
+                store.get_plan_acceptance_preview(int(snapshot["id"]))["total_changes"], 2
+            )
+            store.accept_plan_snapshot(int(snapshot["id"]), actor="Kierownik")
+            accepted = store.list_accepted_plan_items()
+            self.assertEqual(len(accepted), 2)
+            self.assertEqual(sorted(row["quantity"] for row in accepted), [35, 65])
+            self.assertEqual(len({row["row_key"] for row in accepted}), 2)
+
     def test_manager_can_explicitly_keep_both_real_batches_in_excel_ui(self) -> None:
         from plan_sources import PlanSources
         from test_plan_sources import make_excel
