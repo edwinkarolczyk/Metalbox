@@ -44,6 +44,117 @@ class MultiSourceTests(unittest.TestCase):
         self.source_a = self.registry.add_source(name="Excel 1", path=str(self.plan_a))
         self.source_b = self.registry.add_source(name="Excel 2", path=str(self.plan_b))
 
+    def test_folder_with_one_excel_and_exclusions_reads_only_selected_copy(self) -> None:
+        folder = self.root / "hala"
+        folder.mkdir()
+        main = folder / "plan.xlsx"
+        archive = folder / "plan_archiwum.xlsm"
+        lock = folder / "~$plan.xlsx"
+        make_excel(main, qty=122)
+        make_excel(archive, qty=999)
+        lock.write_bytes(b"temporary lock")
+        (folder / "instrukcja.txt").write_text("to nie jest plan")
+        source = self.registry.add_source(
+            name="Folder hali", path=str(folder), mode="folder",
+            exclude_patterns="*archiwum*",
+        )
+        self.assertEqual(
+            self.registry.folder_candidates(str(folder), exclude_patterns="*archiwum*"),
+            ["plan.xlsx"],
+        )
+        state = self.registry.scan(source["id"])
+        self.assertEqual(state["rows"][0]["quantity"], 122)
+        self.assertEqual(state["source_file"], "plan.xlsx")
+        self.assertEqual(main.read_bytes(), main.read_bytes())
+        self.assertTrue(Path(state["snapshot_path"]).is_file())
+
+    def test_folder_multiple_candidates_requires_explicit_choice(self) -> None:
+        folder = self.root / "kopie"
+        folder.mkdir()
+        make_excel(folder / "plan1.xlsx", qty=51)
+        make_excel(folder / "plan2.xlsx", qty=81)
+        src = self.registry.add_source(
+            name="Kopie planu", path=str(folder), mode="folder",
+        )
+        state = self.registry.scan(src["id"])
+        self.assertEqual(state["status"], "BŁĄD ODCZYTU")
+        self.assertIn("Wybierz konkretny aktywny plik", state["error"])
+        with self.assertRaisesRegex(ValueError, "aktualnego poprawnego odczytu"):
+            self.registry.build_combined_preview()
+        self.registry.update_source(src["id"], selected_file="plan2.xlsx")
+        good = self.registry.scan(src["id"])
+        self.assertEqual(good["source_file"], "plan2.xlsx")
+        self.assertEqual(good["rows"][0]["quantity"], 81)
+
+    def test_selected_folder_file_disappearing_does_not_switch_to_other_copy(self) -> None:
+        folder = self.root / "folder"
+        folder.mkdir()
+        selected = folder / "nowy.xlsx"
+        older = folder / "stary.xlsx"
+        make_excel(selected, qty=62)
+        make_excel(older, qty=19)
+        src = self.registry.add_source(
+            name="Plan z folderu", path=str(folder), mode="folder",
+            selected_file="nowy.xlsx",
+        )
+        before = self.registry.scan(src["id"])
+        selected.unlink()
+        after = self.registry.scan(src["id"])
+        self.assertEqual(after["status"], "BŁĄD ODCZYTU")
+        self.assertEqual(after["sha256"], before["sha256"])
+        self.assertEqual(after["rows"], before["rows"])
+        with self.assertRaisesRegex(ValueError, "niedostępny|wykluczony"):
+            self.registry.build_combined_preview()
+
+    def test_folder_source_rejects_empty_path_and_unsafe_filename(self) -> None:
+        with self.assertRaisesRegex(ValueError, "Podaj ścieżkę"):
+            self.registry.add_source(name="Bez folderu", path="", mode="folder")
+        with self.assertRaisesRegex(ValueError, "samą nazwę"):
+            self.registry.add_source(
+                name="Niebezpieczny", path=str(self.root), mode="folder",
+                selected_file="../secret.xlsx",
+            )
+
+    def test_per_source_mapping_is_used_only_on_its_own_snapshot(self) -> None:
+        # Ten sam plik może mieć inny arkusz/nagłówki niż drugi plan.
+        folder = self.root / "mapowanie"
+        folder.mkdir()
+        source_excel = folder / "map.xlsx"
+        make_excel(source_excel, qty=130)
+        source = self.registry.add_source(
+            name="Osobne mapowanie", path=str(source_excel),
+        )
+        self.registry.update_source(
+            source["id"],
+            column_mapping={
+                "sheet_name": "PLAN", "header_row": 1,
+                "mapping": {"order_code": 1, "product": 2, "quantity": 3},
+            },
+        )
+        state = self.registry.scan(source["id"])
+        self.assertEqual(state["rows"][0]["quantity"], 130)
+        self.assertEqual(state["mapping_used"]["sheet_name"], "PLAN")
+        self.assertEqual(self.registry.list_sources()[0].get("column_mapping"), {})
+        self.assertEqual(self.registry.get_state(source["id"])["status"], "NOWE ZMIANY")
+        snapshot_path, source_name = self.registry.mapping_snapshot(source["id"])
+        self.assertTrue(snapshot_path.exists())
+        self.assertEqual(source_name, "map.xlsx")
+
+    def test_changing_mapping_invalidates_cached_snapshot_state(self) -> None:
+        src = self.registry.scan(self.source_a["id"])
+        self.registry.update_source(
+            self.source_a["id"],
+            column_mapping={
+                "sheet_name": "PLAN", "header_row": 1,
+                "mapping": {"order_code": 1, "product": 2, "quantity": 3},
+            },
+        )
+        self.assertEqual(self.registry.get_state(self.source_a["id"]), {})
+        latest = self.registry.scan(self.source_a["id"])
+        self.assertEqual(latest["rows"][0]["quantity"], 65)
+        self.assertEqual(latest["mapping_used"]["sheet_name"], "PLAN")
+        self.assertNotEqual(latest["signature"], src["signature"])
+
     def test_two_sources_preserve_separate_snapshot_and_conflict(self) -> None:
         first = self.registry.scan(self.source_a["id"])
         second = self.registry.scan(self.source_b["id"])
