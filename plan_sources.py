@@ -269,6 +269,31 @@ class PlanSources:
                 rows.append(entry)
         return {"rows": rows, "sources": versions, "row_count": len(rows)}
 
+    def acknowledge_accepted_sources(self, versions: list[dict]) -> int:
+        """Czyści alert zmian tylko dla wersji naprawdę zaakceptowanych przez kierownika."""
+        acknowledged = 0
+        with self.lock:
+            valid_ids = {source["id"] for source in self.list_sources()}
+            for item in versions:
+                if not isinstance(item, dict):
+                    continue
+                source_id = str(item.get("id") or "")
+                if source_id not in valid_ids:
+                    continue
+                state = self.get_state(source_id)
+                if not state.get("sha256") or state["sha256"] != item.get("sha256"):
+                    continue
+                state.update(
+                    status="BEZ ZMIAN",
+                    diff={"added": [], "changed": [], "removed": []},
+                    change_counts={"added": 0, "changed": 0, "removed": 0},
+                    accepted_sha256=state["sha256"],
+                    accepted_at=datetime.now(timezone.utc).isoformat(),
+                )
+                self._write(self._state_path(source_id), state)
+                acknowledged += 1
+        return acknowledged
+
     def resolve_conflict(
         self, *, order_code: str, symbol: str,
         chosen_source_id: str, actor: str = "development-user",
