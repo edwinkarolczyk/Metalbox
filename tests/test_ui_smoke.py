@@ -75,6 +75,36 @@ class UiSmokeTest(unittest.TestCase):
             self.assertEqual(requested, [True])
             view.close()
 
+    def test_merged_excel_snapshot_requires_separate_manager_approval(self) -> None:
+        from test_plan_sources import make_excel
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            store = MetalboxStore(root / "store.sqlite3")
+            a_path, b_path = root / "a.xlsx", root / "b.xlsx"
+            make_excel(a_path, qty=65)
+            make_excel(b_path, qty=30, symbol="1.325.68")
+            with patch.object(metalbox_app, "MULTI_PLAN_SOURCES_DIR", root / "sources"):
+                page = metalbox_app.PlannerPage(lambda: None, store)
+                first = page.plan_sources.add_source(name="Excel A", path=str(a_path))
+                second = page.plan_sources.add_source(name="Excel B", path=str(b_path))
+                page.plan_sources.scan(first["id"])
+                page.plan_sources.scan(second["id"])
+                with patch.object(
+                    metalbox_app.QMessageBox, "question",
+                    return_value=metalbox_app.QMessageBox.Yes,
+                ), patch.object(metalbox_app.QMessageBox, "information"):
+                    page._prepare_merged_sources()
+                snapshot = store.get_latest_plan_snapshot()
+                self.assertIsNotNone(snapshot)
+                self.assertEqual(snapshot["status"], "PODGLĄD")
+                self.assertEqual(snapshot["row_count"], 2)
+                self.assertEqual(store.list_accepted_plan_items(), [])
+                self.assertEqual(
+                    store.get_plan_acceptance_preview(int(snapshot["id"]))["total_changes"], 2
+                )
+                page.close()
+
     def test_product_hints_resource_is_available(self) -> None:
         self.assertTrue(
             metalbox_app.PRODUCT_HINTS_FILE.exists(),
