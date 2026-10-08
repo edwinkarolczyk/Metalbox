@@ -5130,6 +5130,9 @@ class PlanSourcesView(QWidget):
         check = QPushButton("Sprawdź wszystkie teraz")
         check.clicked.connect(self._check)
         actions.addWidget(check)
+        problems = QPushButton("Pokaż konflikty")
+        problems.clicked.connect(self._show_conflicts)
+        actions.addWidget(problems)
         refresh = QPushButton("Odśwież")
         refresh.clicked.connect(self.refresh_data)
         actions.addWidget(refresh)
@@ -5203,6 +5206,25 @@ class PlanSourcesView(QWidget):
             self, "Kontrola źródeł", "Rozpoczęto kontrolę aktywnych Exceli w tle. "
             "Wybierz „Odśwież”, aby zobaczyć najnowsze wyniki."
         )
+
+    def _show_conflicts(self) -> None:
+        conflicts = self.sources.check_conflicts()
+        if not conflicts:
+            QMessageBox.information(self, "Konflikty planów", "Brak wspólnych pozycji między źródłami.")
+            return
+        lines = [
+            f'{row["status"]}: {row["order_code"]} / {row["symbol"]} '
+            f'({", ".join(row["sources"])})'
+            for row in conflicts
+        ]
+        dialog = QMessageBox(self)
+        dialog.setWindowTitle("Konflikty i duplikaty Excel")
+        dialog.setText(
+            f'Wspólne pozycje: {len(conflicts)}. '
+            "Sprawdź szczegóły przed ręczną akceptacją planu."
+        )
+        dialog.setDetailedText("\n".join(lines))
+        dialog.exec()
 
     def refresh_data(self) -> None:
         sources = self.sources.list_sources()
