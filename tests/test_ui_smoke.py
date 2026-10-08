@@ -53,6 +53,55 @@ class UiSmokeTest(unittest.TestCase):
             dialog.close()
             global_search.close()
 
+    def test_folder_source_ui_selects_copy_and_remembers_own_mapping(self) -> None:
+        from plan_sources import PlanSources
+        from test_plan_sources import make_excel
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            folder = root / "firmowy-plan"
+            folder.mkdir()
+            make_excel(folder / "plan.xlsx", qty=110)
+            make_excel(folder / "archiwum.xlsx", qty=999)
+            registry = PlanSources(root / "sources")
+            view = metalbox_app.PlanSourcesView(registry, lambda: None)
+            view.mode_combo.setCurrentIndex(1)
+            view.name_edit.setText("Główny plan")
+            view.path_edit.setText(str(folder))
+            view.exclude_edit.setText("~$*;archiwum*")
+            with patch.object(
+                metalbox_app.QMessageBox, "warning",
+                side_effect=AssertionError("Nieoczekiwany błąd dialogu"),
+            ):
+                view._add()
+                self.assertEqual(view.table.rowCount(), 1)
+                view.table.selectRow(0)
+                chosen, ok = "plan.xlsx", True
+                with patch.object(
+                    metalbox_app.QInputDialog, "getItem", return_value=(chosen, ok)
+                ):
+                    view._choose_folder_file()
+                self.assertEqual(view.selected_file_edit.text(), "plan.xlsx")
+                view._update()
+                sid = registry.list_sources()[0]["id"]
+                self.assertEqual(registry.scan(sid)["rows"][0]["quantity"], 110)
+                with patch.object(
+                    metalbox_app, "PlanColumnMappingDialog"
+                ) as dialog_class:
+                    dialog = dialog_class.return_value
+                    dialog.exec.return_value = metalbox_app.QDialog.Accepted
+                    dialog.result_sheet_name = "PLAN"
+                    dialog.result_header_row = 1
+                    dialog.result_mapping = {
+                        "order_code": 1, "product": 2, "quantity": 3,
+                    }
+                    view._configure_source_mapping()
+                self.assertEqual(
+                    registry.list_sources()[0]["column_mapping"]["sheet_name"], "PLAN"
+                )
+                self.assertEqual(registry.scan(sid)["rows"][0]["quantity"], 110)
+            view.close()
+
     def test_planner_can_configure_two_distinct_excel_sources(self) -> None:
         from plan_sources import PlanSources
 
