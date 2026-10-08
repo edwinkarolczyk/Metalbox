@@ -20,6 +20,39 @@ class UiSmokeTest(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.qt_app = QApplication.instance() or QApplication([])
 
+    def test_transport_locations_dialog_register_move_and_search(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            store = MetalboxStore(Path(folder) / "locations-ui.sqlite3")
+            store.seed_development_data()
+            order_item_id = int(store.get_order("ZL-740")["items"][0]["id"])
+            dialog = metalbox_app.TransportLocationsDialog(
+                store, order_item_id=order_item_id, order_code="ZL-740",
+                product="Produkt testowy",
+            )
+            self.assertEqual(dialog.table.rowCount(), 0)
+            dialog.unit_edit.setText("PAL-UI-1")
+            dialog.quantity_edit.setValue(50)
+            dialog.hall_edit.setText("Hala 2")
+            dialog.zone_edit.setText("Zgrzewarki")
+            dialog._register()
+            self.assertEqual(dialog.table.rowCount(), 1)
+            self.assertEqual(store.get_transport_unit("PAL-UI-1")["quantity"], 50)
+            dialog.quantity_edit.setValue(20)
+            dialog.hall_edit.setText("Hala 3")
+            dialog.zone_edit.setText("Pakownia")
+            dialog.target_edit.setText("PAL-UI-2")
+            dialog._move()
+            self.assertEqual(store.get_transport_unit("PAL-UI-1")["quantity"], 30)
+            self.assertEqual(store.get_transport_unit("PAL-UI-2")["quantity"], 20)
+            global_search = metalbox_app.TransportLocationsDialog(store)
+            global_search.search_edit.setText("PAL-UI-2")
+            self.assertEqual(global_search.table.rowCount(), 1)
+            self.assertEqual(global_search.table.item(0, 0).text(), "PAL-UI-2")
+            global_search.search_edit.setText("ZL-740")
+            self.assertEqual(global_search.table.rowCount(), 2)
+            dialog.close()
+            global_search.close()
+
     def test_product_hints_resource_is_available(self) -> None:
         self.assertTrue(
             metalbox_app.PRODUCT_HINTS_FILE.exists(),
