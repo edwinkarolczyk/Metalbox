@@ -1,23 +1,33 @@
 {
   "schema": 1,
-  "version": "0.1.30",
-  "title": "Planista — kontrolowana publikacja planu do kolejek działów",
-  "description": "Kierownik/Administrator może świadomie opublikować gotowe pozycje zaakceptowanego planu do realnych kolejek produkcyjnych. Preflight blokuje pozycje niezweryfikowane, bez technologii, z konfliktem ZL albo z rozpoczętą produkcją. Ponowna publikacja nie dubluje pozycji.",
+  "version": "0.1.30.1",
+  "title": "Lokalizacje palet i przekazanie między zmianami",
+  "description": "Opcjonalne oznaczanie ostatniej potwierdzonej lokalizacji produktu/półproduktu: hala, strefa, miejsce, identyfikator palety. Obsługuje podział ilości, przenoszenie i historię przekazań. Nie blokuje produkcji bez lokalizacji.",
   "checks": [
     {
-      "id": "planner-publication-preview",
-      "text": "1. PLANISTA → „Publikacja planu”. Widok ma otworzyć się w tym samym oknie i pokazać pozycje GOTOWE oraz BLOKADA z konkretnym powodem. Zablokowane pozycje nie mogą zostać opublikowane.",
-      "trigger": "planner:publication_preview"
+      "id": "location-register",
+      "text": "1. Wejdź w dział i wybierz przy pozycji ZL „Lokalizacja”. Dodaj paletę (np. PAL-024) z liczbą sztuk, halą i strefą. Sprawdź, że jest widoczna w tabeli.",
+      "trigger": "location:registered"
     },
     {
-      "id": "planner-publication-done",
-      "text": "2. Kliknij „Publikuj gotowe pozycje” i potwierdź. Tylko pozycje GOTOWE mają trafić do realnych kolejek działów zgodnie z technologią. Jeśli produkt zależy od produkowanego półproduktu/detalu z BOM, rodzic ma czekać na zakończenie dziecka; pracownik może rozpocząć tylko faktycznie dostępny etap.",
-      "trigger": "planner:publication_done"
+      "id": "location-move",
+      "text": "2. Zaznacz paletę, zmień halę i przenieś część ilości na inny numer palety. Sprawdź, że ilości się zgadzają i historia zachowała oba miejsca.",
+      "trigger": "location:moved"
     },
     {
-      "id": "planner-publication-repeat-safe",
-      "text": "3. Opublikuj ten sam niezmieniony plan ponownie. Metalbox ma zaktualizować istniejące nieaktywne pozycje bez tworzenia duplikatów. Pozycja z rozpoczętą produkcją ma być chroniona przed automatycznym nadpisaniem.",
-      "trigger": "planner:publication_repeat_safe"
+      "id": "location-handover",
+      "text": "3. Oznacz paletę „Przekaż zmianie”, następnie „Potwierdź odbiór”. Zweryfikuj nowy status i historię.",
+      "trigger": "location:handover"
+    },
+    {
+      "id": "location-search",
+      "text": "4. W dowolnym dziale kliknij „Gdzie jest materiał?”. Wyszukaj paletę po numerze ZL, produkcie i hali. Upewnij się, że niepotwierdzone lokalizacje nie są przedstawiane jako GPS lub śledzenie automatyczne.",
+      "trigger": "location:search"
+    },
+    {
+      "id": "location-optional",
+      "text": "5. Uruchom produkcję innej pozycji bez palety i sprawdź, że brak lokalizacji nie blokuje sesji ani raportowania ilości.",
+      "trigger": "location:optional"
     }
   ]
 }
