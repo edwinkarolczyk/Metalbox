@@ -137,6 +137,22 @@ class MultiSourceTests(unittest.TestCase):
         self.assertEqual([x["row_no"] for x in preview["rows"]], [1, 2])
         self.assertEqual(len(preview["sources"]), 2)
 
+    def test_only_accepted_versions_clear_pending_changes(self) -> None:
+        make_excel(self.plan_b, qty=30, symbol="1.325.68")
+        self.registry.scan(self.source_a["id"])
+        self.registry.scan(self.source_b["id"])
+        preview = self.registry.build_combined_preview()
+        # Podgląd sam niczego nie potwierdza.
+        self.assertEqual(self.registry.get_state(self.source_a["id"])["status"], "NOWE ZMIANY")
+        accepted = self.registry.acknowledge_accepted_sources(preview["sources"])
+        self.assertEqual(accepted, 2)
+        self.assertEqual(self.registry.get_state(self.source_a["id"])["status"], "BEZ ZMIAN")
+        make_excel(self.plan_b, qty=35, symbol="1.325.68")
+        self.registry.scan(self.source_b["id"])
+        self.assertEqual(self.registry.acknowledge_accepted_sources(preview["sources"]), 1)
+        self.assertEqual(self.registry.get_state(self.source_b["id"])["status"], "NOWE ZMIANY")
+        self.assertEqual(self.registry.get_state(self.source_b["id"])["change_counts"]["changed"], 1)
+
     def test_manual_conflict_resolution_selects_one_source_and_expires(self) -> None:
         self.registry.scan(self.source_a["id"])
         self.registry.scan(self.source_b["id"])
