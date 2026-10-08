@@ -88,21 +88,25 @@ def safe_snapshot(source: Path, snapshot_dir: Path) -> SnapshotInfo:
     digest = hashlib.sha256()
     size_bytes = 0
 
-    # Krytyczna zasada: uchwyt do źródła istnieje wyłącznie w tym bloku.
-    with source.open("rb") as source_handle, temp_path.open("wb") as target_handle:
-        while True:
-            chunk = source_handle.read(1024 * 1024)
-            if not chunk:
-                break
-            target_handle.write(chunk)
-            digest.update(chunk)
-            size_bytes += len(chunk)
-        target_handle.flush()
-        os.fsync(target_handle.fileno())
+    try:
+        # Krytyczna zasada: uchwyt źródła jest zamykany przed parsowaniem.
+        with source.open("rb") as source_handle, temp_path.open("wb") as target_handle:
+            while True:
+                chunk = source_handle.read(1024 * 1024)
+                if not chunk:
+                    break
+                target_handle.write(chunk)
+                digest.update(chunk)
+                size_bytes += len(chunk)
+            target_handle.flush()
+            os.fsync(target_handle.fileno())
 
-    sha256 = digest.hexdigest()
-    final_path = snapshot_dir / f"plan-{stamp}-{sha256[:10]}{extension}"
-    os.replace(temp_path, final_path)
+        sha256 = digest.hexdigest()
+        final_path = snapshot_dir / f"plan-{stamp}-{sha256[:10]}{extension}"
+        os.replace(temp_path, final_path)
+    finally:
+        # Błąd odczytu/odłączony dysk nie pozostawia niekompletnej kopii roboczej.
+        temp_path.unlink(missing_ok=True)
 
     return SnapshotInfo(
         path=final_path,
