@@ -87,6 +87,29 @@ class MultiSourceTests(unittest.TestCase):
         self.assertEqual(good["source_file"], "plan2.xlsx")
         self.assertEqual(good["rows"][0]["quantity"], 81)
 
+    def test_two_independent_excels_can_share_same_folder(self) -> None:
+        folder = self.root / "wspolny-folder"
+        folder.mkdir()
+        make_excel(folder / "laser.xlsx", qty=17, symbol="1.400.10")
+        make_excel(folder / "malarnia.xlsx", qty=51, symbol="1.400.11")
+        first = self.registry.add_source(
+            name="Laser kopia", path=str(folder), mode="folder",
+            selected_file="laser.xlsx",
+        )
+        second = self.registry.add_source(
+            name="Malarnia kopia", path=str(folder), mode="folder",
+            selected_file="malarnia.xlsx",
+        )
+        self.assertNotEqual(first["id"], second["id"])
+        self.assertEqual(self.registry.scan(first["id"])["rows"][0]["quantity"], 17)
+        self.assertEqual(self.registry.scan(second["id"])["rows"][0]["quantity"], 51)
+        with self.assertRaisesRegex(ValueError, "już monitorowany"):
+            self.registry.add_source(
+                name="Duplikat lasera", path=str(folder), mode="folder",
+                selected_file="laser.xlsx",
+            )
+        self.assertEqual(self.registry.build_combined_preview()["row_count"], 2)
+
     def test_selected_folder_file_disappearing_does_not_switch_to_other_copy(self) -> None:
         folder = self.root / "folder"
         folder.mkdir()
