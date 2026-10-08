@@ -1,37 +1,37 @@
 {
   "schema": 1,
-  "version": "0.1.30.3",
-  "title": "Planista — foldery Excel, wykluczenia i mapowania",
-  "description": "Rozwinięcie 0.1.31: dwa równoległe źródła, także foldery z wieloma kopiami, ręczne wskazanie aktywnego pliku, wykluczanie archiwów i plików blokad, oddzielne mapowanie źródeł. Brak automatycznej publikacji.",
+  "version": "0.1.30.4",
+  "title": "Planista — osobne partie tego samego produktu w dwóch Excelach",
+  "description": "Bezpieczny wybór źródła ZL lub jawne zachowanie kilku odrębnych partii z dwóch źródeł. Decyzje wygasają po zmianie dowolnego Excela; przygotowany snapshot wymaga osobnej akceptacji i publikacji.",
   "checks": [
     {
-      "id": "excel-folder",
-      "text": "1. W Planista → Źródła Excel (2+) wybierz „Folder z kopiami Excel”, podaj katalog i zapisz. Jeśli jest kilka plików, aplikacja ma wymagać wskazania aktywnej kopii.",
+      "id": "batch-two-excels",
+      "text": "1. Dodaj dwa Excele z tym samym ZL i symbolem, ale naprawdę różnymi partiami/ilościami. Sprawdź konflikt — system nie może ich sam zsumować.",
       "trigger": ""
     },
     {
-      "id": "excel-exclusions",
-      "text": "2. Ustaw wykluczenia np. ~$*;*archiwum*. Potwierdź, że pliki tymczasowe i archiwalne nie trafiają do listy aktywnych.",
+      "id": "batch-keep-all",
+      "text": "2. W „Rozstrzygnij ZL” wybierz „Zachowaj wszystkie — osobne partie z każdego Excela” i potwierdź. Wspólny PODGLĄD musi pokazywać każdą partię osobno.",
       "trigger": ""
     },
     {
-      "id": "excel-folder-choice",
-      "text": "3. Wybierz „Wybierz Excela z folderu…”, wskaż właściwy plik i sprawdź kontrolę. Usunięcie tego pliku nie może automatycznie przełączyć aplikacji na inną kopię.",
+      "id": "batch-choose-one",
+      "text": "3. Przy konflikcie będącym kopią tej samej partii wybierz tylko właściwy Excel. Ilości z obu źródeł nie mogą się sumować.",
       "trigger": ""
     },
     {
-      "id": "excel-source-mapping",
-      "text": "4. Wybierz „Dopasuj kolumny źródła” i ustaw arkusz, nagłówki oraz kolumny. Sprawdź, że inne źródło zachowuje swoje mapowanie.",
+      "id": "batch-expire",
+      "text": "4. Zmień ilość w jednym Excelu. Dawna decyzja o zachowaniu odrębnych partii ma wygasnąć i ponownie wymagać potwierdzenia.",
       "trigger": ""
     },
     {
-      "id": "excel-staleness",
-      "text": "5. Zmień tylko jednego Excela, sprawdź osobny snapshot i kontrolę konfliktów. Błąd jednego źródła nie może usuwać planu drugiego.",
+      "id": "batch-no-autopublish",
+      "text": "5. Przygotuj wspólny PODGLĄD, potem zweryfikuj osobną akceptację i publikację kierownika — automatyczny skaner nie może zmieniać produkcji.",
       "trigger": ""
     },
     {
-      "id": "excel-combined",
-      "text": "6. Przygotuj wspólny snapshot i przeprowadź osobną akceptację. Bez decyzji kierownika kolejki produkcyjne nie mogą się zmienić.",
+      "id": "batch-runtime",
+      "text": "6. Sprawdź działanie na rzeczywistych firmowych plikach i bieżących sesjach produkcyjnych; zgłoś ewentualne blokady przed oznaczeniem 0.1.31 jako gotowej.",
       "trigger": ""
     }
   ]
