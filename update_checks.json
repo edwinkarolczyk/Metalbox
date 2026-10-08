@@ -1,42 +1,37 @@
 {
   "schema": 1,
-  "version": "0.1.30.2",
-  "title": "Planista — dwa niezależne źródła Excel",
-  "description": "Etap 0.1.31: równoległe snapshoty Excel, automatyczny odczyt i niezależne porównanie, konflikty i ręczny wybór źródła. Wspólny podgląd powstaje dopiero na żądanie; zatwierdzenie i publikacja pozostają oddzielnymi czynnościami.",
+  "version": "0.1.30.3",
+  "title": "Planista — foldery Excel, wykluczenia i mapowania",
+  "description": "Rozwinięcie 0.1.31: dwa równoległe źródła, także foldery z wieloma kopiami, ręczne wskazanie aktywnego pliku, wykluczanie archiwów i plików blokad, oddzielne mapowanie źródeł. Brak automatycznej publikacji.",
   "checks": [
     {
-      "id": "excel-sources",
-      "text": "1. Otwórz Planista → Źródła Excel (2+). Dodaj dwa różne pliki z niezależnymi nazwami i interwałami.",
+      "id": "excel-folder",
+      "text": "1. W Planista → Źródła Excel (2+) wybierz „Folder z kopiami Excel”, podaj katalog i zapisz. Jeśli jest kilka plików, aplikacja ma wymagać wskazania aktywnej kopii.",
       "trigger": ""
     },
     {
-      "id": "excel-auto",
-      "text": "2. Wybierz „Sprawdź wszystkie teraz”. Zweryfikuj w tabeli osobne daty i stany odczytu, bez otwierania źródłowych plików.",
+      "id": "excel-exclusions",
+      "text": "2. Ustaw wykluczenia np. ~$*;*archiwum*. Potwierdź, że pliki tymczasowe i archiwalne nie trafiają do listy aktywnych.",
       "trigger": ""
     },
     {
-      "id": "excel-changes",
-      "text": "3. Zmień ilość w jednym źródle. Sprawdź różnicę tylko tego źródła; drugi Excel powinien zachować swój stan.",
+      "id": "excel-folder-choice",
+      "text": "3. Wybierz „Wybierz Excela z folderu…”, wskaż właściwy plik i sprawdź kontrolę. Usunięcie tego pliku nie może automatycznie przełączyć aplikacji na inną kopię.",
       "trigger": ""
     },
     {
-      "id": "excel-conflicts",
-      "text": "4. Użyj tego samego ZL/produktu z różnymi wartościami w dwóch Excelach. Konflikt ma pozostać do rozstrzygnięcia.",
+      "id": "excel-source-mapping",
+      "text": "4. Wybierz „Dopasuj kolumny źródła” i ustaw arkusz, nagłówki oraz kolumny. Sprawdź, że inne źródło zachowuje swoje mapowanie.",
       "trigger": ""
     },
     {
-      "id": "excel-resolution",
-      "text": "5. W Planista → Źródła Excel (2+) wybierz „Rozstrzygnij ZL”, wskaż właściwy Excel dla powtarzającego się produktu i sprawdź, że „Przygotuj do akceptacji” nie dubluje sztuk. Po zmianie Excela wybór musi wygasnąć.",
+      "id": "excel-staleness",
+      "text": "5. Zmień tylko jednego Excela, sprawdź osobny snapshot i kontrolę konfliktów. Błąd jednego źródła nie może usuwać planu drugiego.",
       "trigger": ""
     },
     {
-      "id": "excel-missing",
-      "text": "6. Wyłącz dostęp do jednego Excela. Jego ostatnie poprawne dane muszą pozostać, a drugi Excel ma nadal działać.",
-      "trigger": ""
-    },
-    {
-      "id": "excel-manual",
-      "text": "7. Potwierdź, że automatyczny skaner nie zatwierdza ani nie publikuje zleceń w kolejce produkcji.",
+      "id": "excel-combined",
+      "text": "6. Przygotuj wspólny snapshot i przeprowadź osobną akceptację. Bez decyzji kierownika kolejki produkcyjne nie mogą się zmienić.",
       "trigger": ""
     }
   ]
