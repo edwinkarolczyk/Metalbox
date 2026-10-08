@@ -312,6 +312,20 @@ Cel: pracownik kolejnej zmiany lub następnego działu od razu widzi, gdzie fizy
 - [ ] Funkcja ma być **opcjonalna** dla działu / stanowiska; brak etykiety lub lokalizacji nie może automatycznie blokować produkcji.
 - [ ] Wdrożenie etapowe: najpierw ręczne lokalizacje i przekazanie między zmianami, potem QR; automatyczne wykrywanie RFID/BLE/UWB rozważać dopiero, jeżeli będzie uzasadnione i wyposażenie hali na to pozwoli.
 
+### Stan implementacji (Development 0.1.30.1)
+
+- [x] Lokalna baza SQLite: palety przypięte do konkretnej pozycji ZL, liczba sztuk, hala, strefa, miejsce i etap.
+- [x] Wyszukiwanie palet przez operatora po numerze ZL, produkcie, identyfikatorze lub hali.
+- [x] Przenoszenie całej palety i podział ilości na różne palety bez przekraczania ilości pozycji ZL.
+- [x] Przekazanie / potwierdzenie odbioru między zmianami oraz historia i audyt przemieszczeń.
+- [x] Nieobowiązkowość lokalizacji: brak palety nie blokuje sesji produkcyjnej.
+- [ ] Odbiór w aplikacji na rzeczywistej hali (scenariusze 0.1.30.1 + testy instalacji).
+- [ ] Etykiety QR i skanowanie przy pobraniu / odłożeniu.
+- [ ] Konfigurowane słowniki hal, regałów i typów jednostek transportowych.
+- [ ] Powiązanie wykonawcy zmiany lokalizacji z zalogowanym profilem (obecnie Development).
+- [ ] Centralna synchronizacja między wieloma stanowiskami (obecnie lokalna baza Development).
+- [ ] Automatyczna lokalizacja RFID/BLE/UWB — opcjonalnie dopiero po weryfikacji potrzeb zakładu.
+
 ### Kryterium odbioru
 
 Operator potrafi obsłużyć zmianę zlecenia bez otwierania panelu administracyjnego i bez ręcznego wpisywania informacji, które system już zna. Pracownik następnej zmiany może opcjonalnie odnaleźć partię po ZL/produkcie/półprodukcie i zobaczyć jej ostatnią potwierdzoną lokalizację oraz ilość.
