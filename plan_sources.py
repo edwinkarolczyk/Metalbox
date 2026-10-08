@@ -228,5 +228,14 @@ class PlanSources:
                 "order_code": code, "symbol": symbol,
                 "status": "DO ROZSTRZYGNIĘCIA" if len(signatures) > 1 else "DUPLIKAT",
                 "sources": [m["source"] for m in matches],
+                "details": [
+                    {
+                        "source": m["source"],
+                        "quantity": m["row"].get("quantity"),
+                        "shipping": m["row"].get("shipping"),
+                        "ral": m["row"].get("ral"),
+                    }
+                    for m in matches
+                ],
             })
         return conflicts
