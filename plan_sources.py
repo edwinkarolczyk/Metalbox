@@ -120,6 +120,15 @@ class PlanSources:
         )
 
     @staticmethod
+    def _source_identity(source: dict) -> tuple[str, str, str]:
+        return (
+            str(source.get("mode") or "file").casefold(),
+            os.path.normcase(str(source.get("path") or "")).casefold(),
+            str(source.get("selected_file") or "").casefold()
+            if source.get("mode") == "folder" else "",
+        )
+
+    @staticmethod
     def _config_fingerprint(source: dict) -> str:
         mapping = source.get("column_mapping") or {}
         config = {
@@ -160,7 +169,13 @@ class PlanSources:
             sources = self.list_sources()
             if any(x.get("name", "").casefold() == name.casefold() for x in sources):
                 raise ValueError("Źródło o tej nazwie już istnieje.")
-            if any(os.path.normcase(x.get("path", "")) == os.path.normcase(path) for x in sources):
+            requested = {
+                "mode": mode, "path": path, "selected_file": selected_file,
+            }
+            if any(
+                self._source_identity(x) == self._source_identity(requested)
+                for x in sources
+            ):
                 raise ValueError("Ten sam plik jest już monitorowany.")
             source = dict(
                 id=uuid.uuid4().hex, name=name, path=path,
@@ -222,7 +237,7 @@ class PlanSources:
                 candidate["enabled"] = bool(enabled)
             if any(x["id"] != source_id and (
                 x["name"].casefold() == candidate["name"].casefold() or
-                os.path.normcase(x["path"]) == os.path.normcase(candidate["path"])
+                self._source_identity(x) == self._source_identity(candidate)
             ) for x in sources):
                 raise ValueError("Nazwa albo ścieżka jest już zajęta przez inne źródło.")
             changed_path = self._config_fingerprint(candidate) != self._config_fingerprint(found)
