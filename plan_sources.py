@@ -137,10 +137,13 @@ class PlanSources:
         selected_file: str = "", exclude_patterns: str = "~$*",
     ) -> dict:
         mode = self._source_mode(mode)
-        path = (str(Path(str(path).strip().strip('"')).expanduser().absolute())
-                if mode == "folder" else self._validate_path(path))
-        if mode == "folder" and not str(path).strip():
-            raise ValueError("Podaj folder źródłowy.")
+        raw_path = str(path or "").strip().strip('"')
+        if not raw_path:
+            raise ValueError("Podaj ścieżkę pliku lub folderu planu.")
+        path = (
+            str(Path(raw_path).expanduser().absolute()) if mode == "folder"
+            else self._validate_path(raw_path)
+        )
         exclude_patterns = self._exclude_patterns(exclude_patterns)
         selected_file = str(selected_file or "").strip()
         if selected_file and (Path(selected_file).name != selected_file or Path(selected_file).suffix.casefold() not in {".xlsx", ".xlsm"}):
@@ -228,6 +231,17 @@ class PlanSources:
             if changed_path:
                 self._write(self._state_path(source_id), {})
             return candidate
+
+    def mapping_snapshot(self, source_id: str) -> tuple[Path, str]:
+        """Kopia do ręcznego mapowania, źródłowy uchwyt jest już zamknięty."""
+        source = next(
+            (s for s in self.list_sources() if s["id"] == source_id), None,
+        )
+        if source is None:
+            raise ValueError("Nie znaleziono źródła Excel.")
+        target = self._resolved_file(source)
+        result = safe_snapshot(target, self.root / "mapping_snapshots" / source_id)
+        return result.path, target.name
 
     def _state_path(self, source_id: str) -> Path:
         if not source_id or not all(c in "0123456789abcdef" for c in source_id):
