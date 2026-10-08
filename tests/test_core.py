@@ -1428,7 +1428,7 @@ class MetalboxStoreTests(unittest.TestCase):
             )
 
     def test_transport_location_optional_and_searchable(self) -> None:
-        item_id = int(self.store.get_order("ZL-740")["items"][0]["id"])
+        item_id = int(self.store.get_order("ZL-740")["items"][4]["id"])
         self.assertEqual(self.store.list_transport_units(order_item_id=item_id), [])
         pallet = self.store.register_transport_unit(
             order_item_id=item_id,
@@ -1451,7 +1451,7 @@ class MetalboxStoreTests(unittest.TestCase):
         self.assertEqual(self.store.list_transport_movements(unit_code="PAL-024")[0]["actor"], "Edwin")
 
     def test_transport_split_and_full_move_have_durable_history(self) -> None:
-        item_id = int(self.store.get_order("ZL-740")["items"][0]["id"])
+        item_id = int(self.store.get_order("ZL-740")["items"][4]["id"])
         self.store.register_transport_unit(
             order_item_id=item_id, unit_code="PAL-A", quantity=700,
             hall="Hala 1", actor="I zmiana",
@@ -1477,7 +1477,7 @@ class MetalboxStoreTests(unittest.TestCase):
         )
 
     def test_transport_rejects_wrong_item_excess_and_invalid_split(self) -> None:
-        item = self.store.get_order("ZL-740")["items"][0]
+        item = self.store.get_order("ZL-740")["items"][4]
         item_id = int(item["id"])
         self.store.register_transport_unit(
             order_item_id=item_id, unit_code="PAL-A", quantity=100,
@@ -1503,7 +1503,7 @@ class MetalboxStoreTests(unittest.TestCase):
             )
 
     def test_transport_handover_and_schema_repair(self) -> None:
-        item_id = int(self.store.get_order("ZL-740")["items"][0]["id"])
+        item_id = int(self.store.get_order("ZL-740")["items"][4]["id"])
         self.store.register_transport_unit(
             order_item_id=item_id, unit_code="PAL-S", quantity=25, hall="Hala 1",
         )
