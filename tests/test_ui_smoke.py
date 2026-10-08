@@ -53,6 +53,28 @@ class UiSmokeTest(unittest.TestCase):
             dialog.close()
             global_search.close()
 
+    def test_planner_can_configure_two_distinct_excel_sources(self) -> None:
+        from plan_sources import PlanSources
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            registry = PlanSources(root / "sources")
+            requested = []
+            view = metalbox_app.PlanSourcesView(
+                registry, lambda: requested.append(True)
+            )
+            view.name_edit.setText("Excel A")
+            view.path_edit.setText(str(root / "plan-a.xlsx"))
+            view._add()
+            view.name_edit.setText("Excel B")
+            view.path_edit.setText(str(root / "plan-b.xlsx"))
+            view._add()
+            self.assertEqual(len(registry.list_sources()), 2)
+            self.assertEqual(view.table.rowCount(), 2)
+            view.request_check()
+            self.assertEqual(requested, [True])
+            view.close()
+
     def test_product_hints_resource_is_available(self) -> None:
         self.assertTrue(
             metalbox_app.PRODUCT_HINTS_FILE.exists(),
