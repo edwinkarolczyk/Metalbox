@@ -2529,7 +2529,7 @@ class DepartmentPage(PageBase):
             controls.addWidget(future)
         find_location = QPushButton("Gdzie jest materiał?")
         find_location.setObjectName("ghostGreen")
-        find_location.clicked.connect(self._show_locations)
+        find_location.clicked.connect(lambda checked=False: self._show_locations())
         controls.addWidget(find_location)
         controls.addStretch(1)
         self.root.addLayout(controls)
