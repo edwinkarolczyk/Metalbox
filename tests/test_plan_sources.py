@@ -137,6 +137,37 @@ class MultiSourceTests(unittest.TestCase):
         self.assertEqual([x["row_no"] for x in preview["rows"]], [1, 2])
         self.assertEqual(len(preview["sources"]), 2)
 
+    def test_manual_conflict_resolution_selects_one_source_and_expires(self) -> None:
+        self.registry.scan(self.source_a["id"])
+        self.registry.scan(self.source_b["id"])
+        choice = self.registry.resolve_conflict(
+            order_code="740", symbol="1.435.135",
+            chosen_source_id=self.source_a["id"], actor="Kierownik",
+        )
+        self.assertEqual(choice["chosen_source_id"], self.source_a["id"])
+        preview = self.registry.build_combined_preview()
+        self.assertEqual(preview["row_count"], 1)
+        self.assertEqual(preview["rows"][0]["quantity"], 65)
+        self.assertEqual(preview["rows"][0]["source_id"], self.source_a["id"])
+        make_excel(self.plan_b, qty=72)
+        self.registry.scan(self.source_b["id"])
+        self.assertIsNone(self.registry.check_conflicts()[0]["chosen_source_id"])
+        with self.assertRaisesRegex(ValueError, "nierozstrzygniętych"):
+            self.registry.build_combined_preview()
+
+    def test_duplicate_identical_excel_row_still_requires_choice(self) -> None:
+        make_excel(self.plan_b, qty=65)
+        self.registry.scan(self.source_a["id"])
+        self.registry.scan(self.source_b["id"])
+        self.assertEqual(self.registry.check_conflicts()[0]["status"], "DUPLIKAT")
+        with self.assertRaisesRegex(ValueError, "nierozstrzygniętych"):
+            self.registry.build_combined_preview()
+        self.registry.resolve_conflict(
+            order_code="740", symbol="1.435.135",
+            chosen_source_id=self.source_b["id"],
+        )
+        self.assertEqual(self.registry.build_combined_preview()["row_count"], 1)
+
     def test_combined_preview_blocks_unavailable_or_stale_source(self) -> None:
         make_excel(self.plan_b, qty=30, symbol="1.325.68")
         self.registry.scan(self.source_a["id"])
