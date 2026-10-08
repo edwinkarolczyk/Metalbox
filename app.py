@@ -5491,6 +5491,18 @@ class PlannerPage(PageBase):
         if answer != QMessageBox.Yes:
             return
         try:
+            latest_preview = self.plan_sources.build_combined_preview()
+            original_versions = {
+                item["id"]: item["sha256"] for item in preview["sources"]
+            }
+            latest_versions = {
+                item["id"]: item["sha256"] for item in latest_preview["sources"]
+            }
+            if original_versions != latest_versions:
+                raise ValueError(
+                    "Źródła zmieniły się podczas decyzji. Sprawdź Excele ponownie."
+                )
+            preview = latest_preview
             content = json.dumps(
                 {"schema": 1, **preview}, ensure_ascii=False,
                 sort_keys=True, indent=2,
