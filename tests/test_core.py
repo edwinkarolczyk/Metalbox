@@ -1427,6 +1427,108 @@ class MetalboxStoreTests(unittest.TestCase):
                 quantity_per_set=1,
             )
 
+    def test_transport_location_optional_and_searchable(self) -> None:
+        item_id = int(self.store.get_order("ZL-740")["items"][0]["id"])
+        self.assertEqual(self.store.list_transport_units(order_item_id=item_id), [])
+        pallet = self.store.register_transport_unit(
+            order_item_id=item_id,
+            unit_code="PAL-024",
+            quantity=600,
+            hall="Hala 2",
+            zone="Zgrzewarki",
+            place="Odkładcze A",
+            stage="Po gięciu",
+            actor="Edwin",
+        )
+        self.assertEqual(pallet["unit_code"], "PAL-024")
+        self.assertEqual(pallet["quantity"], 600)
+        self.assertEqual(pallet["hall"], "Hala 2")
+        self.assertEqual(
+            [x["unit_code"] for x in self.store.list_transport_units(search="ZL-740")],
+            ["PAL-024"],
+        )
+        self.assertEqual(len(self.store.list_transport_movements(unit_code="PAL-024")), 1)
+        self.assertEqual(self.store.list_transport_movements(unit_code="PAL-024")[0]["actor"], "Edwin")
+
+    def test_transport_split_and_full_move_have_durable_history(self) -> None:
+        item_id = int(self.store.get_order("ZL-740")["items"][0]["id"])
+        self.store.register_transport_unit(
+            order_item_id=item_id, unit_code="PAL-A", quantity=700,
+            hall="Hala 1", actor="I zmiana",
+        )
+        self.store.move_transport_unit(
+            "PAL-A", quantity=200, target_unit_code="PAL-B",
+            hall="Hala 2", zone="Malarnia", place="Półka 3", actor="II zmiana",
+        )
+        self.assertEqual(self.store.get_transport_unit("PAL-A")["quantity"], 500)
+        self.assertEqual(self.store.get_transport_unit("PAL-B")["quantity"], 200)
+        self.store.move_transport_unit(
+            "PAL-B", quantity=200, hall="Hala 3",
+            zone="Pakownia", actor="III zmiana",
+        )
+        self.assertEqual(self.store.get_transport_unit("PAL-B")["hall"], "Hala 3")
+        self.assertEqual(
+            [x["action"] for x in self.store.list_transport_movements(unit_code="PAL-B")],
+            ["PRZENIESIONO", "PODZIELONO"],
+        )
+        self.assertEqual(
+            sum(x["quantity"] for x in self.store.list_transport_units(order_item_id=item_id)),
+            700,
+        )
+
+    def test_transport_rejects_wrong_item_excess_and_invalid_split(self) -> None:
+        item = self.store.get_order("ZL-740")["items"][0]
+        item_id = int(item["id"])
+        self.store.register_transport_unit(
+            order_item_id=item_id, unit_code="PAL-A", quantity=100,
+            hall="Hala 1",
+        )
+        with self.assertRaisesRegex(ValueError, "już przypisany"):
+            self.store.register_transport_unit(
+                order_item_id=item_id, unit_code="pal-a", quantity=1, hall="Hala 1",
+            )
+        with self.assertRaisesRegex(ValueError, "przekroczyłaby"):
+            self.store.register_transport_unit(
+                order_item_id=item_id, unit_code="PAL-TOO-MANY",
+                quantity=int(item["quantity"]), hall="Hala 1",
+            )
+        with self.assertRaisesRegex(ValueError, "inny identyfikator"):
+            self.store.move_transport_unit(
+                "PAL-A", quantity=20, hall="Hala 2",
+            )
+        self.assertEqual(self.store.get_transport_unit("PAL-A")["quantity"], 100)
+        with self.assertRaisesRegex(ValueError, "większa"):
+            self.store.move_transport_unit(
+                "PAL-A", quantity=101, hall="Hala 2",
+            )
+
+    def test_transport_handover_and_schema_repair(self) -> None:
+        item_id = int(self.store.get_order("ZL-740")["items"][0]["id"])
+        self.store.register_transport_unit(
+            order_item_id=item_id, unit_code="PAL-S", quantity=25, hall="Hala 1",
+        )
+        with self.assertRaisesRegex(ValueError, "Najpierw"):
+            self.store.set_transport_handover("PAL-S", status="ODEBRANE")
+        self.store.set_transport_handover(
+            "PAL-S", status="OCZEKUJE NA ODBIÓR", actor="Zmiana I",
+        )
+        self.assertEqual(
+            self.store.get_transport_unit("PAL-S")["handover_status"],
+            "OCZEKUJE NA ODBIÓR",
+        )
+        self.store.set_transport_handover(
+            "PAL-S", status="ODEBRANE", actor="Zmiana II",
+        )
+        self.assertEqual(
+            [x["action"] for x in self.store.list_transport_movements(unit_code="PAL-S")],
+            ["ODBIÓR", "PRZEKAZANIE", "UTWORZONO"],
+        )
+        self.assertEqual(
+            self.store.get_transport_unit("PAL-S")["handover_status"], "ODEBRANE",
+        )
+        reopened = MetalboxStore(self.db_path)
+        self.assertEqual(reopened.get_transport_unit("PAL-S")["quantity"], 25)
+
     def test_seed_and_search(self) -> None:
         orders = self.store.list_orders()
         self.assertEqual(len(orders), 4)
