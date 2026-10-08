@@ -1,33 +1,38 @@
 {
   "schema": 1,
-  "version": "0.1.30.1",
-  "title": "Lokalizacje palet i przekazanie między zmianami",
-  "description": "Opcjonalne oznaczanie ostatniej potwierdzonej lokalizacji produktu/półproduktu: hala, strefa, miejsce, identyfikator palety. Obsługuje podział ilości, przenoszenie i historię przekazań. Nie blokuje produkcji bez lokalizacji.",
+  "version": "0.1.30.2",
+  "title": "Planista — dwa niezależne źródła Excel",
+  "description": "Punkt 1 wdrożenia 0.1.31: dwa lub więcej źródeł .xlsx/.xlsm, niezależny automat sprawdzania, snapshoty, statusy błędów i konflikty. Bez automatycznego scalania i publikacji.",
   "checks": [
     {
-      "id": "location-register",
-      "text": "1. Wejdź w dział i wybierz przy pozycji ZL „Lokalizacja”. Dodaj paletę (np. PAL-024) z liczbą sztuk, halą i strefą. Sprawdź, że jest widoczna w tabeli.",
-      "trigger": "location:registered"
+      "id": "excel-sources",
+      "text": "1. Otwórz Planista → Źródła Excel (2+). Dodaj dwa różne pliki z niezależnymi nazwami i interwałami.",
+      "trigger": ""
     },
     {
-      "id": "location-move",
-      "text": "2. Zaznacz paletę, zmień halę i przenieś część ilości na inny numer palety. Sprawdź, że ilości się zgadzają i historia zachowała oba miejsca.",
-      "trigger": "location:moved"
+      "id": "excel-auto",
+      "text": "2. Wybierz „Sprawdź wszystkie teraz”. Zweryfikuj w tabeli osobne daty i stany odczytu, bez otwierania źródłowych plików.",
+      "trigger": ""
     },
     {
-      "id": "location-handover",
-      "text": "3. Oznacz paletę „Przekaż zmianie”, następnie „Potwierdź odbiór”. Zweryfikuj nowy status i historię.",
-      "trigger": "location:handover"
+      "id": "excel-changes",
+      "text": "3. Zmień ilość w jednym źródle. Sprawdź różnicę tylko tego źródła; drugi Excel powinien zachować swój stan.",
+      "trigger": ""
     },
     {
-      "id": "location-search",
-      "text": "4. W dowolnym dziale kliknij „Gdzie jest materiał?”. Wyszukaj paletę po numerze ZL, produkcie i hali. Upewnij się, że niepotwierdzone lokalizacje nie są przedstawiane jako GPS lub śledzenie automatyczne.",
-      "trigger": "location:search"
+      "id": "excel-conflicts",
+      "text": "4. Użyj tego samego ZL/produktu z różnymi wartościami w dwóch Excelach. Konflikt ma pozostać do rozstrzygnięcia.",
+      "trigger": ""
     },
     {
-      "id": "location-optional",
-      "text": "5. Uruchom produkcję innej pozycji bez palety i sprawdź, że brak lokalizacji nie blokuje sesji ani raportowania ilości.",
-      "trigger": "location:optional"
+      "id": "excel-missing",
+      "text": "5. Wyłącz dostęp do jednego Excela. Jego ostatnie poprawne dane muszą pozostać, a drugi Excel ma nadal działać.",
+      "trigger": ""
+    },
+    {
+      "id": "excel-manual",
+      "text": "6. Potwierdź, że automatyczny skaner nie zatwierdza ani nie publikuje zleceń w kolejce produkcji.",
+      "trigger": ""
     }
   ]
 }
