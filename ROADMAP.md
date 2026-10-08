@@ -296,9 +296,25 @@ Każdy dział otrzymuje uproszczony ekran operacyjny.
 - [ ] Minimalizacja liczby kliknięć.
 - [ ] Brak dostępu do ustawień administracyjnych z konta operatora.
 
+### Lokalizacja fizyczna produktu / półproduktu — opcjonalna
+
+Cel: pracownik kolejnej zmiany lub następnego działu od razu widzi, gdzie fizycznie znaleźć konkretną partię produkcyjną, bez chodzenia po halach i pytania poprzedniej zmiany.
+
+- [ ] Opcjonalne śledzenie aktualnej / ostatniej potwierdzonej lokalizacji **partii produktu lub półproduktu**, także gdy jedno ZL jest podzielone na kilka palet.
+- [ ] Hierarchia lokalizacji: **hala → dział / strefa → stanowisko / regał / miejsce odkładcze**; nazwy i poziomy konfigurowalne.
+- [ ] Identyfikator jednostki transportowej: **paleta, pojemnik, kosz lub wózek**; przypięcie symbolu produktu, ZL/pozycji, etapu, ilości i identyfikatora jednostki.
+- [ ] Ręczne wskazanie lokalizacji (podstawowy wariant), opcjonalnie **etykieta QR** na palecie i skanowanie przy odłożeniu, pobraniu oraz przekazaniu na kolejny dział.
+- [ ] Widok pracownika: „**Gdzie jest materiał?**” — wyszukanie po numerze ZL, symbolu/nazwie produktu, półprodukcie lub kodzie palety; wynik pokazuje miejsce, ilość, etap i czas ostatniego potwierdzenia.
+- [ ] Przekazanie między zmianami/działami: ostatnia lokalizacja i status partii pozostają widoczne następnej zmianie; można odnotować „przekazane”, „oczekuje na odbiór” i „odebrane”.
+- [ ] Obsłużyć **częściowe przemieszczenie**: np. z 7000 szt. 500 na jednej palecie, 600 na drugiej i pozostałe w produkcji; bez przenoszenia całego ZL jednym kliknięciem.
+- [ ] Po zmianie lokalizacji zapisać **kto, kiedy, skąd, dokąd i ile sztuk** przeniósł; nie usuwać historii.
+- [ ] Rozróżniać **ostatnią potwierdzoną lokalizację** od faktycznego śledzenia na żywo. Bez skanu/potwierdzenia nie udawać automatycznej aktualizacji; dla nieznanego miejsca pokazać „lokalizacja niepotwierdzona”.
+- [ ] Funkcja ma być **opcjonalna** dla działu / stanowiska; brak etykiety lub lokalizacji nie może automatycznie blokować produkcji.
+- [ ] Wdrożenie etapowe: najpierw ręczne lokalizacje i przekazanie między zmianami, potem QR; automatyczne wykrywanie RFID/BLE/UWB rozważać dopiero, jeżeli będzie uzasadnione i wyposażenie hali na to pozwoli.
+
 ### Kryterium odbioru
 
-Operator potrafi obsłużyć zmianę zlecenia bez otwierania panelu administracyjnego i bez ręcznego wpisywania informacji, które system już zna.
+Operator potrafi obsłużyć zmianę zlecenia bez otwierania panelu administracyjnego i bez ręcznego wpisywania informacji, które system już zna. Pracownik następnej zmiany może opcjonalnie odnaleźć partię po ZL/produkcie/półprodukcie i zobaczyć jej ostatnią potwierdzoną lokalizację oraz ilość.
 
 ---
 
