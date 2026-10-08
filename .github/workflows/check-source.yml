@@ -8,6 +8,7 @@ on:
       - dev_launcher.py
       - metalbox_core.py
       - plan_excel.py
+      - plan_sources.py
       - requirements.txt
       - tests/**
       - .github/workflows/check-source.yml
@@ -37,6 +38,7 @@ jobs:
           python -m py_compile dev_launcher.py
           python -m py_compile metalbox_core.py
           python -m py_compile plan_excel.py
+          python -m py_compile plan_sources.py
 
       - name: Core and UI smoke tests
         env:
