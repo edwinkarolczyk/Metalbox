@@ -88,6 +88,9 @@ class MultiSourceTests(unittest.TestCase):
         self.assertEqual(good["rows"][0]["quantity"], 81)
 
     def test_two_independent_excels_can_share_same_folder(self) -> None:
+        # Pozostałe źródła z setUp wyłączamy — nie należą do tego podglądu.
+        self.registry.update_source(self.source_a["id"], enabled=False)
+        self.registry.update_source(self.source_b["id"], enabled=False)
         folder = self.root / "wspolny-folder"
         folder.mkdir()
         make_excel(folder / "laser.xlsx", qty=17, symbol="1.400.10")
