@@ -53,6 +53,42 @@ class UiSmokeTest(unittest.TestCase):
             dialog.close()
             global_search.close()
 
+    def test_manager_can_explicitly_keep_both_real_batches_in_excel_ui(self) -> None:
+        from plan_sources import PlanSources
+        from test_plan_sources import make_excel
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            left, right = root / "a.xlsx", root / "b.xlsx"
+            make_excel(left, qty=65)
+            make_excel(right, qty=35)
+            registry = PlanSources(root / "sources")
+            a = registry.add_source(name="Plan A", path=str(left))
+            b = registry.add_source(name="Plan B", path=str(right))
+            registry.scan(a["id"])
+            registry.scan(b["id"])
+            view = metalbox_app.PlanSourcesView(registry, lambda: None)
+
+            def first_option(*args, **_kwargs):
+                return args[3][0], True
+
+            with patch.object(
+                metalbox_app.QInputDialog, "getItem", side_effect=first_option
+            ), patch.object(
+                metalbox_app.QMessageBox, "question",
+                return_value=metalbox_app.QMessageBox.Yes,
+            ), patch.object(
+                metalbox_app.QMessageBox, "warning",
+                side_effect=AssertionError("Nieoczekiwana blokada"),
+            ):
+                view._resolve_conflict()
+            self.assertTrue(registry.check_conflicts()[0]["keep_all"])
+            self.assertEqual(
+                sorted(row["quantity"] for row in registry.build_combined_preview()["rows"]),
+                [35, 65],
+            )
+            view.close()
+
     def test_folder_source_ui_selects_copy_and_remembers_own_mapping(self) -> None:
         from plan_sources import PlanSources
         from test_plan_sources import make_excel
