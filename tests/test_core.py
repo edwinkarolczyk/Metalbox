@@ -1497,7 +1497,7 @@ class MetalboxStoreTests(unittest.TestCase):
                 "PAL-A", quantity=20, hall="Hala 2",
             )
         self.assertEqual(self.store.get_transport_unit("PAL-A")["quantity"], 100)
-        with self.assertRaisesRegex(ValueError, "większa"):
+        with self.assertRaisesRegex(ValueError, "więcej sztuk"):
             self.store.move_transport_unit(
                 "PAL-A", quantity=101, hall="Hala 2",
             )
