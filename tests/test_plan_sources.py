@@ -120,7 +120,7 @@ class MultiSourceTests(unittest.TestCase):
         original_b = self.plan_b.read_bytes()
         self.registry.scan(self.source_a["id"])
         self.registry.scan(self.source_b["id"])
-        with self.assertRaisesRegex(ValueError, "wspólnych pozycji"):
+        with self.assertRaisesRegex(ValueError, "nierozstrzygniętych pozycji"):
             self.registry.build_combined_preview()
         self.assertEqual(self.plan_a.read_bytes(), original_a)
         self.assertEqual(self.plan_b.read_bytes(), original_b)
