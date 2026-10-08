@@ -2,7 +2,7 @@
   "schema": 1,
   "version": "0.1.30.2",
   "title": "Planista — dwa niezależne źródła Excel",
-  "description": "Punkt 1 wdrożenia 0.1.31: dwa lub więcej źródeł .xlsx/.xlsm, niezależny automat sprawdzania, snapshoty, statusy błędów i konflikty. Bez automatycznego scalania i publikacji.",
+  "description": "Etap 0.1.31: równoległe snapshoty Excel, automatyczny odczyt i niezależne porównanie, konflikty i ręczny wybór źródła. Wspólny podgląd powstaje dopiero na żądanie; zatwierdzenie i publikacja pozostają oddzielnymi czynnościami.",
   "checks": [
     {
       "id": "excel-sources",
@@ -25,13 +25,18 @@
       "trigger": ""
     },
     {
+      "id": "excel-resolution",
+      "text": "5. W Planista → Źródła Excel (2+) wybierz „Rozstrzygnij ZL”, wskaż właściwy Excel dla powtarzającego się produktu i sprawdź, że „Przygotuj do akceptacji” nie dubluje sztuk. Po zmianie Excela wybór musi wygasnąć.",
+      "trigger": ""
+    },
+    {
       "id": "excel-missing",
-      "text": "5. Wyłącz dostęp do jednego Excela. Jego ostatnie poprawne dane muszą pozostać, a drugi Excel ma nadal działać.",
+      "text": "6. Wyłącz dostęp do jednego Excela. Jego ostatnie poprawne dane muszą pozostać, a drugi Excel ma nadal działać.",
       "trigger": ""
     },
     {
       "id": "excel-manual",
-      "text": "6. Potwierdź, że automatyczny skaner nie zatwierdza ani nie publikuje zleceń w kolejce produkcji.",
+      "text": "7. Potwierdź, że automatyczny skaner nie zatwierdza ani nie publikuje zleceń w kolejce produkcji.",
       "trigger": ""
     }
   ]
