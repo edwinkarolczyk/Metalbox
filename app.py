@@ -44,6 +44,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSpinBox,
     QStackedWidget,
     QTableWidget,
@@ -53,7 +54,7 @@ from PySide6.QtWidgets import (
 )
 
 APP_NAME = "Metalbox"
-APP_VERSION = "0.1.30.4"
+APP_VERSION = "0.1.30.5"
 LOCAL_DATA_ROOT = Path(
     os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
 ) / "Metalbox"
@@ -515,7 +516,7 @@ class UpdateChecklistPanel(QWidget):
         super().__init__(parent)
         self.state = load_dev_update_state()
         self.rows: list[dict] = []
-        self.collapsed = False
+        self.collapsed = True
 
         root = QVBoxLayout(self)
         root.setContentsMargins(sp(12), sp(8), sp(12), sp(8))
@@ -567,6 +568,11 @@ class UpdateChecklistPanel(QWidget):
         root.addWidget(self.scroll)
 
         self.refresh_from_disk()
+        # Domyślnie wąski pasek: nie zasłania pulpitu produkcyjnego.
+        # Rozwinięcie pozostaje dostępne przyciskiem „Pokaż”.
+        self.scroll.hide()
+        self.collapse_btn.setText("Pokaż")
+        self.setFixedHeight(sp(50))
 
     def _clear_rows(self) -> None:
         self.rows.clear()
@@ -8891,7 +8897,7 @@ class MainWindow(QMainWindow):
 
         self.update_test_panel = UpdateChecklistPanel(self)
         self.update_test_panel.setObjectName("updateTestOverlay")
-        self.update_test_panel.setFixedHeight(sp(240))
+        self.update_test_panel.setFixedHeight(sp(50))
         self.update_test_panel.show()
         self._position_update_test_panel()
         self.update_test_panel.raise_()
@@ -9002,6 +9008,7 @@ class MainWindow(QMainWindow):
         self.grid_wrap = QFrame()
         self.grid_wrap.setObjectName("gridWrap")
         self.grid_wrap.setMaximumWidth(sp(1680))
+        self.grid_wrap.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         grid = QGridLayout(self.grid_wrap)
         grid.setContentsMargins(sp(14), sp(14), sp(14), sp(14))
         grid.setHorizontalSpacing(sp(11))
@@ -9021,7 +9028,7 @@ class MainWindow(QMainWindow):
             self.department_buttons[department] = btn
 
         grid.setColumnStretch(department_columns, 1)
-        outer.addWidget(self.grid_wrap, alignment=Qt.AlignLeft)
+        outer.addWidget(self.grid_wrap, alignment=Qt.AlignLeft | Qt.AlignTop)
 
         line = QHBoxLayout()
         title = QLabel("Produkcja na bieżąco")
@@ -9050,6 +9057,7 @@ class MainWindow(QMainWindow):
 
         QTimer.singleShot(0, self.refresh_home)
 
+        outer.addStretch(1)
         footer = QLabel("Stworzone przez Edwina Karolczyka dla Metalbox sp. z o.o.")
         footer.setObjectName("footer")
         footer.setAlignment(Qt.AlignCenter)
