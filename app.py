@@ -6192,10 +6192,32 @@ class PlannerPage(PageBase):
             int(snapshot["id"]),
             self,
         )
+        dialog.accepted.connect(
+            lambda path=str(snapshot["snapshot_path"]),
+                   name=str(snapshot["source_name"]):
+                   self._mark_accepted_excel_sources(path, name)
+        )
         self._show_inline_dialog(
             dialog,
             "Planista / Do akceptacji",
         )
+
+    def _mark_accepted_excel_sources(self, path: str, name: str) -> None:
+        if not name.startswith("WSPÓLNY PLAN: "):
+            return
+        try:
+            target = Path(path).resolve()
+            allowed = (MULTI_PLAN_SOURCES_DIR / "combined_snapshots").resolve()
+            if not target.is_relative_to(allowed):
+                raise ValueError("Ścieżka wspólnego snapshotu jest nieprawidłowa.")
+            data = json.loads(target.read_text(encoding="utf-8"))
+            count = self.plan_sources.acknowledge_accepted_sources(
+                data.get("sources") or []
+            )
+            app_log(f"Akceptacja wspólnego planu: potwierdzono {count} źródeł.")
+            self._poll_excel_sources()
+        except (OSError, ValueError, TypeError) as exc:
+            app_log(f"Nie potwierdzono źródeł po akceptacji: {exc}", "WARN")
 
     def _show_changes(self) -> None:
         if self.current_snapshot is None:
