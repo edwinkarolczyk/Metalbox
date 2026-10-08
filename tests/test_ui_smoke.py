@@ -103,6 +103,16 @@ class UiSmokeTest(unittest.TestCase):
                 self.assertEqual(
                     store.get_plan_acceptance_preview(int(snapshot["id"]))["total_changes"], 2
                 )
+                store.accept_plan_snapshot(int(snapshot["id"]))
+                page._mark_accepted_excel_sources(
+                    str(snapshot["snapshot_path"]), str(snapshot["source_name"])
+                )
+                self.assertEqual(
+                    page.plan_sources.get_state(first["id"])["status"], "BEZ ZMIAN"
+                )
+                self.assertEqual(
+                    page.plan_sources.get_state(second["id"])["status"], "BEZ ZMIAN"
+                )
                 page.close()
 
     def test_product_hints_resource_is_available(self) -> None:
