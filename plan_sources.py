@@ -197,6 +197,65 @@ class PlanSources:
             self._write(self._state_path(source_id), state)
             return {**state, "source_id": source_id}
 
+    def build_combined_preview(self) -> dict:
+        """Łączy ostatnie poprawne odczyty dopiero na wyraźne żądanie kierownika.
+
+        Nie zatwierdza, nie nadpisuje zleceń i blokuje nieznane/konfliktowe źródła.
+        """
+        active = [src for src in self.list_sources() if src.get("enabled")]
+        if not active:
+            raise ValueError("Włącz przynajmniej jedno źródło Excel.")
+        conflicts = self.check_conflicts()
+        if conflicts:
+            raise ValueError(
+                f"Źródła zawierają {len(conflicts)} wspólnych pozycji ZL/produkt. "
+                "Najpierw rozstrzygnij konflikty i duplikaty — nie wolno ich sumować."
+            )
+
+        rows = []
+        versions = []
+        for src in active:
+            state = self.get_state(src["id"])
+            if state.get("status") not in {"NOWE ZMIANY", "BEZ ZMIAN", "GOTOWE"}:
+                raise ValueError(
+                    f'Źródło {src["name"]} nie ma aktualnego poprawnego odczytu. '
+                    "Nie zastępuj go pustym planem."
+                )
+            if not state.get("rows") or not state.get("sha256"):
+                raise ValueError(f'Źródło {src["name"]} nie ma pozycji do scalenia.')
+            # Między automatycznym odczytem a ręcznym przygotowaniem planu
+            # źródłowy Excel mógł ulec zmianie. W takim przypadku blokuj.
+            try:
+                stat = Path(src["path"]).stat()
+            except OSError as exc:
+                raise ValueError(
+                    f'Plik źródła {src["name"]} jest niedostępny. '
+                    "Ostatni poprawny stan zachowano, lecz publikacja jest wstrzymana."
+                ) from exc
+            signature = f"{stat.st_size}:{stat.st_mtime_ns}"
+            if signature != state.get("signature"):
+                raise ValueError(
+                    f'Źródło {src["name"]} zmieniło się od ostatniego odczytu. '
+                    "Najpierw sprawdź je ponownie."
+                )
+            if not Path(state["snapshot_path"]).is_file():
+                raise ValueError(
+                    f'Snapshot źródła {src["name"]} nie jest dostępny.'
+                )
+            versions.append({
+                "id": src["id"], "name": src["name"],
+                "sha256": state["sha256"], "checked_at": state["checked_at"],
+            })
+            for row in state["rows"]:
+                entry = dict(row)
+                entry["source_name"] = src["name"]
+                entry["source_id"] = src["id"]
+                entry["source_row_no"] = row.get("row_no")
+                entry["row_key"] = f'{src["id"]}|{row["row_key"]}'
+                entry["row_no"] = len(rows) + 1
+                rows.append(entry)
+        return {"rows": rows, "sources": versions, "row_count": len(rows)}
+
     def check_conflicts(self) -> list[dict]:
         """Konflikty między aktywnymi źródłami, wyłącznie informacyjnie."""
         values: dict[tuple[str, str], list[dict]] = {}
