@@ -5069,10 +5069,11 @@ class PlanPublicationView(QWidget):
 class PlanSourcesView(QWidget):
     """Źródła planu: niezależne kopie i podgląd bez publikowania do produkcji."""
 
-    def __init__(self, sources: PlanSources, request_check: Callable, parent=None):
+    def __init__(self, sources: PlanSources, request_check: Callable, parent=None, prepare_combined: Callable | None = None):
         super().__init__(parent)
         self.sources = sources
         self.request_check = request_check
+        self.prepare_combined = prepare_combined
         self.source_ids: list[str] = []
         root = QVBoxLayout(self)
         root.setSpacing(sp(10))
@@ -5130,6 +5131,10 @@ class PlanSourcesView(QWidget):
         check = QPushButton("Sprawdź wszystkie teraz")
         check.clicked.connect(self._check)
         actions.addWidget(check)
+        if self.prepare_combined is not None:
+            prepare = QPushButton("Przygotuj do akceptacji")
+            prepare.clicked.connect(self.prepare_combined)
+            actions.addWidget(prepare)
         problems = QPushButton("Pokaż konflikty")
         problems.clicked.connect(self._show_conflicts)
         actions.addWidget(problems)
@@ -5400,8 +5405,81 @@ class PlannerPage(PageBase):
     def _open_excel_sources(self) -> None:
         view = PlanSourcesView(
             self.plan_sources, lambda: self._poll_excel_sources(force=True),
+            prepare_combined=self._prepare_merged_sources,
         )
         self._show_inline_widget(view, "Planista / Monitorowane źródła Excel")
+
+    def _prepare_merged_sources(self) -> None:
+        if self._source_tasks:
+            QMessageBox.information(
+                self, "Planista", "Trwa sprawdzanie źródeł. Przygotuj plan po zakończeniu odczytu."
+            )
+            return
+        try:
+            preview = self.plan_sources.build_combined_preview()
+        except ValueError as exc:
+            QMessageBox.warning(self, "Blokada wspólnego planu", str(exc))
+            return
+        answer = QMessageBox.question(
+            self, "Przygotuj plan do akceptacji",
+            f'Zbudować wspólny podgląd z {len(preview["sources"])} źródeł, '
+            f'{preview["row_count"]} pozycji?\n\n'
+            "To nie zatwierdzi planu i nie zmieni kolejki produkcji. "
+            "Dopiero osobna akceptacja kierownika i publikacja zmieniają stan programu.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+        try:
+            content = json.dumps(
+                {"schema": 1, **preview}, ensure_ascii=False,
+                sort_keys=True, indent=2,
+            )
+            raw = content.encode("utf-8")
+            checksum = hashlib.sha256(raw).hexdigest()
+            snapshot_dir = MULTI_PLAN_SOURCES_DIR / "combined_snapshots"
+            snapshot_dir.mkdir(parents=True, exist_ok=True)
+            combined_path = snapshot_dir / f'combined-{checksum[:24]}.json'
+            temp = combined_path.with_suffix(".json.tmp")
+            try:
+                temp.write_bytes(raw)
+                os.replace(temp, combined_path)
+            finally:
+                temp.unlink(missing_ok=True)
+            previous = self.store.get_latest_plan_snapshot()
+            previous_rows = (
+                self.store.list_plan_snapshot_rows(int(previous["id"]))
+                if previous is not None else []
+            )
+            snapshot = self.store.create_plan_snapshot(
+                source_name="WSPÓLNY PLAN: " + ", ".join(
+                    x["name"] for x in preview["sources"]
+                ),
+                snapshot_path=str(combined_path),
+                sha256=checksum,
+                size_bytes=len(raw),
+                sheet_name="WIELE ŹRÓDEŁ",
+                header_row=1,
+                rows=preview["rows"],
+            )
+            self.current_diff = compare_plan_rows(previous_rows, preview["rows"])
+            self.current_snapshot = snapshot
+            self._render_rows(preview["rows"], self.current_diff)
+            self._set_card_value(
+                self.approval_card,
+                self.store.get_plan_acceptance_preview(int(snapshot["id"]))["total_changes"],
+            )
+            self._return_to_plan()
+            QMessageBox.information(
+                self, "Wspólny snapshot przygotowany",
+                "Wspólny plan zapisano jako PODGLĄD. Teraz wybierz „Do akceptacji”, "
+                "aby obejrzeć zmiany i świadomie je zatwierdzić. "
+                "Zlecenia produkcyjne nie zostały zmienione.",
+            )
+        except (OSError, ValueError) as exc:
+            app_log(f"Wspólny plan Excel: {exc}", "ERROR")
+            QMessageBox.critical(self, "Nie przygotowano planu", str(exc))
 
     def _poll_excel_sources(self, *_args, force: bool = False) -> None:
         # GUI nie otwiera plików Excel: kopiowanie i parsowanie działa w dwóch wątkach.
