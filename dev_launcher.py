@@ -428,16 +428,16 @@ def source_self_test(source_dir: Path) -> int:
     existing = {name: sys.modules.pop(name, None) for name in modules}
     sys.path.insert(0, str(source_dir))
     try:
-        import metalbox_core
-        import plan_excel
-        import plan_sources
-        import app as metalbox_app
-        for name, module in (
-            ("metalbox_core", metalbox_core),
-            ("plan_excel", plan_excel),
-            ("plan_sources", plan_sources),
-            ("app", metalbox_app),
-        ):
+        # Import po nazwach zmiennych: PyInstaller NIE może zamrozić
+        # metalbox_core/plan_excel/plan_sources/app wewnątrz Runnera.
+        imported = {
+            name: importlib.import_module(name)
+            for name in modules
+        }
+        metalbox_core = imported["metalbox_core"]
+        plan_sources = imported["plan_sources"]
+        metalbox_app = imported["app"]
+        for name, module in imported.items():
             actual = Path(module.__file__).resolve()
             expected = (source_dir / f"{name}.py").resolve()
             if actual != expected:
