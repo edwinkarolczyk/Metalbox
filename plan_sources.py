@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 """Niezależne źródła firmowego planu. Excel otwierany wyłącznie do wykonania kopii."""
+import fnmatch
 import json
 import os
 import threading
@@ -59,11 +60,91 @@ class PlanSources:
             raise ValueError("Źródło musi wskazywać plik .xlsx lub .xlsm.")
         return str(candidate.absolute())
 
+    @staticmethod
+    def _source_mode(mode: str) -> str:
+        value = str(mode or "file").strip().lower()
+        if value not in {"file", "folder"}:
+            raise ValueError("Typ źródła musi być plikiem lub folderem.")
+        return value
+
+    @staticmethod
+    def _exclude_patterns(value: str) -> str:
+        parts = [part.strip() for part in str(value or "~$*").split(";") if part.strip()]
+        if len(parts) > 30 or any(len(part) > 100 for part in parts):
+            raise ValueError("Zbyt wiele wzorców wykluczenia.")
+        if not any(part.casefold() == "~$*" for part in parts):
+            parts.insert(0, "~$*")
+        return ";".join(parts)
+
+    def folder_candidates(self, path: str, *, exclude_patterns: str = "~$*") -> list[str]:
+        folder = Path(str(path)).expanduser()
+        if not folder.is_dir():
+            raise ValueError(f"Nie znaleziono folderu źródłowego: {folder}")
+        excluded = self._exclude_patterns(exclude_patterns).split(";")
+        candidates: list[str] = []
+        for entry in folder.iterdir():
+            if not entry.is_file() or entry.suffix.casefold() not in {".xlsx", ".xlsm"}:
+                continue
+            name = entry.name
+            if name.startswith(".") or any(
+                fnmatch.fnmatchcase(name.casefold(), pattern.casefold())
+                for pattern in excluded
+            ):
+                continue
+            candidates.append(name)
+        return sorted(candidates, key=str.casefold)
+
+    def _resolved_file(self, source: dict) -> Path:
+        mode = self._source_mode(source.get("mode", "file"))
+        root = Path(source["path"])
+        if mode == "file":
+            return root
+        candidates = self.folder_candidates(
+            str(root), exclude_patterns=source.get("exclude_patterns", "~$*")
+        )
+        chosen = str(source.get("selected_file") or "").strip()
+        if chosen:
+            if chosen not in candidates or Path(chosen).name != chosen:
+                raise ValueError(
+                    "Wybrany Excel nie znajduje się w folderze lub jest wykluczony. "
+                    "Wskaż go ponownie; ostatni poprawny plan pozostaje zachowany."
+                )
+            return root / chosen
+        if len(candidates) == 1:
+            return root / candidates[0]
+        if not candidates:
+            raise ValueError("Folder nie zawiera żadnego dozwolonego pliku Excel.")
+        raise ValueError(
+            f"Folder zawiera {len(candidates)} plików Excel. "
+            "Wybierz konkretny aktywny plik; Metalbox nie zgaduje, która kopia jest aktualna."
+        )
+
+    @staticmethod
+    def _config_fingerprint(source: dict) -> str:
+        mapping = source.get("column_mapping") or {}
+        config = {
+            "mode": source.get("mode", "file"),
+            "path": source.get("path"),
+            "selected_file": source.get("selected_file", ""),
+            "exclude_patterns": source.get("exclude_patterns", "~$*"),
+            "column_mapping": mapping,
+        }
+        return json.dumps(config, ensure_ascii=False, sort_keys=True)
+
     def add_source(
         self, *, name: str, path: str, interval_seconds: int = 120,
-        enabled: bool = True,
+        enabled: bool = True, mode: str = "file",
+        selected_file: str = "", exclude_patterns: str = "~$*",
     ) -> dict:
-        path = self._validate_path(path)
+        mode = self._source_mode(mode)
+        path = (str(Path(str(path).strip().strip('"')).expanduser().absolute())
+                if mode == "folder" else self._validate_path(path))
+        if mode == "folder" and not str(path).strip():
+            raise ValueError("Podaj folder źródłowy.")
+        exclude_patterns = self._exclude_patterns(exclude_patterns)
+        selected_file = str(selected_file or "").strip()
+        if selected_file and (Path(selected_file).name != selected_file or Path(selected_file).suffix.casefold() not in {".xlsx", ".xlsm"}):
+            raise ValueError("Wybierz samą nazwę pliku Excel z folderu.")
         name = str(name or "").strip()
         if not name:
             raise ValueError("Podaj nazwę źródła.")
@@ -81,6 +162,8 @@ class PlanSources:
             source = dict(
                 id=uuid.uuid4().hex, name=name, path=path,
                 interval_seconds=interval_seconds, enabled=bool(enabled),
+                mode=mode, selected_file=selected_file,
+                exclude_patterns=exclude_patterns, column_mapping={},
             )
             sources.append(source)
             self._write(self.config_path, {"schema": 1, "sources": sources})
@@ -89,7 +172,9 @@ class PlanSources:
     def update_source(
         self, source_id: str, *, name: str | None = None,
         path: str | None = None, interval_seconds: int | None = None,
-        enabled: bool | None = None,
+        enabled: bool | None = None, mode: str | None = None,
+        selected_file: str | None = None, exclude_patterns: str | None = None,
+        column_mapping: dict | None = None,
     ) -> dict:
         with self.lock:
             sources = self.list_sources()
@@ -101,8 +186,30 @@ class PlanSources:
                 candidate["name"] = str(name).strip()
                 if not candidate["name"] or len(candidate["name"]) > 100:
                     raise ValueError("Nieprawidłowa nazwa źródła.")
+            if mode is not None:
+                candidate["mode"] = self._source_mode(mode)
             if path is not None:
-                candidate["path"] = self._validate_path(path)
+                candidate["path"] = (
+                    str(Path(path).expanduser().absolute()) if candidate.get("mode") == "folder"
+                    else self._validate_path(path)
+                )
+            if selected_file is not None:
+                selected_file = str(selected_file).strip()
+                if selected_file and (Path(selected_file).name != selected_file or Path(selected_file).suffix.casefold() not in {".xlsx", ".xlsm"}):
+                    raise ValueError("Nieprawidłowa nazwa pliku w folderze.")
+                candidate["selected_file"] = selected_file
+            if exclude_patterns is not None:
+                candidate["exclude_patterns"] = self._exclude_patterns(exclude_patterns)
+            if column_mapping is not None:
+                if not isinstance(column_mapping, dict) or set(column_mapping) != {"sheet_name", "header_row", "mapping"}:
+                    raise ValueError("Nieprawidłowe mapowanie kolumn źródła.")
+                if not str(column_mapping["sheet_name"]).strip() or int(column_mapping["header_row"]) < 1:
+                    raise ValueError("Mapowanie wymaga arkusza i numeru wiersza nagłówków.")
+                candidate["column_mapping"] = {
+                    "sheet_name": str(column_mapping["sheet_name"]),
+                    "header_row": int(column_mapping["header_row"]),
+                    "mapping": {str(k): int(v) for k, v in dict(column_mapping["mapping"]).items()},
+                }
             if interval_seconds is not None:
                 interval_seconds = int(interval_seconds)
                 if not 30 <= interval_seconds <= 86400:
@@ -115,7 +222,7 @@ class PlanSources:
                 os.path.normcase(x["path"]) == os.path.normcase(candidate["path"])
             ) for x in sources):
                 raise ValueError("Nazwa albo ścieżka jest już zajęta przez inne źródło.")
-            changed_path = candidate["path"] != found["path"]
+            changed_path = self._config_fingerprint(candidate) != self._config_fingerprint(found)
             sources = [candidate if x["id"] == source_id else x for x in sources]
             self._write(self.config_path, {"schema": 1, "sources": sources})
             if changed_path:
@@ -141,11 +248,12 @@ class PlanSources:
             return {"source_id": source_id, "status": "WYŁĄCZONE"}
 
         previous = self.get_state(source_id)
-        src = Path(source["path"])
         checked_at = datetime.now(timezone.utc).isoformat()
         try:
+            src = self._resolved_file(source)
             before = src.stat()
-            signature = f"{before.st_size}:{before.st_mtime_ns}"
+            fingerprint = self._config_fingerprint(source)
+            signature = f"{src}:{before.st_size}:{before.st_mtime_ns}:{fingerprint}"
             if (previous.get("signature") == signature and
                     previous.get("status") in {"BEZ ZMIAN", "NOWE ZMIANY", "GOTOWE"}):
                 # Oczekująca zmiana nie znika przy następnym odczycie bez zmian.
@@ -166,13 +274,22 @@ class PlanSources:
                 self._write(self._state_path(source_id), state)
                 return {**state, "source_id": source_id}
 
-            parsed = read_plan_snapshot(snapshot.path)
+            mapping = source.get("column_mapping") or {}
+            parsed = (
+                read_plan_snapshot(
+                    snapshot.path, sheet_name=str(mapping["sheet_name"]),
+                    header_row=int(mapping["header_row"]),
+                    mapping=dict(mapping["mapping"]),
+                ) if mapping else read_plan_snapshot(snapshot.path)
+            )
             old_rows = list(previous.get("rows") or [])
             diff = compare_plan_rows(old_rows, parsed.rows)
             state = {
                 "status": "NOWE ZMIANY" if any(diff.values()) else "GOTOWE",
                 "source_name": source["name"],
-                "source_path": source["path"],
+                "source_path": str(src),
+                "source_root": source["path"],
+                "mapping_used": mapping,
                 "source_file": src.name,
                 "signature": signature,
                 "sha256": snapshot.sha256,
@@ -232,13 +349,14 @@ class PlanSources:
             # Między automatycznym odczytem a ręcznym przygotowaniem planu
             # źródłowy Excel mógł ulec zmianie. W takim przypadku blokuj.
             try:
-                stat = Path(src["path"]).stat()
+                resolved = self._resolved_file(src)
+                stat = resolved.stat()
             except OSError as exc:
                 raise ValueError(
                     f'Plik źródła {src["name"]} jest niedostępny. '
                     "Ostatni poprawny stan zachowano, lecz publikacja jest wstrzymana."
                 ) from exc
-            signature = f"{stat.st_size}:{stat.st_mtime_ns}"
+            signature = f"{resolved}:{stat.st_size}:{stat.st_mtime_ns}:{self._config_fingerprint(src)}"
             if signature != state.get("signature"):
                 raise ValueError(
                     f'Źródło {src["name"]} zmieniło się od ostatniego odczytu. '
