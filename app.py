@@ -51,7 +51,7 @@ from PySide6.QtWidgets import (
 )
 
 APP_NAME = "Metalbox"
-APP_VERSION = "0.1.30"
+APP_VERSION = "0.1.30.1"
 LOCAL_DATA_ROOT = Path(
     os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
 ) / "Metalbox"
@@ -2433,6 +2433,7 @@ class TransportLocationsDialog(QDialog):
         except ValueError as exc:
             QMessageBox.warning(self, "Nie zapisano palety", str(exc))
             return
+        mark_update_check("location:registered")
         self.refresh_data()
 
     def _move(self) -> None:
@@ -2449,6 +2450,7 @@ class TransportLocationsDialog(QDialog):
         except ValueError as exc:
             QMessageBox.warning(self, "Nie przeniesiono palety", str(exc))
             return
+        mark_update_check("location:moved")
         self.refresh_data()
 
     def _handover(self, status: str) -> None:
@@ -2459,6 +2461,7 @@ class TransportLocationsDialog(QDialog):
         except ValueError as exc:
             QMessageBox.warning(self, "Nie zmieniono przekazania", str(exc))
             return
+        mark_update_check("location:handover")
         self.refresh_data()
 
     def _show_history(self) -> None:
@@ -2730,10 +2733,9 @@ class DepartmentPage(PageBase):
             "Dodaj ilość",
             "Jakość",
             "Obsada",
-            "Lokalizacja",
             "Zakończ sesję",
             "Problem",
-            "Szczegóły",
+            "Lokalizacja",
         ):
             btn = QPushButton(text)
             btn.setProperty("orderCode", code)
