@@ -57,6 +57,15 @@ class MultiSourceTests(unittest.TestCase):
         self.assertEqual(conflicts[0]["status"], "DO ROZSTRZYGNIĘCIA")
         self.assertEqual(conflicts[0]["sources"], ["Excel 1", "Excel 2"])
 
+    def test_damaged_excel_preserves_last_good_snapshot(self) -> None:
+        first = self.registry.scan(self.source_a["id"])
+        self.plan_a.write_bytes(b"not-an-excel-archive")
+        broken = self.registry.scan(self.source_a["id"])
+        self.assertEqual(broken["status"], "BŁĄD ODCZYTU")
+        self.assertEqual(broken["rows"], first["rows"])
+        self.assertEqual(broken["sha256"], first["sha256"])
+        self.assertEqual(self.registry.scan(self.source_b["id"])["row_count"], 1)
+
     def test_missing_file_keeps_last_successful_state_and_other_source(self) -> None:
         first = self.registry.scan(self.source_a["id"])
         self.plan_a.unlink()
