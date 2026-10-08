@@ -4,9 +4,11 @@ Wyspecjalizowany system do zarządzania produkcją Metalbox sp. z o.o.
 
 ## Aktualny stan
 
-**0.1.24 — działający rdzeń Development + edytowalne karty produktów**
+**0.1.30.1 — rozwój planowania oraz opcjonalna lokalizacja palet**
 
 Metalbox nie jest już samą makietą UI. W gałęzi Development działa rzeczywisty zapis danych produkcyjnych, pracownicy i obsada, rejestracja pracy oraz jakości, katalog produktów z surowymi podpowiedziami źródłowymi, BOM, kolejność operacji technologicznych i edycja kart produktów z audytem. Aktualny etap przygotowuje dane pod realne zlecenia i pilotaż równoległy z firmowym Excelem.
+
+W 0.1.30 uruchomiono kontrolowaną publikację zaakceptowanego planu do kolejek działów z uwzględnieniem zależności BOM. W 0.1.30.1 dodano opcjonalne, ręcznie potwierdzane lokalizacje palet, z powiązaniem na pozycję ZL, wyszukiwaniem, podziałem ilości i historią przekazania między zmianami. Lokalizacja to ostatni potwierdzony stan, a nie automatyczny pomiar położenia; nie blokuje prowadzenia produkcji. Przed użyciem na hali funkcję trzeba potwierdzić testami CI i odbiorem użytkownika.
 
 ## Metalbox Launcher
 
