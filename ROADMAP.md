@@ -356,7 +356,7 @@ Na etapie pilotażu obecny Excel pozostaje nadrzędnym planem firmy.
 - [ ] Zachować import kolorów/grup legacy z Excela bez nadawania im znaczenia, dopóki ich rola nie zostanie potwierdzona.
 - [ ] Obsługiwać kalendarz dzienny zgrzewania z Excela.
 
-### Stan prac (Development 0.1.30.2 → docelowo 0.1.31)
+### Stan prac (Development 0.1.30.3 → docelowo 0.1.31)
 
 - [x] Rejestr dwóch i większej liczby plików Excel: nazwa, ścieżka, niezależny interwał, włącz/wyłącz.
 - [x] Automatyczna kontrola aktywnych źródeł w tle bez blokowania interfejsu Planisty.
@@ -367,8 +367,8 @@ Na etapie pilotażu obecny Excel pozostaje nadrzędnym planem firmy.
 - [x] Po zatwierdzeniu wspólnego podglądu czyszczenie alertów tylko przy zgodnych hashach źródeł; zmiana Excela przed zatwierdzeniem pozostawia alert aktywny.
 - [x] Wstępne rozstrzyganie wspólnych pozycji ZL/produkt bez wyłączania całego źródła: kierownik wybiera właściwy Excel dla danej pozycji; wybór wygasa po zmianie snapshotu któregokolwiek źródła.
 - [ ] Rozwinięcie rozstrzygania dla kilku osobnych partii tego samego symbolu w ramach jednego ZL (gdy pozycje nie są rzeczywistymi duplikatami).
-- [ ] Monitorowanie folderów, wybór kopii oraz listy ignorowanych plików (np. blokad Excel ~$ i archiwa).
-- [ ] Osobne mapowanie kolumn dla każdego źródła także w automatycznym skanerze (na teraz mapowanie ręczne dotyczy dotychczasowego importu).
+- [x] Monitorowanie folderów, świadomy wybór aktywnej kopii oraz wzorce wykluczeń plików (np. blokad Excel `~$*` i archiwów). Przy wielu dopuszczalnych kopiach bez wyboru — blokada zamiast zgadywania.
+- [x] Osobne mapowanie kolumn (arkusz, nagłówki, pola) dla każdego monitorowanego źródła, również z folderu. Mapowanie jest wykonywane wyłącznie na snapshotach.
 - [ ] Odbiór produkcyjny na dwóch prawdziwych firmowych Excelach i test publikacji z ochroną aktywnych sesji.
 - [ ] Zakończenie wersji 0.1.31 po pozytywnym odbiorze powyższych punktów.
 
