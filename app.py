@@ -5088,7 +5088,7 @@ class PlanSourcesView(QWidget):
 
         self.table = QTableWidget(0, 7)
         self.table.setHorizontalHeaderLabels(
-            ["Źródło", "Plik", "Co ile", "Aktywne", "Ostatni odczyt", "Stan", "Zmiany"]
+            ["Źródło", "Plik / folder", "Co ile", "Aktywne", "Ostatni odczyt", "Stan", "Zmiany"]
         )
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -5100,24 +5100,42 @@ class PlanSourcesView(QWidget):
         inputs = QGridLayout()
         self.name_edit = QLineEdit()
         self.name_edit.setPlaceholderText("np. Plan główny / Plan malarni")
+        self.mode_combo = QComboBox()
+        self.mode_combo.addItem("Plik Excel", "file")
+        self.mode_combo.addItem("Folder z kopiami Excel", "folder")
         self.path_edit = QLineEdit()
-        self.path_edit.setPlaceholderText("Ścieżka pliku firmowego .xlsx lub .xlsm")
+        self.path_edit.setPlaceholderText("Ścieżka pliku lub folderu źródłowego")
+        self.exclude_edit = QLineEdit()
+        self.exclude_edit.setPlaceholderText("np. ~$*;*archiwum*;*stary*")
+        self.exclude_edit.setText("~$*")
+        self.selected_file_edit = QLineEdit()
+        self.selected_file_edit.setPlaceholderText("Wybierz właściwą kopię, jeśli jest więcej niż jedna")
         self.interval_spin = QSpinBox()
         self.interval_spin.setRange(30, 86400)
         self.interval_spin.setValue(120)
         self.interval_spin.setSuffix(" s")
         self.enabled_check = QCheckBox("Monitoruj automatycznie")
         self.enabled_check.setChecked(True)
-        browse = QPushButton("Wybierz plik…")
+        browse = QPushButton("Wybierz plik / folder…")
         browse.clicked.connect(self._browse)
-        inputs.addWidget(QLabel("Nazwa źródła:"), 0, 0)
-        inputs.addWidget(self.name_edit, 0, 1)
-        inputs.addWidget(QLabel("Ścieżka:"), 1, 0)
-        inputs.addWidget(self.path_edit, 1, 1)
-        inputs.addWidget(browse, 1, 2)
-        inputs.addWidget(QLabel("Interwał:"), 2, 0)
-        inputs.addWidget(self.interval_spin, 2, 1)
-        inputs.addWidget(self.enabled_check, 3, 1)
+        choose_file = QPushButton("Wybierz Excela z folderu…")
+        choose_file.clicked.connect(self._choose_folder_file)
+        inputs.addWidget(QLabel("Typ źródła:"), 0, 0)
+        inputs.addWidget(self.mode_combo, 0, 1)
+        inputs.addWidget(QLabel("Nazwa źródła:"), 1, 0)
+        inputs.addWidget(self.name_edit, 1, 1)
+        inputs.addWidget(QLabel("Ścieżka:"), 2, 0)
+        inputs.addWidget(self.path_edit, 2, 1)
+        inputs.addWidget(browse, 2, 2)
+        inputs.addWidget(QLabel("Wyklucz nazwy:"), 3, 0)
+        inputs.addWidget(self.exclude_edit, 3, 1)
+        inputs.addWidget(QLabel("Wybrana kopia:"), 4, 0)
+        inputs.addWidget(self.selected_file_edit, 4, 1)
+        inputs.addWidget(choose_file, 4, 2)
+        inputs.addWidget(QLabel("Interwał:"), 5, 0)
+        inputs.addWidget(self.interval_spin, 5, 1)
+        inputs.addWidget(self.enabled_check, 6, 1)
+        self.mode_combo.currentIndexChanged.connect(self._mode_changed)
         root.addLayout(inputs)
 
         actions = QHBoxLayout()
@@ -5128,6 +5146,9 @@ class PlanSourcesView(QWidget):
         update = QPushButton("Zapisz zmiany zaznaczonego")
         update.clicked.connect(self._update)
         actions.addWidget(update)
+        mapping_button = QPushButton("Dopasuj kolumny źródła")
+        mapping_button.clicked.connect(self._configure_source_mapping)
+        actions.addWidget(mapping_button)
         check = QPushButton("Sprawdź wszystkie teraz")
         check.clicked.connect(self._check)
         actions.addWidget(check)
@@ -5152,15 +5173,85 @@ class PlanSourcesView(QWidget):
         self.conflict_label.setObjectName("hint")
         root.addWidget(self.conflict_label)
         self.refresh_data()
+        self._mode_changed()
+
+    def _mode_changed(self, *_args) -> None:
+        folder = self.mode_combo.currentData() == "folder"
+        self.exclude_edit.setEnabled(folder)
+        self.selected_file_edit.setEnabled(folder)
 
     def _browse(self) -> None:
-        filename, _ = QFileDialog.getOpenFileName(
-            self, "Wybierz źródło Excel", "", "Excel (*.xlsx *.xlsm)"
-        )
-        if filename:
-            self.path_edit.setText(filename)
+        if self.mode_combo.currentData() == "folder":
+            path = QFileDialog.getExistingDirectory(
+                self, "Wybierz folder z kopiami Excel", ""
+            )
+        else:
+            path, _ = QFileDialog.getOpenFileName(
+                self, "Wybierz źródło Excel", "", "Excel (*.xlsx *.xlsm)"
+            )
+        if path:
+            self.path_edit.setText(path)
+            self.selected_file_edit.clear()
             if not self.name_edit.text().strip():
-                self.name_edit.setText(Path(filename).stem)
+                self.name_edit.setText(Path(path).stem if Path(path).suffix else Path(path).name)
+
+    def _choose_folder_file(self) -> None:
+        if self.mode_combo.currentData() != "folder":
+            QMessageBox.information(
+                self, "Plik źródłowy", "Najpierw wybierz typ „Folder z kopiami Excel”."
+            )
+            return
+        try:
+            candidates = self.sources.folder_candidates(
+                self.path_edit.text(),
+                exclude_patterns=self.exclude_edit.text(),
+            )
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(self, "Lista kopii Excel", str(exc))
+            return
+        if not candidates:
+            QMessageBox.information(
+                self, "Lista kopii Excel",
+                "Brak pasujących plików. Sprawdź wzorce wykluczenia."
+            )
+            return
+        name, ok = QInputDialog.getItem(
+            self, "Wybierz właściwego Excela",
+            "Dostępne pliki źródłowe:", candidates, 0, False,
+        )
+        if ok:
+            self.selected_file_edit.setText(name)
+
+    def _configure_source_mapping(self) -> None:
+        source_id = self._selected_id()
+        if not source_id:
+            QMessageBox.information(
+                self, "Mapowanie źródła", "Najpierw zapisz i zaznacz źródło Excel."
+            )
+            return
+        try:
+            snapshot_path, source_name = self.sources.mapping_snapshot(source_id)
+            source = next(
+                src for src in self.sources.list_sources() if src["id"] == source_id
+            )
+            dialog = PlanColumnMappingDialog(
+                snapshot_path, source_name, self,
+                saved=source.get("column_mapping") or {},
+            )
+            if dialog.exec() != QDialog.Accepted:
+                return
+            self.sources.update_source(
+                source_id,
+                column_mapping={
+                    "sheet_name": dialog.result_sheet_name,
+                    "header_row": dialog.result_header_row,
+                    "mapping": dialog.result_mapping,
+                },
+            )
+            self.refresh_data()
+            self.request_check()
+        except (OSError, ValueError, TypeError) as exc:
+            QMessageBox.warning(self, "Mapowanie źródła", str(exc))
 
     def _selected_id(self) -> str | None:
         index = self.table.currentRow()
@@ -5175,8 +5266,13 @@ class PlanSourcesView(QWidget):
         )
         if source is None:
             return
+        self.mode_combo.setCurrentIndex(
+            max(0, self.mode_combo.findData(source.get("mode", "file")))
+        )
         self.name_edit.setText(source["name"])
         self.path_edit.setText(source["path"])
+        self.exclude_edit.setText(source.get("exclude_patterns", "~$*"))
+        self.selected_file_edit.setText(source.get("selected_file", ""))
         self.interval_spin.setValue(int(source["interval_seconds"]))
         self.enabled_check.setChecked(bool(source["enabled"]))
 
@@ -5186,6 +5282,9 @@ class PlanSourcesView(QWidget):
                 name=self.name_edit.text(), path=self.path_edit.text(),
                 interval_seconds=self.interval_spin.value(),
                 enabled=self.enabled_check.isChecked(),
+                mode=str(self.mode_combo.currentData()),
+                selected_file=self.selected_file_edit.text(),
+                exclude_patterns=self.exclude_edit.text(),
             )
         except ValueError as exc:
             QMessageBox.warning(self, "Źródło Excel", str(exc))
@@ -5202,6 +5301,9 @@ class PlanSourcesView(QWidget):
                 source_id, name=self.name_edit.text(), path=self.path_edit.text(),
                 interval_seconds=self.interval_spin.value(),
                 enabled=self.enabled_check.isChecked(),
+                mode=str(self.mode_combo.currentData()),
+                selected_file=self.selected_file_edit.text(),
+                exclude_patterns=self.exclude_edit.text(),
             )
         except ValueError as exc:
             QMessageBox.warning(self, "Źródło Excel", str(exc))
@@ -5306,7 +5408,10 @@ class PlanSourcesView(QWidget):
                 f'U: {changes.get("removed", 0)}'
             )
             values = [
-                source["name"], source["path"], f'{source["interval_seconds"]} s',
+                source["name"],
+                (f'{source["path"]} / {source.get("selected_file") or "(wybierz kopię)"}'
+                 if source.get("mode") == "folder" else source["path"]),
+                f'{source["interval_seconds"]} s',
                 "TAK" if source["enabled"] else "NIE",
                 str(status.get("checked_at") or "—")[:19].replace("T", " "),
                 status.get("status") or "NIE SPRAWDZONO", info,
