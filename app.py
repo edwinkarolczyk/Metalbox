@@ -5138,6 +5138,9 @@ class PlanSourcesView(QWidget):
         problems = QPushButton("Pokaż konflikty")
         problems.clicked.connect(self._show_conflicts)
         actions.addWidget(problems)
+        resolve = QPushButton("Rozstrzygnij ZL")
+        resolve.clicked.connect(self._resolve_conflict)
+        actions.addWidget(resolve)
         refresh = QPushButton("Odśwież")
         refresh.clicked.connect(self.refresh_data)
         actions.addWidget(refresh)
@@ -5235,6 +5238,61 @@ class PlanSourcesView(QWidget):
         dialog.setDetailedText("\n".join(lines))
         dialog.exec()
 
+    def _resolve_conflict(self) -> None:
+        unresolved = [
+            item for item in self.sources.check_conflicts()
+            if not item.get("chosen_source_id")
+        ]
+        if not unresolved:
+            QMessageBox.information(
+                self, "Konflikty Excel", "Brak nierozstrzygniętych pozycji."
+            )
+            return
+        labels = [
+            f'{item["order_code"]} / {item["symbol"]} • {item["status"]}'
+            for item in unresolved
+        ]
+        chosen, ok = QInputDialog.getItem(
+            self, "Rozstrzygnij pozycję",
+            "Wybierz zlecenie i produkt:", labels, 0, False,
+        )
+        if not ok:
+            return
+        item = unresolved[labels.index(chosen)]
+        options = [
+            f'{detail["source"]} • {detail["quantity"]} szt. • '
+            f'termin {detail["shipping"] or "—"} • RAL {detail["ral"] or "—"}'
+            for detail in item["details"]
+        ]
+        selected, ok = QInputDialog.getItem(
+            self, "Źródło właściwe dla ZL",
+            "Który Excel jest źródłem nadrzędnym dla tej pozycji?",
+            options, 0, False,
+        )
+        if not ok:
+            return
+        detail = item["details"][options.index(selected)]
+        confirm = QMessageBox.question(
+            self, "Potwierdź wybór źródła",
+            f'Pozycja {item["order_code"]} / {item["symbol"]}\n'
+            f'Wybór: {detail["source"]}, {detail["quantity"]} szt.\n\n'
+            "Pozostałe kopie nie zostaną doliczone do wspólnego podglądu. "
+            "Wybór wygaśnie po zmianie zawartości któregokolwiek Excela.",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        )
+        if confirm != QMessageBox.Yes:
+            return
+        try:
+            self.sources.resolve_conflict(
+                order_code=item["order_code"],
+                symbol=item["symbol"],
+                chosen_source_id=detail["source_id"],
+            )
+        except ValueError as exc:
+            QMessageBox.warning(self, "Nie zapisano wyboru", str(exc))
+            return
+        self.refresh_data()
+
     def refresh_data(self) -> None:
         sources = self.sources.list_sources()
         self.source_ids = [item["id"] for item in sources]
@@ -5257,11 +5315,12 @@ class PlanSourcesView(QWidget):
                 self.table.setItem(row_index, col, QTableWidgetItem(str(value)))
         self.table.resizeColumnsToContents()
         conflicts = self.sources.check_conflicts()
-        serious = [c for c in conflicts if c["status"] == "DO ROZSTRZYGNIĘCIA"]
+        pending = sum(not c.get("chosen_source_id") for c in conflicts)
         self.conflict_label.setText(
-            f"Konflikty do rozstrzygnięcia: {len(serious)} • "
-            f"duplikaty między źródłami: {len(conflicts) - len(serious)}. "
-            "Dane nie są scalane ani automatycznie publikowane."
+            f"Pozycje wymagające rozstrzygnięcia: {pending} • "
+            f"rozstrzygnięte: {len(conflicts) - pending}. "
+            "Wybory tracą ważność, gdy zmieni się źródłowy Excel. "
+            "Zatwierdzenie planu nadal wymaga osobnej decyzji kierownika."
         )
 
 
@@ -5521,7 +5580,7 @@ class PlannerPage(PageBase):
             s for s in active if self.plan_sources.get_state(s["id"]).get("status") == "NOWE ZMIANY"
         ]
         conflicts = self.plan_sources.check_conflicts()
-        serious = sum(1 for c in conflicts if c["status"] == "DO ROZSTRZYGNIĘCIA")
+        serious = sum(not c.get("chosen_source_id") for c in conflicts)
         self.multi_source_status.setText(
             f'Automatyczne źródła Excel: {len(active)}/{len(sources)} aktywnych '
             f'• w kontroli: {len(self._source_tasks)} '
