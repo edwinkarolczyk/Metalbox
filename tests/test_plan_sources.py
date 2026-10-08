@@ -80,6 +80,13 @@ class MultiSourceTests(unittest.TestCase):
                          {"before": 65.0, "after": 90.0})
         self.assertEqual(self.registry.get_state(self.source_b["id"])["rows"][0]["quantity"], 70)
 
+    def test_unreviewed_changes_remain_visible_after_unchanged_poll(self) -> None:
+        first = self.registry.scan(self.source_a["id"])
+        self.assertEqual(first["status"], "NOWE ZMIANY")
+        unchanged = self.registry.scan(self.source_a["id"])
+        self.assertEqual(unchanged["status"], "NOWE ZMIANY")
+        self.assertEqual(unchanged["change_counts"]["added"], 1)
+
     def test_unchanged_file_is_not_copied_again(self) -> None:
         first = self.registry.scan(self.source_a["id"])
         again = self.registry.scan(self.source_a["id"])
