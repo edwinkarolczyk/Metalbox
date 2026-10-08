@@ -11,12 +11,14 @@ import shutil
 import sys
 import traceback
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
 from metalbox_core import MetalboxStore, SCHEMA_VERSION, QUALITY_REASON_CODES
+from plan_sources import PlanSources
 from plan_excel import compare_plan_rows, inspect_plan_snapshot, read_plan_snapshot, safe_snapshot
 
 from PySide6.QtCore import QEvent, Qt, QTimer
@@ -71,6 +73,7 @@ INSTALLED_STATE_FILE = LOCAL_DATA_ROOT / "installed.json"
 DEV_VIEW_STATE_FILE = CONFIG_DIR / "dev_view.json"
 PLAN_SNAPSHOT_DIR = DEV_DATA_DIR / "plan_snapshots"
 PLAN_COLUMN_MAPPING_FILE = CONFIG_DIR / "plan_column_mapping.json"
+MULTI_PLAN_SOURCES_DIR = DEV_DATA_DIR / "plan_sources"
 
 
 def resource_file(*parts: str) -> Path:
@@ -5062,6 +5065,175 @@ class PlanPublicationView(QWidget):
         self._refresh()
 
 
+
+class PlanSourcesView(QWidget):
+    """Źródła planu: niezależne kopie i podgląd bez publikowania do produkcji."""
+
+    def __init__(self, sources: PlanSources, request_check: Callable, parent=None):
+        super().__init__(parent)
+        self.sources = sources
+        self.request_check = request_check
+        self.source_ids: list[str] = []
+        root = QVBoxLayout(self)
+        root.setSpacing(sp(10))
+        hint = QLabel(
+            "Możesz wskazać dwa lub więcej niezależnych Exceli. Każdy jest czytany tylko "
+            "na czas kopiowania do lokalnego snapshotu. Zmiany wykryte automatycznie "
+            "NIE trafiają bez akceptacji do zleceń ani kolejek działów."
+        )
+        hint.setObjectName("hint")
+        hint.setWordWrap(True)
+        root.addWidget(hint)
+
+        self.table = QTableWidget(0, 7)
+        self.table.setHorizontalHeaderLabels(
+            ["Źródło", "Plik", "Co ile", "Aktywne", "Ostatni odczyt", "Stan", "Zmiany"]
+        )
+        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.itemSelectionChanged.connect(self._select_source)
+        root.addWidget(self.table, 1)
+
+        inputs = QGridLayout()
+        self.name_edit = QLineEdit()
+        self.name_edit.setPlaceholderText("np. Plan główny / Plan malarni")
+        self.path_edit = QLineEdit()
+        self.path_edit.setPlaceholderText("Ścieżka pliku firmowego .xlsx lub .xlsm")
+        self.interval_spin = QSpinBox()
+        self.interval_spin.setRange(30, 86400)
+        self.interval_spin.setValue(120)
+        self.interval_spin.setSuffix(" s")
+        self.enabled_check = QCheckBox("Monitoruj automatycznie")
+        self.enabled_check.setChecked(True)
+        browse = QPushButton("Wybierz plik…")
+        browse.clicked.connect(self._browse)
+        inputs.addWidget(QLabel("Nazwa źródła:"), 0, 0)
+        inputs.addWidget(self.name_edit, 0, 1)
+        inputs.addWidget(QLabel("Ścieżka:"), 1, 0)
+        inputs.addWidget(self.path_edit, 1, 1)
+        inputs.addWidget(browse, 1, 2)
+        inputs.addWidget(QLabel("Interwał:"), 2, 0)
+        inputs.addWidget(self.interval_spin, 2, 1)
+        inputs.addWidget(self.enabled_check, 3, 1)
+        root.addLayout(inputs)
+
+        actions = QHBoxLayout()
+        self.create_button = QPushButton("Dodaj źródło")
+        self.create_button.setObjectName("primary")
+        self.create_button.clicked.connect(self._add)
+        actions.addWidget(self.create_button)
+        update = QPushButton("Zapisz zmiany zaznaczonego")
+        update.clicked.connect(self._update)
+        actions.addWidget(update)
+        check = QPushButton("Sprawdź wszystkie teraz")
+        check.clicked.connect(self._check)
+        actions.addWidget(check)
+        refresh = QPushButton("Odśwież")
+        refresh.clicked.connect(self.refresh_data)
+        actions.addWidget(refresh)
+        actions.addStretch(1)
+        root.addLayout(actions)
+
+        self.conflict_label = QLabel()
+        self.conflict_label.setWordWrap(True)
+        self.conflict_label.setObjectName("hint")
+        root.addWidget(self.conflict_label)
+        self.refresh_data()
+
+    def _browse(self) -> None:
+        filename, _ = QFileDialog.getOpenFileName(
+            self, "Wybierz źródło Excel", "", "Excel (*.xlsx *.xlsm)"
+        )
+        if filename:
+            self.path_edit.setText(filename)
+            if not self.name_edit.text().strip():
+                self.name_edit.setText(Path(filename).stem)
+
+    def _selected_id(self) -> str | None:
+        index = self.table.currentRow()
+        return self.source_ids[index] if 0 <= index < len(self.source_ids) else None
+
+    def _select_source(self) -> None:
+        source_id = self._selected_id()
+        if not source_id:
+            return
+        source = next(
+            (item for item in self.sources.list_sources() if item["id"] == source_id), None
+        )
+        if source is None:
+            return
+        self.name_edit.setText(source["name"])
+        self.path_edit.setText(source["path"])
+        self.interval_spin.setValue(int(source["interval_seconds"]))
+        self.enabled_check.setChecked(bool(source["enabled"]))
+
+    def _add(self) -> None:
+        try:
+            self.sources.add_source(
+                name=self.name_edit.text(), path=self.path_edit.text(),
+                interval_seconds=self.interval_spin.value(),
+                enabled=self.enabled_check.isChecked(),
+            )
+        except ValueError as exc:
+            QMessageBox.warning(self, "Źródło Excel", str(exc))
+            return
+        self.refresh_data()
+
+    def _update(self) -> None:
+        source_id = self._selected_id()
+        if source_id is None:
+            QMessageBox.information(self, "Źródło Excel", "Najpierw zaznacz źródło.")
+            return
+        try:
+            self.sources.update_source(
+                source_id, name=self.name_edit.text(), path=self.path_edit.text(),
+                interval_seconds=self.interval_spin.value(),
+                enabled=self.enabled_check.isChecked(),
+            )
+        except ValueError as exc:
+            QMessageBox.warning(self, "Źródło Excel", str(exc))
+            return
+        self.refresh_data()
+
+    def _check(self) -> None:
+        self.request_check()
+        QMessageBox.information(
+            self, "Kontrola źródeł", "Rozpoczęto kontrolę aktywnych Exceli w tle. "
+            "Wybierz „Odśwież”, aby zobaczyć najnowsze wyniki."
+        )
+
+    def refresh_data(self) -> None:
+        sources = self.sources.list_sources()
+        self.source_ids = [item["id"] for item in sources]
+        self.table.setRowCount(len(sources))
+        for row_index, source in enumerate(sources):
+            status = self.sources.get_state(source["id"])
+            changes = status.get("change_counts") or {}
+            info = (
+                f'N: {changes.get("added", 0)} '
+                f'Z: {changes.get("changed", 0)} '
+                f'U: {changes.get("removed", 0)}'
+            )
+            values = [
+                source["name"], source["path"], f'{source["interval_seconds"]} s',
+                "TAK" if source["enabled"] else "NIE",
+                str(status.get("checked_at") or "—")[:19].replace("T", " "),
+                status.get("status") or "NIE SPRAWDZONO", info,
+            ]
+            for col, value in enumerate(values):
+                self.table.setItem(row_index, col, QTableWidgetItem(str(value)))
+        self.table.resizeColumnsToContents()
+        conflicts = self.sources.check_conflicts()
+        serious = [c for c in conflicts if c["status"] == "DO ROZSTRZYGNIĘCIA"]
+        self.conflict_label.setText(
+            f"Konflikty do rozstrzygnięcia: {len(serious)} • "
+            f"duplikaty między źródłami: {len(conflicts) - len(serious)}. "
+            "Dane nie są scalane ani automatycznie publikowane."
+        )
+
+
 class PlannerPage(PageBase):
     def __init__(self, go_home: Callable, store: MetalboxStore):
         super().__init__(
@@ -5070,6 +5242,9 @@ class PlannerPage(PageBase):
             "Excel pozostaje nadrzędnym źródłem planu. Metalbox analizuje wyłącznie lokalny snapshot.",
         )
         self.store = store
+        self.plan_sources = PlanSources(MULTI_PLAN_SOURCES_DIR)
+        self._source_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix='metalbox-excel')
+        self._source_tasks: dict[str, object] = {}
         self.current_snapshot: dict | None = None
         self.current_diff = {"added": [], "changed": [], "removed": []}
         self._inline_view: QWidget | None = None
@@ -5117,6 +5292,10 @@ class PlannerPage(PageBase):
         changes_btn.clicked.connect(self._show_changes)
         controls.addWidget(changes_btn)
 
+        sources_btn = QPushButton("Źródła Excel (2+)")
+        sources_btn.clicked.connect(self._open_excel_sources)
+        controls.addWidget(sources_btn)
+
         mapping_btn = QPushButton("Dopasuj kolumny")
         mapping_btn.clicked.connect(lambda: self._import_snapshot(force_mapping=True))
         controls.addWidget(mapping_btn)
@@ -5136,6 +5315,11 @@ class PlannerPage(PageBase):
         self.snapshot_info.setWordWrap(True)
         self.snapshot_info.setMaximumWidth(sp(1320))
         main_layout.addWidget(self.snapshot_info)
+
+        self.multi_source_status = QLabel("Źródła automatyczne: nieskonfigurowane.")
+        self.multi_source_status.setObjectName("hint")
+        self.multi_source_status.setWordWrap(True)
+        main_layout.addWidget(self.multi_source_status)
 
         self.table = compact_table(
             ["Nr ZL", "Symbol", "Nazwa", "Ilość", "Wysyłka", "RAL", "Zmiana"],
@@ -5182,6 +5366,68 @@ class PlannerPage(PageBase):
         main_layout.addStretch(1)
 
         self._load_latest_snapshot()
+        self._excel_timer = QTimer(self)
+        self._excel_timer.timeout.connect(self._poll_excel_sources)
+        self._excel_timer.start(5000)
+        self._poll_excel_sources(force=True)
+
+    def _open_excel_sources(self) -> None:
+        view = PlanSourcesView(
+            self.plan_sources, lambda: self._poll_excel_sources(force=True),
+        )
+        self._show_inline_widget(view, "Planista / Monitorowane źródła Excel")
+
+    def _poll_excel_sources(self, *_args, force: bool = False) -> None:
+        # GUI nie otwiera plików Excel: kopiowanie i parsowanie działa w dwóch wątkach.
+        for source_id, future in list(self._source_tasks.items()):
+            if not future.done():
+                continue
+            try:
+                result = future.result()
+                if result.get("status") == "BŁĄD ODCZYTU":
+                    app_log(
+                        f'Źródło Excel {source_id}: {result.get("error")}', "WARN"
+                    )
+            except Exception as exc:
+                app_log(f"Nieoczekiwany błąd monitorowania Excel: {exc}", "ERROR")
+            del self._source_tasks[source_id]
+
+        now = datetime.now(timezone.utc)
+        for source in self.plan_sources.list_sources():
+            if not source.get("enabled") or source["id"] in self._source_tasks:
+                continue
+            state = self.plan_sources.get_state(source["id"])
+            checked = state.get("checked_at", "")
+            try:
+                elapsed = (now - datetime.fromisoformat(checked)).total_seconds()
+            except (ValueError, TypeError):
+                elapsed = float("inf")
+            if not force and elapsed < int(source["interval_seconds"]):
+                continue
+            self._source_tasks[source["id"]] = self._source_executor.submit(
+                self.plan_sources.scan, source["id"]
+            )
+
+        sources = self.plan_sources.list_sources()
+        active = [s for s in sources if s.get("enabled")]
+        errors = [
+            s for s in active if self.plan_sources.get_state(s["id"]).get("status") == "BŁĄD ODCZYTU"
+        ]
+        pending = [
+            s for s in active if self.plan_sources.get_state(s["id"]).get("status") == "NOWE ZMIANY"
+        ]
+        conflicts = self.plan_sources.check_conflicts()
+        serious = sum(1 for c in conflicts if c["status"] == "DO ROZSTRZYGNIĘCIA")
+        self.multi_source_status.setText(
+            f'Automatyczne źródła Excel: {len(active)}/{len(sources)} aktywnych '
+            f'• w kontroli: {len(self._source_tasks)} '
+            f'• nowe zmiany: {len(pending)} '
+            f'• błędy: {len(errors)} • konflikty: {serious}. '
+            "Są tylko do weryfikacji; nie publikują samodzielnie zleceń."
+        )
+        if isinstance(self._inline_view, QWidget):
+            for view in self._inline_view.findChildren(PlanSourcesView):
+                view.refresh_data()
 
     def _clear_inline_view(self) -> None:
         if self._inline_view is None:
