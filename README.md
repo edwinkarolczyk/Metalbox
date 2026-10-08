@@ -4,7 +4,7 @@ Wyspecjalizowany system do zarządzania produkcją Metalbox sp. z o.o.
 
 ## Aktualny stan
 
-**0.1.30.3 — dwa źródła Excel, także z folderów, + opcjonalna lokalizacja palet**
+**0.1.30.4 — Planista z wieloma partiami jednego ZL + lokalizacja palet**
 
 Metalbox nie jest już samą makietą UI. W gałęzi Development działa rzeczywisty zapis danych produkcyjnych, pracownicy i obsada, rejestracja pracy oraz jakości, katalog produktów z surowymi podpowiedziami źródłowymi, BOM, kolejność operacji technologicznych i edycja kart produktów z audytem. Aktualny etap przygotowuje dane pod realne zlecenia i pilotaż równoległy z firmowym Excelem.
 
@@ -21,7 +21,7 @@ W 0.1.30 uruchomiono kontrolowaną publikację zaakceptowanego planu do kolejek 
 5. Kliknij **Przygotuj do akceptacji**, aby otrzymać wspólny, niezmieniający produkcji snapshot. Jeśli którakolwiek aktywna kopia jest nieaktualna/niedostępna albo zawiera nierozstrzygnięty konflikt, operacja zostaje zablokowana.
 6. Wybierz **Do akceptacji** i zatwierdź wspólny podgląd jako kierownik. Dopiero osobna, świadoma **Publikacja planu** aktualizuje kolejki działów, zgodnie z istniejącymi blokadami pracy w toku.
 
-W 0.1.30.3 źródłem może być zarówno **konkretny plik**, jak i **folder zawierający kopie**. Przy wielu plikach wybierz aktywną kopię ręcznie przyciskiem „Wybierz Excela z folderu…”, a pliki tymczasowe i archiwalne wykluczaj wzorcami oddzielonymi średnikami (np. `~$*;*archiwum*`). Program nie wybiera automatycznie najnowszego pliku, gdy jest kilka kandydatów, ani nie przełącza na inną kopię po usunięciu wskazanej. Obsługuje też dwa monitorowane pliki w jednym folderze oraz mapowanie kolumn oddzielnie dla każdego źródła. Do pełnej 0.1.31 pozostają rozbudowa rozstrzygania wielu partii tego samego wyrobu i odbiór na rzeczywistych plikach oraz hali.
+W 0.1.30.3 źródłem może być zarówno **konkretny plik**, jak i **folder zawierający kopie**. Przy wielu plikach wybierz aktywną kopię ręcznie przyciskiem „Wybierz Excela z folderu…”, a pliki tymczasowe i archiwalne wykluczaj wzorcami oddzielonymi średnikami (np. `~$*;*archiwum*`). Program nie wybiera automatycznie najnowszego pliku, gdy jest kilka kandydatów, ani nie przełącza na inną kopię po usunięciu wskazanej. Obsługuje też dwa monitorowane pliki w jednym folderze oraz mapowanie kolumn oddzielnie dla każdego źródła. W 0.1.30.4 kierownik może rozstrzygnąć wspólny ZL/produkt, wybierając jeden autorytatywny Excel **albo jawnie zachowując wszystkie odrębne partie z obydwu Exceli**. Każdy wiersz jest osobną pozycją w podglądzie, z własnym kluczem i wskazaniem źródła. Bez takiej decyzji przygotowanie wspólnego planu pozostaje zablokowane. Po zmianie któregokolwiek Excela decyzję należy powtórzyć. Do ukończenia 0.1.31 pozostaje odbiór na rzeczywistych firmowych plikach i hali, także podczas trwających sesji produkcyjnych.
 
 ## Metalbox Launcher
 
