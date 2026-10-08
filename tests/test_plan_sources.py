@@ -51,6 +51,7 @@ class MultiSourceTests(unittest.TestCase):
         archive = folder / "plan_archiwum.xlsm"
         lock = folder / "~$plan.xlsx"
         make_excel(main, qty=122)
+        original_bytes = main.read_bytes()
         make_excel(archive, qty=999)
         lock.write_bytes(b"temporary lock")
         (folder / "instrukcja.txt").write_text("to nie jest plan")
@@ -65,7 +66,7 @@ class MultiSourceTests(unittest.TestCase):
         state = self.registry.scan(source["id"])
         self.assertEqual(state["rows"][0]["quantity"], 122)
         self.assertEqual(state["source_file"], "plan.xlsx")
-        self.assertEqual(main.read_bytes(), main.read_bytes())
+        self.assertEqual(main.read_bytes(), original_bytes)
         self.assertTrue(Path(state["snapshot_path"]).is_file())
 
     def test_folder_multiple_candidates_requires_explicit_choice(self) -> None:
@@ -103,7 +104,7 @@ class MultiSourceTests(unittest.TestCase):
         self.assertEqual(after["status"], "BŁĄD ODCZYTU")
         self.assertEqual(after["sha256"], before["sha256"])
         self.assertEqual(after["rows"], before["rows"])
-        with self.assertRaisesRegex(ValueError, "niedostępny|wykluczony"):
+        with self.assertRaisesRegex(ValueError, "aktualnego poprawnego odczytu"):
             self.registry.build_combined_preview()
 
     def test_folder_source_rejects_empty_path_and_unsafe_filename(self) -> None:
