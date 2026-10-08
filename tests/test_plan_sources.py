@@ -8,7 +8,10 @@ from pathlib import Path
 from plan_sources import PlanSources
 
 
-def make_excel(path: Path, *, qty: int, symbol: str = "1.435.135") -> None:
+def make_excel(
+    path: Path, *, qty: int, symbol: str = "1.435.135",
+    extra_rows: list[tuple[str, int]] | None = None,
+) -> None:
     workbook = """<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
     xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
     <sheets><sheet name="PLAN" sheetId="1" r:id="rId1"/></sheets></workbook>"""
@@ -16,6 +19,14 @@ def make_excel(path: Path, *, qty: int, symbol: str = "1.435.135") -> None:
     <Relationship Id="rId1"
     Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"
     Target="worksheets/sheet1.xml"/></Relationships>"""
+    additional = "".join(
+        f'<row r="{i}">'
+        f'<c r="A{i}" t="inlineStr"><is><t>740</t></is></c>'
+        f'<c r="B{i}" t="inlineStr"><is><t>{sym} SC600</t></is></c>'
+        f'<c r="C{i}"><v>{number}</v></c>'
+        f'</row>'
+        for i, (sym, number) in enumerate(extra_rows or [], start=3)
+    )
     sheet = f"""<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
     <sheetData>
       <row r="1"><c r="A1" t="inlineStr"><is><t>Nr ZL</t></is></c>
@@ -24,7 +35,7 @@ def make_excel(path: Path, *, qty: int, symbol: str = "1.435.135") -> None:
       <row r="2"><c r="A2" t="inlineStr"><is><t>740</t></is></c>
         <c r="B2" t="inlineStr"><is><t>{symbol} SC600</t></is></c>
         <c r="C2"><v>{qty}</v></c></row>
-    </sheetData></worksheet>"""
+      {additional}\n    </sheetData></worksheet>"""
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as archive:
         archive.writestr("xl/workbook.xml", workbook)
         archive.writestr("xl/_rels/workbook.xml.rels", rels)
@@ -308,6 +319,73 @@ class MultiSourceTests(unittest.TestCase):
         self.assertIsNone(self.registry.check_conflicts()[0]["chosen_source_id"])
         with self.assertRaisesRegex(ValueError, "nierozstrzygniętych"):
             self.registry.build_combined_preview()
+
+    def test_multiple_real_batches_same_zl_from_two_excels_are_kept_individually(self) -> None:
+        make_excel(
+            self.plan_a, qty=65, extra_rows=[("1.435.135", 25)]
+        )
+        make_excel(
+            self.plan_b, qty=70, extra_rows=[("1.435.135", 40)]
+        )
+        first = self.registry.scan(self.source_a["id"])
+        second = self.registry.scan(self.source_b["id"])
+        self.assertEqual(len(first["rows"]), 2)
+        self.assertEqual(len(second["rows"]), 2)
+        self.assertEqual(len({row["row_key"] for row in first["rows"]}), 2)
+        conflict = self.registry.check_conflicts()[0]
+        self.assertEqual(len(conflict["details"]), 4)
+        self.assertIsNone(conflict["chosen_source_id"])
+        with self.assertRaisesRegex(ValueError, "nierozstrzygniętych"):
+            self.registry.build_combined_preview()
+
+        self.registry.resolve_conflict(
+            order_code="740", symbol="1.435.135", keep_all=True, actor="Kierownik",
+        )
+        decision = self.registry.check_conflicts()[0]
+        self.assertTrue(decision["keep_all"])
+        self.assertEqual(decision["status"], "ODRĘBNE PARTIE")
+        combined = self.registry.build_combined_preview()
+        self.assertEqual(combined["row_count"], 4)
+        self.assertEqual(
+            sorted(row["quantity"] for row in combined["rows"]), [25, 40, 65, 70]
+        )
+        self.assertEqual(len({row["row_key"] for row in combined["rows"]}), 4)
+        self.assertEqual(
+            sorted(row["source_name"] for row in combined["rows"]),
+            ["Excel 1", "Excel 1", "Excel 2", "Excel 2"],
+        )
+
+    def test_batch_decision_expires_when_source_changes(self) -> None:
+        self.registry.scan(self.source_a["id"])
+        self.registry.scan(self.source_b["id"])
+        self.registry.resolve_conflict(
+            order_code="740", symbol="1.435.135", keep_all=True,
+        )
+        self.assertEqual(self.registry.build_combined_preview()["row_count"], 2)
+        make_excel(self.plan_b, qty=72)
+        self.registry.scan(self.source_b["id"])
+        conflict = self.registry.check_conflicts()[0]
+        self.assertFalse(conflict["keep_all"])
+        self.assertEqual(conflict["status"], "DO ROZSTRZYGNIĘCIA")
+        with self.assertRaisesRegex(ValueError, "nierozstrzygniętych"):
+            self.registry.build_combined_preview()
+
+    def test_single_source_selection_keeps_every_real_batch_in_that_excel(self) -> None:
+        make_excel(
+            self.plan_a, qty=65, extra_rows=[("1.435.135", 25)]
+        )
+        self.registry.scan(self.source_a["id"])
+        self.registry.scan(self.source_b["id"])
+        self.registry.resolve_conflict(
+            order_code="740", symbol="1.435.135",
+            chosen_source_id=self.source_a["id"],
+        )
+        combined = self.registry.build_combined_preview()
+        self.assertEqual(combined["row_count"], 2)
+        self.assertEqual(sorted(row["quantity"] for row in combined["rows"]), [25, 65])
+        self.assertTrue(
+            all(row["source_id"] == self.source_a["id"] for row in combined["rows"])
+        )
 
     def test_duplicate_identical_excel_row_still_requires_choice(self) -> None:
         make_excel(self.plan_b, qty=65)
