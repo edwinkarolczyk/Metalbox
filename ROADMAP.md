@@ -356,7 +356,7 @@ Na etapie pilotażu obecny Excel pozostaje nadrzędnym planem firmy.
 - [ ] Zachować import kolorów/grup legacy z Excela bez nadawania im znaczenia, dopóki ich rola nie zostanie potwierdzona.
 - [ ] Obsługiwać kalendarz dzienny zgrzewania z Excela.
 
-### Stan prac (Development 0.1.30.3 → docelowo 0.1.31)
+### Stan prac (Development 0.1.30.4 → docelowo 0.1.31)
 
 - [x] Rejestr dwóch i większej liczby plików Excel: nazwa, ścieżka, niezależny interwał, włącz/wyłącz.
 - [x] Automatyczna kontrola aktywnych źródeł w tle bez blokowania interfejsu Planisty.
@@ -366,10 +366,10 @@ Na etapie pilotażu obecny Excel pozostaje nadrzędnym planem firmy.
 - [x] Świadome przygotowanie **wspólnego PODGLĄDU**, z blokadą konfliktów, awarii i nieaktualnych źródeł; osobne zatwierdzenie planu przez istniejący panel kierownika.
 - [x] Po zatwierdzeniu wspólnego podglądu czyszczenie alertów tylko przy zgodnych hashach źródeł; zmiana Excela przed zatwierdzeniem pozostawia alert aktywny.
 - [x] Wstępne rozstrzyganie wspólnych pozycji ZL/produkt bez wyłączania całego źródła: kierownik wybiera właściwy Excel dla danej pozycji; wybór wygasa po zmianie snapshotu któregokolwiek źródła.
-- [ ] Rozwinięcie rozstrzygania dla kilku osobnych partii tego samego symbolu w ramach jednego ZL (gdy pozycje nie są rzeczywistymi duplikatami).
+- [x] Kierownik może jawnie zachować wszystkie odrębne partie tego samego ZL i symbolu z dwóch Exceli (lub wybrać tylko jedno źródło). Każdy wiersz zachowuje osobny `row_key` i pochodzenie; wybór jest unieważniany po zmianie plików, bez automatycznego podwójnego naliczania.
 - [x] Monitorowanie folderów, świadomy wybór aktywnej kopii oraz wzorce wykluczeń plików (np. blokad Excel `~$*` i archiwów). Przy wielu dopuszczalnych kopiach bez wyboru — blokada zamiast zgadywania.
 - [x] Osobne mapowanie kolumn (arkusz, nagłówki, pola) dla każdego monitorowanego źródła, również z folderu. Mapowanie jest wykonywane wyłącznie na snapshotach.
-- [ ] Odbiór produkcyjny na dwóch prawdziwych firmowych Excelach i test publikacji z ochroną aktywnych sesji.
+- [ ] Odbiór produkcyjny na dwóch prawdziwych firmowych Excelach, weryfikacja kilku rzeczywistych partii jednego produktu oraz test publikacji z ochroną aktywnych sesji.
 - [ ] Zakończenie wersji 0.1.31 po pozytywnym odbiorze powyższych punktów.
 
 ### Planista
