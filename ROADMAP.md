@@ -338,8 +338,14 @@ Operator potrafi obsłużyć zmianę zlecenia bez otwierania panelu administracy
 
 Na etapie pilotażu obecny Excel pozostaje nadrzędnym planem firmy.
 
-- [ ] W Ustawieniach wskazać plik planu produkcji i arkusz źródłowy.
-- [ ] Automatycznie sprawdzać zmiany w ustalonym interwale.
+- [ ] W Ustawieniach skonfigurować **co najmniej dwa równolegle monitorowane źródła Excel**, z możliwością dodania następnych: pojedyncze pliki lub foldery/kopie źródłowe, z niezależnym arkuszem, mapowaniem kolumn i interwałem.
+- [ ] Automatycznie sprawdzać zmiany **każdego źródła niezależnie**, bez blokowania pozostałych przy braku dostępu do jednego pliku.
+- [ ] Stosować zasadę CIDEX: **oryginał i kopie źródłowe otwierane wyłącznie na czas skopiowania do własnego pliku roboczego**, uchwyt zamknięty przed parsowaniem; żadnego otwartego skoroszytu przez aplikację.
+- [ ] Oddzielnie zachowywać dla źródeł: identyfikator źródła, ścieżkę, datę i hash ostatniego snapshotu, historię zmian, błąd lub stan ostatniego odczytu.
+- [ ] W Planista pokazywać łączną listę zmian **z etykietą źródła** oraz porównanie dla każdego Excela z jego własnym poprzednim snapshotem; nie porównywać źródła B jako następnej wersji źródła A.
+- [ ] Wykrywać **konflikty między źródłami**: np. identyczny ZL/produkt w obu Excelach z różnymi wartościami; oznaczać „DO ROZSTRZYGNIĘCIA”, bez automatycznego podwójnego liczenia czy nadpisywania.
+- [ ] Nie oznaczać pozycji jako usuniętej wyłącznie dlatego, że źródło jest nieosiągalne albo jego odczyt się nie powiódł; zachowywać ostatni poprawny stan źródła.
+- [ ] Aktualizacja zaakceptowanego planu i publikacja do kolejek dopiero po świadomej akceptacji kierownika, z ochroną rozpoczętej produkcji.
 - [ ] Nigdy nie analizować i nie trzymać otwartego oryginalnego Excela.
 - [ ] Najpierw wykonywać bezpieczną kopię roboczą / snapshot.
 - [ ] Dopiero na kopii wykonywać analizę i porównanie z poprzednim snapshotem.
