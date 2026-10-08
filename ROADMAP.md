@@ -356,6 +356,20 @@ Na etapie pilotażu obecny Excel pozostaje nadrzędnym planem firmy.
 - [ ] Zachować import kolorów/grup legacy z Excela bez nadawania im znaczenia, dopóki ich rola nie zostanie potwierdzona.
 - [ ] Obsługiwać kalendarz dzienny zgrzewania z Excela.
 
+### Stan prac (Development 0.1.30.2 → docelowo 0.1.31)
+
+- [x] Rejestr dwóch i większej liczby plików Excel: nazwa, ścieżka, niezależny interwał, włącz/wyłącz.
+- [x] Automatyczna kontrola aktywnych źródeł w tle bez blokowania interfejsu Planisty.
+- [x] Osobne snapshoty, hashe, ostatni poprawny stan i historia porównań dla każdego źródła.
+- [x] Odczyt tylko z kopii, zamykanie źródła przed parsowaniem; w przypadku błędu źródła dane nie są usuwane.
+- [x] Rozpoznawanie wspólnego ZL/produktu w dwóch Excelach oraz pokazanie rozbieżnych ilości, terminów i RAL.
+- [x] Świadome przygotowanie **wspólnego PODGLĄDU**, z blokadą konfliktów, awarii i nieaktualnych źródeł; osobne zatwierdzenie planu przez istniejący panel kierownika.
+- [ ] Rozstrzyganie wspólnych pozycji na poziomie konkretnych wierszy bez konieczności wyłączania całego źródła.
+- [ ] Monitorowanie folderów, wybór kopii oraz listy ignorowanych plików (np. blokad Excel ~$ i archiwa).
+- [ ] Osobne mapowanie kolumn dla każdego źródła także w automatycznym skanerze (na teraz mapowanie ręczne dotyczy dotychczasowego importu).
+- [ ] Odbiór produkcyjny na dwóch prawdziwych firmowych Excelach i test publikacji z ochroną aktywnych sesji.
+- [ ] Zakończenie wersji 0.1.31 po pozytywnym odbiorze powyższych punktów.
+
 ### Planista
 
 Planista proponuje plan, ale nie podejmuje samodzielnie decyzji kadrowych ani o nadgodzinach.
